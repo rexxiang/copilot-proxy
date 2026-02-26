@@ -1,0 +1,11 @@
+{
+  "listen_addr": "127.0.0.1:4000",
+  "upstream_base": "https://api.githubcopilot.com",
+  "required_headers": {
+    "user-agent": "copilot/0.0.400",
+    "copilot-integration-id": "copilot-developer-cli"
+  },
+  "upstream_timeout": "5m",
+  "max_retries": 3,
+  "retry_backoff": "1s"
+}

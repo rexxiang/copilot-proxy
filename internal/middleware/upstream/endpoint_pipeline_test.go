@@ -1,0 +1,335 @@
+package upstream
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+
+	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/middleware"
+	"copilot-proxy/internal/models"
+)
+
+const messagesStreamBody = `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stream":true}`
+
+type stubCatalog struct {
+	models []models.ModelInfo
+}
+
+func (s *stubCatalog) GetModels() []models.ModelInfo {
+	copied := make([]models.ModelInfo, len(s.models))
+	copy(copied, s.models)
+	return copied
+}
+
+func TestEndpointPipelineKeepsResponsesOnSameEndpoint(t *testing.T) {
+	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o"}}}
+	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+
+	reqBody := `{"model":"gpt-4o","input":[{"role":"user","content":"hello"}]}`
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"http://localhost"+config.ResponsesPath,
+		strings.NewReader(reqBody),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+		SourceLocalPath: config.ResponsesPath,
+		LocalPath:       config.ResponsesPath,
+		Info: middleware.RequestInfo{
+			Model: "gpt-4o",
+		},
+	}))
+	ctx := &middleware.Context{Request: req}
+
+	var upstreamBody []byte
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		if got := ctx.Request.URL.Path; got != config.UpstreamResponsesPath {
+			t.Fatalf("expected upstream path %q, got %q", config.UpstreamResponsesPath, got)
+		}
+		upstreamBody, _ = io.ReadAll(ctx.Request.Body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			Request:    ctx.Request,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if string(upstreamBody) != reqBody {
+		t.Fatalf("expected upstream body unchanged, got %s", string(upstreamBody))
+	}
+
+	rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+	if !ok || rc == nil {
+		t.Fatalf("expected request context")
+	}
+	if rc.SourceLocalPath != config.ResponsesPath {
+		t.Fatalf("expected source local path %q, got %q", config.ResponsesPath, rc.SourceLocalPath)
+	}
+	if rc.TargetUpstreamPath != config.UpstreamResponsesPath {
+		t.Fatalf("expected target upstream path %q, got %q", config.UpstreamResponsesPath, rc.TargetUpstreamPath)
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		t.Fatalf("read response: %v", readErr)
+	}
+	if string(body) != `{"ok":true}` {
+		t.Fatalf("expected response passthrough, got %s", string(body))
+	}
+}
+
+func TestEndpointPipelineTransformsMessagesToChatJSONResponse(t *testing.T) {
+	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o", Endpoints: []string{
+		config.UpstreamChatCompletionsPath,
+	}}}}
+	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+
+	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"max_tokens":5}`
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"http://localhost"+config.MessagesPath,
+		strings.NewReader(reqBody),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+		SourceLocalPath: config.MessagesPath,
+		LocalPath:       config.MessagesPath,
+	}))
+	ctx := &middleware.Context{Request: req}
+
+	var upstreamBody []byte
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		if got := ctx.Request.URL.Path; got != config.UpstreamChatCompletionsPath {
+			t.Fatalf("expected upstream path %q, got %q", config.UpstreamChatCompletionsPath, got)
+		}
+		upstreamBody, _ = io.ReadAll(ctx.Request.Body)
+		chatResp := `{"id":"chatcmpl-2","object":"chat.completion","model":"gpt-4o","choices":[` +
+			`{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],` +
+			`"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(chatResp)),
+			Request:    ctx.Request,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var upstreamParsed map[string]any
+	if err := json.Unmarshal(upstreamBody, &upstreamParsed); err != nil {
+		t.Fatalf("unmarshal upstream request body: %v", err)
+	}
+	messages, ok := upstreamParsed["messages"].([]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("expected one upstream message, got %v", upstreamParsed["messages"])
+	}
+	userMsg, ok := messages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected user message object, got %T", messages[0])
+	}
+	contentParts, ok := userMsg["content"].([]any)
+	if !ok || len(contentParts) != 1 {
+		t.Fatalf("expected one content part, got %#v", userMsg["content"])
+	}
+	firstPart, ok := contentParts[0].(map[string]any)
+	if !ok || firstPart["type"] != "text" || firstPart["text"] != "hi" {
+		t.Fatalf("expected text content part {type:text,text:hi}, got %#v", contentParts[0])
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		t.Fatalf("read response: %v", readErr)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("expected messages-style response json, got %s", string(body))
+	}
+	if parsed["type"] != "message" {
+		t.Fatalf("expected anthropic message response, got %v", parsed["type"])
+	}
+}
+
+func TestEndpointPipelineTransformsMessagesToChatSSEResponse(t *testing.T) {
+	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o", Endpoints: []string{
+		config.UpstreamChatCompletionsPath,
+	}}}}
+	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+
+	reqBody := messagesStreamBody
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"http://localhost"+config.MessagesPath,
+		strings.NewReader(reqBody),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+		SourceLocalPath: config.MessagesPath,
+		LocalPath:       config.MessagesPath,
+	}))
+	ctx := &middleware.Context{Request: req}
+
+	stream := strings.Join([]string{
+		`data: {"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
+		"",
+		`data: {"choices":[{"index":0,"delta":{"content":"Hi"}}]}`,
+		"",
+		`data: {"choices":[{"index":0,"finish_reason":"stop"}]}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		if got := ctx.Request.URL.Path; got != config.UpstreamChatCompletionsPath {
+			t.Fatalf("expected upstream path %q, got %q", config.UpstreamChatCompletionsPath, got)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(stream)),
+			Request:    ctx.Request,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		t.Fatalf("read response: %v", readErr)
+	}
+	respText := string(respBytes)
+	if !strings.Contains(respText, "event: message_start") {
+		t.Fatalf("expected message_start event, got %s", respText)
+	}
+	if !strings.Contains(respText, "event: content_block_delta") {
+		t.Fatalf("expected content_block_delta event, got %s", respText)
+	}
+	if !strings.Contains(respText, "event: message_stop") {
+		t.Fatalf("expected message_stop event, got %s", respText)
+	}
+}
+
+func TestEndpointPipelineKeepsMessagesBodyWhenModelSupportsMessagesEndpoint(t *testing.T) {
+	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "claude-3", Endpoints: []string{
+		config.UpstreamMessagesPath,
+	}}}}
+	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+
+	reqBody := `{"model":"claude-3","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"http://localhost"+config.MessagesPath,
+		strings.NewReader(reqBody),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+		SourceLocalPath: config.MessagesPath,
+		LocalPath:       config.MessagesPath,
+	}))
+	ctx := &middleware.Context{Request: req}
+
+	var upstreamBody []byte
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		if got := ctx.Request.URL.Path; got != config.UpstreamMessagesPath {
+			t.Fatalf("expected upstream path %q, got %q", config.UpstreamMessagesPath, got)
+		}
+		upstreamBody, _ = io.ReadAll(ctx.Request.Body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`ok`)),
+			Request:    ctx.Request,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !bytes.Equal(bytes.TrimSpace(upstreamBody), bytes.TrimSpace([]byte(reqBody))) {
+		t.Fatalf("expected request body passthrough, got %s", string(upstreamBody))
+	}
+	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		t.Fatalf("read response: %v", readErr)
+	}
+	if string(respBody) != "ok" {
+		t.Fatalf("expected passthrough response body, got %s", string(respBody))
+	}
+}
+
+func TestEndpointPipelineRewritesModelForMessagesPassthrough(t *testing.T) {
+	catalog := &stubCatalog{models: []models.ModelInfo{
+		{ID: "gpt-5-mini", Endpoints: []string{config.UpstreamMessagesPath}},
+	}}
+	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+
+	reqBody := `{"model":"claude-haiku-3.5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"http://localhost"+config.MessagesPath,
+		strings.NewReader(reqBody),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+		SourceLocalPath: config.MessagesPath,
+		LocalPath:       config.MessagesPath,
+	}))
+	ctx := &middleware.Context{Request: req}
+
+	var upstreamBody []byte
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		if got := ctx.Request.URL.Path; got != config.UpstreamMessagesPath {
+			t.Fatalf("expected upstream path %q, got %q", config.UpstreamMessagesPath, got)
+		}
+		upstreamBody, _ = io.ReadAll(ctx.Request.Body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`ok`)),
+			Request:    ctx.Request,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var parsed map[string]any
+	if err := json.Unmarshal(upstreamBody, &parsed); err != nil {
+		t.Fatalf("expected json body, got %s", string(upstreamBody))
+	}
+	if parsed["model"] != "gpt-5-mini" {
+		t.Fatalf("expected rewritten model gpt-5-mini, got %v", parsed["model"])
+	}
+}

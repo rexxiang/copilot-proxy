@@ -1,0 +1,145 @@
+version: "2"
+run:
+  tests: true
+linters:
+  default: none
+  enable:
+    - errcheck
+    - gocritic
+    - gocognit
+    - gocyclo
+    - dupl
+    - lll
+    - gosec
+    - nilnil
+    - misspell
+    - godoclint
+    - godot
+    - godox
+    - whitespace
+    - goconst
+    - errorlint
+    - wrapcheck
+    - err113
+    - forcetypeassert
+    - exhaustive
+    - unparam
+    - revive
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - bodyclose
+    - errname
+    - nilerr
+    - asciicheck
+    - bidichk
+    - prealloc
+    - makezero
+    - copyloopvar
+    - durationcheck
+    - dogsled
+    - canonicalheader
+    - predeclared
+    - errchkjson
+    - unconvert
+    - dupword
+    - wastedassign
+    - intrange
+    - mnd
+    - usestdlibvars
+    - perfsprint
+    - nilnesserr
+    - noctx
+    - contextcheck
+    - exhaustruct
+    - unqueryvet
+    - thelper
+    - nolintlint
+    - tparallel
+    - unconvert
+    - prealloc
+  settings:
+    gocognit:
+      min-complexity: 30
+    gocyclo:
+      min-complexity: 20
+    errcheck:
+      check-type-assertions: true
+    exhaustruct:
+      exclude:
+        - '^http\.'
+        - '^net/http\.'
+        - '^net\.'
+        - '^os\.'
+        - '^io\.'
+        - '^bufio\.'
+        - '^time\.'
+        - '^crypto/tls\.'
+        - '^tls\.'
+        - '^net/url\.'
+        - '^url\.'
+        - '^encoding/json\.'
+        - '^json\.'
+        - '^database/sql\.'
+        - '^sql\.'
+        - '^context\.'
+        - '^github.com/google/uuid\.'
+        - '^uuid\.'
+        - '^github.com/charmbracelet/bubbletea\.'
+        - '^tea\.'
+        - '^github.com/charmbracelet/bubbles/key\.'
+        - '^key\.'
+        - '^github.com/charmbracelet/bubbles/list\.'
+        - '^github.com/charmbracelet/lipgloss\.'
+        - '^lipgloss\.'
+    dupl:
+      threshold: 200
+    lll:
+      line-length: 140
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+    revive:
+      rules:
+        - name: empty-lines
+        - name: indent-error-flow
+        - name: unreachable-code
+        - name: error-strings
+        - name: errorf
+        - name: exported
+          disabled: true
+        - name: var-naming
+        - name: if-return
+        - name: early-return
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - wrapcheck
+          - exhaustruct
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

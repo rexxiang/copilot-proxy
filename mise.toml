@@ -1,0 +1,13 @@
+[tools]
+go = "1.25"
+golangci-lint = "2.8.0"
+staticcheck = "latest"
+
+[env]
+CGO_ENABLED = "0"
+
+[tasks]
+build = "go build -o ./bin/copilot-proxy ./cmd/copilot-proxy"
+test = "go test ./..."
+go = "go"
+"go:run" = "go run ./..."
