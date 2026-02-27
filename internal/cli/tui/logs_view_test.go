@@ -552,7 +552,7 @@ func TestLogsView_HomeEndAndGShortcutsJumpToBoundaries(t *testing.T) {
 	}
 }
 
-func TestLogsView_SpacePagesDown(t *testing.T) {
+func TestLogsView_PgDownPagesDown(t *testing.T) {
 	now := time.Now()
 	records := make([]monitor.RequestRecord, 0, 20)
 	for i := range 20 {
@@ -577,12 +577,41 @@ func TestLogsView_SpacePagesDown(t *testing.T) {
 		t.Fatalf("expected positive page size, got %d", pageSize)
 	}
 
-	handled, _ := view.HandleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	handled, _ := view.HandleKey(tea.KeyMsg{Type: tea.KeyPgDown})
 	if !handled {
-		t.Fatalf("expected Space key to be handled")
+		t.Fatalf("expected PgDown key to be handled")
 	}
 	if view.offset != pageSize {
-		t.Fatalf("expected offset %d after Space key, got %d", pageSize, view.offset)
+		t.Fatalf("expected offset %d after PgDown key, got %d", pageSize, view.offset)
+	}
+}
+
+func TestLogsView_SpaceDoesNotPageDown(t *testing.T) {
+	now := time.Now()
+	records := make([]monitor.RequestRecord, 0, 20)
+	for i := range 20 {
+		records = append(records, monitor.RequestRecord{
+			Timestamp:  now.Add(-time.Duration(i) * time.Second),
+			Method:     "POST",
+			Path:       "/v1/chat/completions",
+			Model:      fmt.Sprintf("model-%02d", i),
+			StatusCode: 200,
+			Duration:   50 * time.Millisecond,
+		})
+	}
+
+	view := NewLogsView()
+	view.SetSize(120, 12)
+	view.SetState(&SharedState{
+		Snapshot: monitor.Snapshot{RecentRequests: records},
+	})
+
+	handled, _ := view.HandleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	if handled {
+		t.Fatalf("expected Space key to be ignored")
+	}
+	if view.offset != 0 {
+		t.Fatalf("expected offset 0 after Space key, got %d", view.offset)
 	}
 }
 

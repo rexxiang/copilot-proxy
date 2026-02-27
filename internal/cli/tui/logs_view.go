@@ -31,7 +31,7 @@ const (
 	logsDurationWidth        = 8
 	logsDefaultVisible       = 10
 	logsFooterOffset         = 8
-	logsScrollHint           = "\u2191\u2193 PgUp/PgDn Home/End g/G Space/Shift+Space"
+	logsScrollHint           = "\u2191\u2193 PgUp/PgDn Home/End g/G"
 )
 
 var logsPlainStyle = lipgloss.NewStyle()
@@ -311,11 +311,11 @@ func (v *LogsView) SetDebugEnabled(enabled bool) {
 }
 
 func (v *LogsView) HandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
-	if isPageDownKey(msg) {
-		return v.handlePageDown()
-	}
-	if isPageUpKey(msg) {
+	if msg.Type == tea.KeyPgUp {
 		return v.handlePageUp()
+	}
+	if msg.Type == tea.KeyPgDown {
+		return v.handlePageDown()
 	}
 
 	switch msg.String() {
@@ -325,7 +325,7 @@ func (v *LogsView) HandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return v.handleDown()
 	case "pgup":
 		return v.handlePageUp()
-	case "pgdn":
+	case "pgdn", "pgdown":
 		return v.handlePageDown()
 	case "home":
 		return v.handleHome()
@@ -341,24 +341,6 @@ func (v *LogsView) HandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return v.handleDebugToggle()
 	default:
 		return false, nil
-	}
-}
-
-func isPageDownKey(msg tea.KeyMsg) bool {
-	switch msg.String() {
-	case " ", "space":
-		return true
-	default:
-		return false
-	}
-}
-
-func isPageUpKey(msg tea.KeyMsg) bool {
-	switch msg.String() {
-	case "shift+ ", "shift+space", "S-space", "S- ":
-		return true
-	default:
-		return false
 	}
 }
 
