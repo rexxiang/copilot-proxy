@@ -25,7 +25,10 @@ arm64|aarch64) arch="arm64" ;;
   ;;
 esac
 
-latest_url="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest")"
+if ! latest_url="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest")"; then
+  echo "Failed to fetch latest release information" >&2
+  exit 1
+fi
 tag="${latest_url##*/}"
 if [ -z "${tag}" ] || [ "${tag}" = "latest" ]; then
   echo "Failed to fetch latest release tag" >&2
@@ -40,8 +43,15 @@ tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT INT TERM
 
 echo "Downloading ${url}"
-curl -fL "${url}" -o "${tmp_dir}/${asset}"
+if ! curl -fL "${url}" -o "${tmp_dir}/${asset}"; then
+  echo "Failed to download release asset: ${asset}" >&2
+  exit 1
+fi
 tar -xzf "${tmp_dir}/${asset}" -C "${tmp_dir}"
+if [ ! -f "${tmp_dir}/${binary_path}" ]; then
+  echo "Unexpected archive layout for: ${asset}" >&2
+  exit 1
+fi
 
 if [ -w "${INSTALL_DIR}" ]; then
   install -m 0755 "${tmp_dir}/${binary_path}" "${INSTALL_DIR}/${BIN_NAME}"
