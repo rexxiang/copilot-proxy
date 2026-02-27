@@ -147,6 +147,7 @@ type streamMetricsReadCloser struct {
 	requestCtx         context.Context
 	upstreamStatusCode int
 	recordComplete     func(statusCode int)
+	doneDetector       sseDoneDetector
 
 	once      sync.Once
 	mu        sync.Mutex
@@ -172,24 +173,36 @@ func newStreamMetricsReadCloser(
 
 func (r *streamMetricsReadCloser) Read(p []byte) (int, error) {
 	n, err := r.body.Read(p)
+	if n > 0 {
+		r.mu.Lock()
+		r.doneDetector.Observe(p[:n])
+		r.mu.Unlock()
+	}
 	if err == nil {
 		return n, nil
 	}
 	if errors.Is(err, io.EOF) {
 		r.mu.Lock()
 		r.sawEOF = true
+		r.doneDetector.Finalize()
 		r.mu.Unlock()
 		r.completeOnce(r.upstreamStatusCode)
 		return n, io.EOF
 	}
 
 	r.mu.Lock()
+	r.doneDetector.Finalize()
 	if r.streamErr == nil {
 		r.streamErr = err
 	}
+	doneSeen := r.doneDetector.Seen()
 	r.mu.Unlock()
 
-	r.completeOnce(statusCodeFromRequestError(err))
+	statusCode := statusCodeFromRequestError(err)
+	if doneSeen {
+		statusCode = r.upstreamStatusCode
+	}
+	r.completeOnce(statusCode)
 	return n, err
 }
 
@@ -207,6 +220,10 @@ func (r *streamMetricsReadCloser) statusOnClose(closeErr error) (int, bool) {
 
 	if r.sawEOF {
 		return 0, false
+	}
+	r.doneDetector.Finalize()
+	if r.doneDetector.Seen() {
+		return r.upstreamStatusCode, true
 	}
 	if r.streamErr != nil {
 		return statusCodeFromRequestError(r.streamErr), true

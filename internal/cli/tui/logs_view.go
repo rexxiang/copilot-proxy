@@ -31,7 +31,7 @@ const (
 	logsDurationWidth        = 8
 	logsDefaultVisible       = 10
 	logsFooterOffset         = 8
-	logsScrollHint           = "\u2191\u2193 PgUp/PgDn Home/End"
+	logsScrollHint           = "\u2191\u2193 PgUp/PgDn Home/End g/G"
 )
 
 var logsPlainStyle = lipgloss.NewStyle()
@@ -311,6 +311,13 @@ func (v *LogsView) SetDebugEnabled(enabled bool) {
 }
 
 func (v *LogsView) HandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+	if msg.Type == tea.KeyPgUp {
+		return v.handlePageUp()
+	}
+	if msg.Type == tea.KeyPgDown {
+		return v.handlePageDown()
+	}
+
 	switch msg.String() {
 	case "up":
 		return v.handleUp()
@@ -318,11 +325,15 @@ func (v *LogsView) HandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return v.handleDown()
 	case "pgup":
 		return v.handlePageUp()
-	case "pgdn":
+	case "pgdn", "pgdown":
 		return v.handlePageDown()
 	case "home":
 		return v.handleHome()
 	case "end":
+		return v.handleEnd()
+	case "g":
+		return v.handleHome()
+	case "G":
 		return v.handleEnd()
 	case "c":
 		return v.handleClear()

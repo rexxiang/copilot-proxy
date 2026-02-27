@@ -367,6 +367,66 @@ func TestDebugLogMiddlewareRecordsSSECancelReason(t *testing.T) {
 	}
 }
 
+func TestDebugLogMiddlewareTreatsSeenDoneAsCompleted(t *testing.T) {
+	const streamBody = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"
+
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://upstream.example.com/chat/completions",
+		strings.NewReader(`{"model":"gpt-5-mini","stream":true}`),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(`{"model":"gpt-5-mini","stream":true}`)), nil
+	}
+
+	rc := &middleware.RequestContext{
+		Start: time.Now().Add(-10 * time.Millisecond),
+		Info: middleware.RequestInfo{
+			Model:       "gpt-5-mini",
+			MappedModel: "gpt-5-mini",
+		},
+	}
+	req = req.WithContext(middleware.WithRequestContext(req.Context(), rc))
+
+	logger := &captureEntryLogger{}
+	mw := NewDebugLog(logger)
+	ctx := &middleware.Context{Request: req}
+
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(streamBody)),
+			Request:    req,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	readBuffer := make([]byte, 1024)
+	if _, readErr := resp.Body.Read(readBuffer); readErr != nil {
+		t.Fatalf("expected first read success, got %v", readErr)
+	}
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Fatalf("close stream body: %v", closeErr)
+	}
+
+	if len(logger.entries) != 1 {
+		t.Fatalf("expected exactly one sse log entry, got %d", len(logger.entries))
+	}
+	if logger.entries[0].Error != "" {
+		t.Fatalf("expected no cancel reason after done marker, got %q", logger.entries[0].Error)
+	}
+}
+
 type cancelAfterFirstRead struct {
 	chunk []byte
 	read  bool

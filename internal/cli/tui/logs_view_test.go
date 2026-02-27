@@ -495,7 +495,7 @@ func TestLogsView_MouseWheelWithoutCtrlIsIgnored(t *testing.T) {
 	}
 }
 
-func TestLogsView_HomeAndEndJumpToBoundaries(t *testing.T) {
+func TestLogsView_HomeEndAndGShortcutsJumpToBoundaries(t *testing.T) {
 	now := time.Now()
 	records := make([]monitor.RequestRecord, 0, 20)
 	for i := range 20 {
@@ -533,6 +533,85 @@ func TestLogsView_HomeAndEndJumpToBoundaries(t *testing.T) {
 	}
 	if view.offset != 0 {
 		t.Fatalf("expected offset 0 after Home key, got %d", view.offset)
+	}
+
+	handled, _ = view.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if !handled {
+		t.Fatalf("expected G key to be handled")
+	}
+	if view.offset != maxOffset {
+		t.Fatalf("expected offset %d after G key, got %d", maxOffset, view.offset)
+	}
+
+	handled, _ = view.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if !handled {
+		t.Fatalf("expected g key to be handled")
+	}
+	if view.offset != 0 {
+		t.Fatalf("expected offset 0 after g key, got %d", view.offset)
+	}
+}
+
+func TestLogsView_PgDownPagesDown(t *testing.T) {
+	now := time.Now()
+	records := make([]monitor.RequestRecord, 0, 20)
+	for i := range 20 {
+		records = append(records, monitor.RequestRecord{
+			Timestamp:  now.Add(-time.Duration(i) * time.Second),
+			Method:     "POST",
+			Path:       "/v1/chat/completions",
+			Model:      fmt.Sprintf("model-%02d", i),
+			StatusCode: 200,
+			Duration:   50 * time.Millisecond,
+		})
+	}
+
+	view := NewLogsView()
+	view.SetSize(120, 12)
+	view.SetState(&SharedState{
+		Snapshot: monitor.Snapshot{RecentRequests: records},
+	})
+
+	pageSize := view.VisibleLines()
+	if pageSize <= 0 {
+		t.Fatalf("expected positive page size, got %d", pageSize)
+	}
+
+	handled, _ := view.HandleKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	if !handled {
+		t.Fatalf("expected PgDown key to be handled")
+	}
+	if view.offset != pageSize {
+		t.Fatalf("expected offset %d after PgDown key, got %d", pageSize, view.offset)
+	}
+}
+
+func TestLogsView_SpaceDoesNotPageDown(t *testing.T) {
+	now := time.Now()
+	records := make([]monitor.RequestRecord, 0, 20)
+	for i := range 20 {
+		records = append(records, monitor.RequestRecord{
+			Timestamp:  now.Add(-time.Duration(i) * time.Second),
+			Method:     "POST",
+			Path:       "/v1/chat/completions",
+			Model:      fmt.Sprintf("model-%02d", i),
+			StatusCode: 200,
+			Duration:   50 * time.Millisecond,
+		})
+	}
+
+	view := NewLogsView()
+	view.SetSize(120, 12)
+	view.SetState(&SharedState{
+		Snapshot: monitor.Snapshot{RecentRequests: records},
+	})
+
+	handled, _ := view.HandleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	if handled {
+		t.Fatalf("expected Space key to be ignored")
+	}
+	if view.offset != 0 {
+		t.Fatalf("expected offset 0 after Space key, got %d", view.offset)
 	}
 }
 
