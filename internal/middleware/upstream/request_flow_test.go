@@ -779,6 +779,58 @@ func TestMetricsRecordsSSECloseBeforeEOFAs499(t *testing.T) {
 	}
 }
 
+func TestMetricsRecordsSSECloseAfterDoneAs200(t *testing.T) {
+	metrics := &metricsCapture{}
+	mw := NewMetrics(metrics)
+
+	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
+	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+		ID:        "req-sse-done-close",
+		Start:     time.Now().Add(-30 * time.Millisecond),
+		LocalPath: localResponsesPath,
+		Info: middleware.RequestInfo{
+			Model: "gpt-4o",
+		},
+		Account: config.Account{User: "u1"},
+	}))
+	ctx := &middleware.Context{Request: req}
+
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				"data: hello\n\ndata: [DONE]\n\n",
+			)),
+			Request: &http.Request{
+				URL: &url.URL{Path: "/responses"},
+			},
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer closeResponse(resp)
+
+	readBuf := make([]byte, 1024)
+	if _, readErr := resp.Body.Read(readBuf); readErr != nil {
+		t.Fatalf("expected first read without EOF, got %v", readErr)
+	}
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Fatalf("close stream body: %v", closeErr)
+	}
+
+	if metrics.firstResponses != 1 {
+		t.Fatalf("expected one RecordFirstResponse call, got %d", metrics.firstResponses)
+	}
+	if metrics.completed != 1 {
+		t.Fatalf("expected one completion after close with done marker, got %d", metrics.completed)
+	}
+	if metrics.lastCompleteCode != http.StatusOK {
+		t.Fatalf("expected status 200 for close-after-done, got %d", metrics.lastCompleteCode)
+	}
+}
+
 func decodeErrorBody(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	if resp == nil {
