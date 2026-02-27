@@ -228,6 +228,7 @@ type streamLoggingReadCloser struct {
 	logger    middleware.DebugLogger
 	entry     monitor.DebugLogEntry
 	buf       bytes.Buffer
+	done      sseDoneDetector
 	logged    bool
 	sawEOF    bool
 	streamErr error
@@ -271,7 +272,8 @@ func (r *streamLoggingReadCloser) Read(p []byte) (int, error) {
 
 func (r *streamLoggingReadCloser) Close() error {
 	err := r.body.Close()
-	if !r.sawEOF && r.streamErr == nil {
+	r.done.Finalize()
+	if !r.sawEOF && !r.done.Seen() && r.streamErr == nil {
 		if err != nil {
 			r.streamErr = err
 		} else {
@@ -291,6 +293,11 @@ func (r *streamLoggingReadCloser) recordStreamEnd(err error) {
 	}
 	if errors.Is(err, io.EOF) {
 		r.sawEOF = true
+		r.done.Finalize()
+		return
+	}
+	r.done.Finalize()
+	if r.done.Seen() {
 		return
 	}
 	if r.streamErr == nil {
@@ -302,6 +309,7 @@ func (r *streamLoggingReadCloser) capture(chunk []byte) {
 	if len(chunk) == 0 {
 		return
 	}
+	r.done.Observe(chunk)
 	_, _ = r.buf.Write(chunk)
 }
 
