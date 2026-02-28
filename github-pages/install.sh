@@ -53,6 +53,12 @@ if [ ! -f "${tmp_dir}/${binary_path}" ]; then
   exit 1
 fi
 
+if [ ! -d "${INSTALL_DIR}" ]; then
+  if ! mkdir -p "${INSTALL_DIR}" 2>/dev/null; then
+    sudo mkdir -p "${INSTALL_DIR}"
+  fi
+fi
+
 if [ -w "${INSTALL_DIR}" ]; then
   install -m 0755 "${tmp_dir}/${binary_path}" "${INSTALL_DIR}/${BIN_NAME}"
 else
