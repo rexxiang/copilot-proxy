@@ -1,5 +1,7 @@
 bin/
+/copilot-proxy
 .DS_Store
 .idea/
 .claude/*.local.json
+.claude/worktrees/
 .codex/environments
