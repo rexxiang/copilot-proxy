@@ -1,15 +1,27 @@
 # copilot-proxy
 
-`copilot-proxy` 是一个 GitHub Copilot API 本地代理，提供与 OpenAI / Anthropic 风格接口兼容的转发能力。
+`copilot-proxy` is a local GitHub Copilot API proxy with OpenAI-style and Anthropic-style local endpoints.
 
-## 一键安装（最新版）
+## One-Command Install (Latest)
 
 ```bash
 curl -fsSL https://rexxiang.github.io/copilot-proxy/install.sh | sh
 ```
 
-默认会安装到 `/usr/local/bin/copilot-proxy`。如果需要自定义目录，可在执行前设置 `INSTALL_DIR`：
+By default, it installs to `/usr/local/bin/copilot-proxy`. To use a custom directory, set `INSTALL_DIR` before running:
 
 ```bash
 curl -fsSL https://rexxiang.github.io/copilot-proxy/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
 ```
+
+## Quick Usage
+
+```bash
+copilot-proxy auth login
+copilot-proxy --no-tui
+curl -sS http://127.0.0.1:4000/copilot/models
+```
+
+For full installation and usage documentation, see the repository README:
+
+- https://github.com/rexxiang/copilot-proxy#readme
