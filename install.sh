@@ -4,7 +4,18 @@ set -eu
 
 REPO="rexxiang/copilot-proxy"
 BIN_NAME="copilot-proxy"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+
+if [ -z "${INSTALL_DIR+x}" ]; then
+  if [ -z "${HOME:-}" ]; then
+    echo "HOME is not set; please provide INSTALL_DIR" >&2
+    exit 1
+  fi
+  INSTALL_DIR="${HOME}/.local/bin"
+fi
+if [ -z "${INSTALL_DIR}" ]; then
+  echo "INSTALL_DIR cannot be empty" >&2
+  exit 1
+fi
 
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "${os}" in
@@ -54,15 +65,29 @@ if [ ! -f "${tmp_dir}/${binary_path}" ]; then
 fi
 
 if [ ! -d "${INSTALL_DIR}" ]; then
-  if ! mkdir -p "${INSTALL_DIR}" 2>/dev/null; then
-    sudo mkdir -p "${INSTALL_DIR}"
+  if ! mkdir -p "${INSTALL_DIR}"; then
+    echo "Failed to create install directory: ${INSTALL_DIR}" >&2
+    echo "Use a writable INSTALL_DIR (for example: INSTALL_DIR=\"\$HOME/.local/bin\")." >&2
+    exit 1
   fi
 fi
 
-if [ -w "${INSTALL_DIR}" ]; then
-  install -m 0755 "${tmp_dir}/${binary_path}" "${INSTALL_DIR}/${BIN_NAME}"
-else
-  sudo install -m 0755 "${tmp_dir}/${binary_path}" "${INSTALL_DIR}/${BIN_NAME}"
+if [ ! -w "${INSTALL_DIR}" ]; then
+  echo "Install directory is not writable: ${INSTALL_DIR}" >&2
+  echo "Use a writable INSTALL_DIR (for example: INSTALL_DIR=\"\$HOME/.local/bin\")." >&2
+  exit 1
 fi
 
+install -m 0755 "${tmp_dir}/${binary_path}" "${INSTALL_DIR}/${BIN_NAME}"
+
 echo "Installed ${BIN_NAME} to ${INSTALL_DIR}/${BIN_NAME}"
+
+case ":${PATH:-}:" in
+  *:"${INSTALL_DIR}":*) ;;
+  *)
+    echo ""
+    echo "Warning: ${INSTALL_DIR} is not in PATH."
+    echo "Add it to your shell profile:"
+    echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
+    ;;
+esac

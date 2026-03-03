@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 
 	"copilot-proxy/internal/config"
@@ -210,5 +212,43 @@ func TestUpsertAccountPreserveDefaultSaveFailureRollsBack(t *testing.T) {
 	}
 	if len(auth.Accounts) != 1 || auth.Accounts[0].User != "u1" {
 		t.Fatalf("expected accounts rollback to original state, got %+v", auth.Accounts)
+	}
+}
+
+func TestIsExpectedShutdownError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "http err server closed",
+			err:  http.ErrServerClosed,
+			want: true,
+		},
+		{
+			name: "wrapped context canceled",
+			err:  fmt.Errorf("shutdown server: %w", context.Canceled),
+			want: true,
+		},
+		{
+			name: "regular error",
+			err:  errors.New("boom"),
+			want: false,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isExpectedShutdownError(tt.err)
+			if got != tt.want {
+				t.Fatalf("isExpectedShutdownError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }

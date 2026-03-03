@@ -117,6 +117,9 @@ func (s *Server) serveWithRetry(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return fmt.Errorf("server context done: %w", ctx.Err())
 			}
+			if isFatalListenError(err) {
+				return fmt.Errorf("listen on %s: %w", s.Addr, err)
+			}
 			slog.Warn("listen failed, retrying", "err", err, "addr", s.Addr)
 			time.Sleep(backoff)
 			backoff = minDuration(backoff*retryBackoffFactor, retryBackoffMax)
@@ -135,6 +138,13 @@ func (s *Server) serveWithRetry(ctx context.Context) error {
 		time.Sleep(backoff)
 		backoff = minDuration(backoff*retryBackoffFactor, retryBackoffMax)
 	}
+}
+
+func isFatalListenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, syscall.EADDRINUSE)
 }
 
 func minDuration(a, b time.Duration) time.Duration {

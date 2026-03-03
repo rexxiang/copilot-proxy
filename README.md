@@ -27,12 +27,18 @@ Default listen address: `127.0.0.1:4000`.
 curl -fsSL https://rexxiang.github.io/copilot-proxy/install.sh | sh
 ```
 
-Default install path is `/usr/local/bin/copilot-proxy`.
+Default install path is `~/.local/bin/copilot-proxy` (no `sudo` required).
 
 Set a custom install directory with `INSTALL_DIR`:
 
 ```bash
 curl -fsSL https://rexxiang.github.io/copilot-proxy/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
+```
+
+If `~/.local/bin` is not in your `PATH`, add:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ### Build from source
@@ -57,6 +63,14 @@ With TUI monitor (default when TTY is available):
 
 ```bash
 copilot-proxy
+```
+
+### 3) Configure Claude Code
+
+Point Claude Code to the local proxy by setting:
+
+```bash
+export ANTHROPIC_BASE_URL='http://127.0.0.1:4000'
 ```
 
 ## Account Management

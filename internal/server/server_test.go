@@ -56,6 +56,43 @@ func TestServeWithRetryRetriesOnListenFailure(t *testing.T) {
 	}
 }
 
+func TestServeWithRetryReturnsImmediatelyOnAddressInUse(t *testing.T) {
+	settings := config.DefaultSettings()
+	srv := New(&settings, http.NewServeMux())
+	t.Cleanup(func() {
+		_ = srv.Close()
+	})
+
+	var calls int32
+	srv.listenFn = func(network, address string) (net.Listener, error) {
+		atomic.AddInt32(&calls, 1)
+		return nil, &net.OpError{Op: "listen", Net: "tcp", Err: syscall.EADDRINUSE}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.serveWithRetry(ctx)
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			t.Fatalf("expected EADDRINUSE error, got %v", err)
+		}
+	case <-time.After(150 * time.Millisecond):
+		cancel()
+		<-done
+		t.Fatal("expected serveWithRetry to return immediately on EADDRINUSE")
+	}
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("expected 1 listen attempt, got %d", got)
+	}
+}
+
 func TestIsShutdownSignal(t *testing.T) {
 	tests := []struct {
 		name string
