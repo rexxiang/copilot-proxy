@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"copilot-proxy/internal/config"
@@ -212,6 +214,9 @@ func upsertAccountPreserveDefault(
 }
 
 func runServerWithTUI(enableTUI bool) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Check if TUI should be enabled
 	useTUI := enableTUI && isTTY(os.Stdout.Fd())
 
@@ -246,7 +251,7 @@ func runServerWithTUI(enableTUI bool) error {
 	}
 
 	if useTUI && monitoringErr == nil {
-		return runWithTUI(context.Background(), runtime, collector, debugLogger, logDir, &auth)
+		return runWithTUI(ctx, runtime, collector, debugLogger, logDir, &auth)
 	}
 	srv := runtime.server
 	// Ensure server resources are released in non-TUI mode.
@@ -275,10 +280,17 @@ func runServerWithTUI(enableTUI bool) error {
 		}()
 	}
 
-	if err := srv.Start(context.Background()); err != nil {
+	if err := srv.Start(ctx); err != nil && !isExpectedShutdownError(err) {
 		return fmt.Errorf("start server: %w", err)
 	}
 	return nil
+}
+
+func isExpectedShutdownError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, http.ErrServerClosed)
 }
 
 func preloadModels(
@@ -399,7 +411,7 @@ func runWithTUI(
 		runCtx, cancel := context.WithCancel(ctx)
 		go func(localRuntime *serverRuntime, localCtx context.Context) {
 			err := localRuntime.server.Start(localCtx)
-			if errors.Is(err, context.Canceled) || errors.Is(err, http.ErrServerClosed) || localCtx.Err() != nil {
+			if isExpectedShutdownError(err) || localCtx.Err() != nil {
 				return
 			}
 			serverErr <- err
