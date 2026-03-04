@@ -73,6 +73,19 @@ Point Claude Code to the local proxy by setting:
 export ANTHROPIC_BASE_URL='http://127.0.0.1:4000'
 ```
 
+### 4) Configure messages init-sequence agent detection (optional)
+
+By default, `messages_init_seq_agent` is `false`.  
+When enabled, `/v1/messages` requests where all message roles are `user` and message count is `>= 2` are treated as `isAgent=true` (affects `X-Initiator` and monitor classification).
+
+`~/.config/copilot-proxy/settings.json`:
+
+```json
+{
+  "messages_init_seq_agent": false
+}
+```
+
 ## Account Management
 
 - `copilot-proxy auth login` - authenticate via GitHub device flow

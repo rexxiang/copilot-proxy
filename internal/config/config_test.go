@@ -25,6 +25,9 @@ func TestLoadSettingsDefaultWhenMissing(t *testing.T) {
 	if settings.UpstreamTimeout.Duration() != 5*time.Minute {
 		t.Fatalf("unexpected upstream timeout: %s", settings.UpstreamTimeout.Duration())
 	}
+	if settings.MessagesInitSeqAgent {
+		t.Fatalf("expected messages_init_seq_agent default false")
+	}
 }
 
 func TestSaveLoadSettings(t *testing.T) {
@@ -32,8 +35,9 @@ func TestSaveLoadSettings(t *testing.T) {
 	t.Setenv("HOME", tmp)
 
 	input := Settings{
-		ListenAddr:   "127.0.0.1:1234",
-		UpstreamBase: "https://example.com",
+		ListenAddr:           "127.0.0.1:1234",
+		UpstreamBase:         "https://example.com",
+		MessagesInitSeqAgent: true,
 		RequiredHeaders: map[string]string{
 			"X-Test": "1",
 		},

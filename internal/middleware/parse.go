@@ -12,6 +12,11 @@ type RequestParser interface {
 	Parse(body []byte) RequestInfo
 }
 
+// ParseOptions controls request parsing behavior toggles.
+type ParseOptions struct {
+	MessagesInitSeqAgent bool
+}
+
 // ChatCompletionsParser parses OpenAI Chat Completions API format.
 // Format: {"model": "...", "messages": [{"role": "...", "content": ...}]}
 // Image type: "image_url" in content array
@@ -81,10 +86,15 @@ func (p *AnthropicMessagesParser) Parse(body []byte) RequestInfo {
 
 // ParseRequestByPath selects the appropriate parser based on request path.
 func ParseRequestByPath(path string, body []byte) RequestInfo {
+	return ParseRequestByPathWithOptions(path, body, ParseOptions{})
+}
+
+// ParseRequestByPathWithOptions selects the appropriate parser based on request path and options.
+func ParseRequestByPathWithOptions(path string, body []byte, options ParseOptions) RequestInfo {
 	if len(body) == 0 {
 		return emptyRequestInfo()
 	}
-	parser, ok := pathParsers[path]
+	parser, ok := parserByPath(path, options)
 	if !ok {
 		return emptyRequestInfo()
 	}
@@ -95,11 +105,17 @@ func emptyRequestInfo() RequestInfo {
 	return RequestInfo{}
 }
 
-// pathParsers maps request paths to their specialized parsers.
-var pathParsers = map[string]RequestParser{
-	config.ChatCompletionsPath: &ChatCompletionsParser{},
-	config.ResponsesPath:       &ResponsesParser{},
-	config.MessagesPath:        &AnthropicMessagesParser{},
+func parserByPath(path string, options ParseOptions) (RequestParser, bool) {
+	switch path {
+	case config.ChatCompletionsPath:
+		return &ChatCompletionsParser{}, true
+	case config.ResponsesPath:
+		return &ResponsesParser{}, true
+	case config.MessagesPath:
+		return &AnthropicMessagesParser{DisableInitSequenceDetection: !options.MessagesInitSeqAgent}, true
+	default:
+		return nil, false
+	}
 }
 
 // chatMessage represents a single message in OpenAI Chat Completions format.

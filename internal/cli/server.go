@@ -136,7 +136,9 @@ func buildServerWithDepsWithContext(ctx context.Context, deps *ServerDeps) (*ser
 		upstream.NewRequestID(),
 		upstream.NewResolveAccount(store),
 		upstream.NewToken(upstream.TokenConfig{Provider: tokens}),
-		upstream.NewParseRequestBody(),
+		upstream.NewParseRequestBodyWithOptions(middleware.ParseOptions{
+			MessagesInitSeqAgent: settings.MessagesInitSeqAgent,
+		}),
 		upstream.NewCaptureDebug(),
 		upstream.NewMessagesTranslate(modelCatalog, nil, config.PathMapping),
 		upstream.NewTokenInjection(),

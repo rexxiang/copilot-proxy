@@ -17,12 +17,13 @@ func TestConfigModal_OpenUsesVisibleFieldSpecs(t *testing.T) {
 	modal := NewConfigModal()
 
 	settings := config.Settings{
-		ListenAddr:      "127.0.0.1:4000",
-		UpstreamBase:    "https://api.githubcopilot.com",
-		RequiredHeaders: map[string]string{"user-agent": "copilot/0.0.400"},
-		UpstreamTimeout: config.NewDuration(5 * time.Minute),
-		MaxRetries:      3,
-		RetryBackoff:    config.NewDuration(time.Second),
+		ListenAddr:           "127.0.0.1:4000",
+		UpstreamBase:         "https://api.githubcopilot.com",
+		MessagesInitSeqAgent: false,
+		RequiredHeaders:      map[string]string{"user-agent": "copilot/0.0.400"},
+		UpstreamTimeout:      config.NewDuration(5 * time.Minute),
+		MaxRetries:           3,
+		RetryBackoff:         config.NewDuration(time.Second),
 	}
 
 	if err := modal.Open(&settings); err != nil {
@@ -35,6 +36,7 @@ func TestConfigModal_OpenUsesVisibleFieldSpecs(t *testing.T) {
 		"upstream_timeout",
 		"max_retries",
 		"retry_backoff",
+		"messages_init_seq_agent",
 		"required_headers",
 	}
 	if len(keys) != len(expected) {
@@ -112,6 +114,23 @@ func TestConfigModal_BuildCandidateFromEditedForm(t *testing.T) {
 	}
 	if candidate.MaxRetries != 36 {
 		t.Fatalf("unexpected max retries: got %d want 36", candidate.MaxRetries)
+	}
+}
+
+func TestConfigModal_BuildCandidatePreservesBoolField(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	base.MessagesInitSeqAgent = true
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	candidate, err := modal.BuildCandidate(&base)
+	if err != nil {
+		t.Fatalf("BuildCandidate error: %v", err)
+	}
+	if !candidate.MessagesInitSeqAgent {
+		t.Fatalf("expected messages_init_seq_agent=true")
 	}
 }
 
