@@ -105,6 +105,31 @@ func TestModelRewriteSetsMappedModelOnExactMatch(t *testing.T) {
 	}
 }
 
+func TestModelRewritePrefersExactClaudeHaikuOverFallback(t *testing.T) {
+	catalog := &stubCatalog{models: []models.ModelInfo{
+		{ID: "gpt-5-mini", Endpoints: []string{"/responses"}},
+		{ID: "claude-haiku-3.2", Endpoints: []string{"/v1/messages"}},
+	}}
+	req := httptestRequest([]byte(`{"model":"CLAUDE-HAIKU-3.2"}`))
+	rc := &middleware.RequestContext{}
+
+	RewriteModel(req, rc, catalog, nil)
+
+	body := readBody(t, req)
+	if !bytes.Contains(body, []byte(`"model":"CLAUDE-HAIKU-3.2"`)) {
+		t.Fatalf("expected body to keep exact input model, got %s", string(body))
+	}
+	if bytes.Contains(body, []byte(`"model":"gpt-5-mini"`)) {
+		t.Fatalf("expected exact haiku match not to fallback to gpt-5-mini, got %s", string(body))
+	}
+	if rc.Info.MappedModel != "claude-haiku-3.2" {
+		t.Fatalf("expected mapped model to be exact haiku id, got %q", rc.Info.MappedModel)
+	}
+	if len(rc.Info.SelectedModelEndpoints) != 1 || rc.Info.SelectedModelEndpoints[0] != "/v1/messages" {
+		t.Fatalf("expected exact model endpoints to be selected, got %v", rc.Info.SelectedModelEndpoints)
+	}
+}
+
 func TestModelRewriteStoresSelectedModelEndpoints(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{
 		ID:        "gpt-4o",

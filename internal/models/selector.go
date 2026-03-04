@@ -15,15 +15,15 @@ func (s *Selector) SelectModelInfo(models []ModelInfo, requested string) (ModelI
 		return zeroModelInfo(), false, false
 	}
 
-	if mappedID, mapped := s.SelectMappedCaseInsensitive(models, requested); mapped {
-		if model, ok := findModelByID(models, mappedID); ok {
-			return model, true, true
-		}
-	}
-
 	if exactID, ok := s.SelectExactCaseInsensitive(models, requested); ok {
 		if model, found := findModelByID(models, exactID); found {
 			return model, false, true
+		}
+	}
+
+	if mappedID, mapped := s.SelectMappedCaseInsensitive(models, requested); mapped {
+		if model, ok := findModelByID(models, mappedID); ok {
+			return model, true, true
 		}
 	}
 
@@ -34,11 +34,11 @@ func (s *Selector) Select(models []ModelInfo, requested string) (string, bool) {
 	if len(models) == 0 || strings.TrimSpace(requested) == "" {
 		return "", false
 	}
-	if mapped, ok := s.SelectMappedCaseInsensitive(models, requested); ok {
-		return mapped, true
-	}
 	if exact, ok := s.SelectExactCaseInsensitive(models, requested); ok {
 		return exact, false
+	}
+	if mapped, ok := s.SelectMappedCaseInsensitive(models, requested); ok {
+		return mapped, true
 	}
 	return "", false
 }

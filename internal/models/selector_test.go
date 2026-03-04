@@ -44,6 +44,22 @@ func TestSelectMappedHaikuFallback(t *testing.T) {
 	}
 }
 
+func TestSelectPrefersExactClaudeHaikuOverMappedFallback(t *testing.T) {
+	selector := NewSelector()
+	models := []ModelInfo{
+		{ID: modelGPT5Mini, Family: modelGPT5Mini},
+		{ID: "claude-haiku-3.2", Family: "claude-haiku-3.2"},
+	}
+
+	selected, mapped := selector.Select(models, "CLAUDE-HAIKU-3.2")
+	if mapped {
+		t.Fatalf("expected exact match to avoid mapped fallback")
+	}
+	if selected != "claude-haiku-3.2" {
+		t.Fatalf("expected exact haiku model, got %q", selected)
+	}
+}
+
 func TestSelectMappedHaikuPrefersGPT5Mini(t *testing.T) {
 	selector := NewSelector()
 	models := []ModelInfo{
@@ -161,6 +177,28 @@ func TestSelectModelInfoReturnsMappedModelWithEndpoints(t *testing.T) {
 	}
 	if len(model.Endpoints) != 2 {
 		t.Fatalf("expected endpoints to be preserved, got %v", model.Endpoints)
+	}
+}
+
+func TestSelectModelInfoPrefersExactOverMappedFallback(t *testing.T) {
+	selector := NewSelector()
+	items := []ModelInfo{
+		{ID: modelGPT5Mini, Endpoints: []string{"/responses"}},
+		{ID: "claude-haiku-3.2", Endpoints: []string{"/v1/messages"}},
+	}
+
+	model, mapped, found := selector.SelectModelInfo(items, "CLAUDE-HAIKU-3.2")
+	if !found {
+		t.Fatalf("expected model to be found")
+	}
+	if mapped {
+		t.Fatalf("expected exact model selection to report mapped=false")
+	}
+	if model.ID != "claude-haiku-3.2" {
+		t.Fatalf("expected exact haiku model, got %q", model.ID)
+	}
+	if len(model.Endpoints) != 1 || model.Endpoints[0] != "/v1/messages" {
+		t.Fatalf("expected endpoints from exact model, got %v", model.Endpoints)
 	}
 }
 

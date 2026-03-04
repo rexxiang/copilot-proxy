@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -61,6 +62,7 @@ func FormatEndpoints(endpoints []string) string {
 			}
 		}
 	}
+	sort.Strings(abbrevs)
 	return strings.Join(abbrevs, " ")
 }
 
