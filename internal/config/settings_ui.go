@@ -17,6 +17,7 @@ const (
 	WidgetText     FieldWidget = "text"
 	WidgetURL      FieldWidget = "url"
 	WidgetInt      FieldWidget = "int"
+	WidgetBool     FieldWidget = "bool"
 	WidgetDuration FieldWidget = "duration"
 	WidgetKeyValue FieldWidget = "kv"
 )
@@ -45,6 +46,7 @@ var (
 	errFieldNotFound      = errors.New("settings field not found")
 	errInvalidURL         = errors.New("invalid url")
 	errInvalidInt         = errors.New("invalid integer")
+	errInvalidBool        = errors.New("invalid bool")
 	errInvalidMinMax      = errors.New("invalid min/max")
 	errDuplicateHeaderKey = errors.New("duplicate header key")
 	errEmptyHeaderKey     = errors.New("empty header key")
@@ -252,6 +254,8 @@ func inferWidget(t reflect.Type) FieldWidget {
 		return WidgetText
 	case t.Kind() == reflect.Int:
 		return WidgetInt
+	case t.Kind() == reflect.Bool:
+		return WidgetBool
 	case t == reflect.TypeOf(durationType):
 		return WidgetDuration
 	case t.Kind() == reflect.Map:
@@ -271,6 +275,10 @@ func validateWidget(widget FieldWidget, t reflect.Type) error {
 	case WidgetInt:
 		if t.Kind() != reflect.Int {
 			return fmt.Errorf("%w: widget %s requires int", errInvalidWidgetType, widget)
+		}
+	case WidgetBool:
+		if t.Kind() != reflect.Bool {
+			return fmt.Errorf("%w: widget %s requires bool", errInvalidWidgetType, widget)
 		}
 	case WidgetDuration:
 		if t != reflect.TypeOf(durationType) {
@@ -308,6 +316,8 @@ func EncodeSettingsToForm(settings *Settings, specs []FieldSpec) (SettingsForm, 
 			form.ScalarValues[spec.Key] = field.String()
 		case WidgetInt:
 			form.ScalarValues[spec.Key] = strconv.Itoa(int(field.Int()))
+		case WidgetBool:
+			form.ScalarValues[spec.Key] = strconv.FormatBool(field.Bool())
 		case WidgetDuration:
 			durationValue, ok := field.Interface().(Duration)
 			if !ok {
@@ -376,6 +386,12 @@ func DecodeFormToSettings(base *Settings, specs []FieldSpec, form SettingsForm) 
 				return Settings{}, fmt.Errorf("field %s: %w", spec.Key, err)
 			}
 			field.SetInt(int64(parsedInt))
+		case WidgetBool:
+			parsedBool, parseErr := parseBoolValue(form.ScalarValues[spec.Key])
+			if parseErr != nil {
+				return Settings{}, fmt.Errorf("field %s: %w", spec.Key, parseErr)
+			}
+			field.SetBool(parsedBool)
 		case WidgetDuration:
 			durationValue, parseErr := parseDurationValue(form.ScalarValues[spec.Key])
 			if parseErr != nil {
@@ -406,6 +422,8 @@ func readonlyChanged(spec *FieldSpec, base, current SettingsForm) bool {
 	case WidgetURL:
 		return base.ScalarValues[spec.Key] != current.ScalarValues[spec.Key]
 	case WidgetInt:
+		return base.ScalarValues[spec.Key] != current.ScalarValues[spec.Key]
+	case WidgetBool:
 		return base.ScalarValues[spec.Key] != current.ScalarValues[spec.Key]
 	case WidgetDuration:
 		return base.ScalarValues[spec.Key] != current.ScalarValues[spec.Key]
@@ -465,6 +483,17 @@ func parseDurationValue(raw string) (Duration, error) {
 		return Duration{}, fmt.Errorf("%w: %s", ErrDurationWholeSeconds, trimmed)
 	}
 	return NewDuration(parsed), nil
+}
+
+func parseBoolValue(raw string) (bool, error) {
+	trimmed := strings.TrimSpace(raw)
+	if strings.EqualFold(trimmed, "true") {
+		return true, nil
+	}
+	if strings.EqualFold(trimmed, "false") {
+		return false, nil
+	}
+	return false, fmt.Errorf("%w: %s", errInvalidBool, trimmed)
 }
 
 func encodeHeaders(headers map[string]string) []HeaderKV {

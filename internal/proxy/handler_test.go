@@ -696,6 +696,13 @@ func TestProxyHandlerDynamicHeaders(t *testing.T) {
 			expectVision:    false,
 		},
 		{
+			name:            "anthropic messages init sequence defaults to user",
+			path:            "/v1/messages",
+			body:            `{"model":"claude-3-opus","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"actual question"}]}`,
+			expectInitiator: "user",
+			expectVision:    false,
+		},
+		{
 			name: "anthropic messages with image",
 			path: "/v1/messages",
 			body: `{"model":"claude-3-opus","messages":[{"role":"user","content":[` +
@@ -742,6 +749,50 @@ func TestProxyHandlerDynamicHeaders(t *testing.T) {
 				t.Errorf("Copilot-Vision-Request: got %q, want empty", visionHeader)
 			}
 		})
+	}
+}
+
+func TestProxyHandlerDynamicHeadersMessagesInitSeqAgentEnabled(t *testing.T) {
+	capture := make(chan *http.Request, 1)
+
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capture <- r
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstreamServer.Close()
+
+	store := &stubAuthStore{
+		auth: config.AuthConfig{Default: "u1", Accounts: []config.Account{{User: "u1", GhToken: "gh"}}},
+	}
+
+	proxyHandler := newTestHandler(
+		t,
+		upstreamServer.URL,
+		stubToken{token: "cp"},
+		store,
+		upstreamServer.Client().Transport,
+		func(cfg *HandlerConfig) {
+			middlewares := buildTestUpstreamMiddlewares(store, stubToken{token: "cp"}, nil, nil, nil)
+			middlewares[4] = upstream.NewParseRequestBodyWithOptions(middleware.ParseOptions{
+				MessagesInitSeqAgent: true,
+			})
+			cfg.UpstreamMiddlewares = middlewares
+		},
+	)
+
+	body := `{"model":"claude-3-opus","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"actual question"}]}`
+	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", bytes.NewBufferString(body))
+	resp := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", resp.Code)
+	}
+
+	upstreamReq := <-capture
+	got := upstreamReq.Header.Get("X-Initiator")
+	if got != "agent" {
+		t.Fatalf("X-Initiator: got %q, want %q", got, "agent")
 	}
 }
 

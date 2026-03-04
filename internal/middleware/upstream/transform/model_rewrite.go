@@ -66,6 +66,8 @@ func RewriteModel(req *http.Request, rc *middleware.RequestContext, catalog mode
 			info.Model = mapped
 		}
 		if rc != nil {
+			info.IsAgent = rc.Info.IsAgent
+			info.IsVision = rc.Info.IsVision
 			rc.Info = info
 		}
 	}

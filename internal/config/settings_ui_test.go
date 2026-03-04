@@ -30,6 +30,7 @@ func TestSettingsFieldSpecs_Matrix(t *testing.T) {
 		{key: "upstream_timeout", widget: WidgetDuration, visible: true, readonly: false},
 		{key: "max_retries", widget: WidgetInt, visible: true, readonly: false},
 		{key: "retry_backoff", widget: WidgetDuration, visible: true, readonly: false},
+		{key: "messages_init_seq_agent", widget: WidgetBool, visible: true, readonly: false},
 		{key: "required_headers", widget: WidgetKeyValue, visible: true, readonly: false},
 	}
 
@@ -109,8 +110,9 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	}
 
 	base := Settings{
-		ListenAddr:   "127.0.0.1:4999",
-		UpstreamBase: "https://api.githubcopilot.com",
+		ListenAddr:           "127.0.0.1:4999",
+		UpstreamBase:         "https://api.githubcopilot.com",
+		MessagesInitSeqAgent: false,
 		RequiredHeaders: map[string]string{
 			"user-agent": "copilot/1.0",
 		},
@@ -127,6 +129,7 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	form.ScalarValues["upstream_timeout"] = "1m0s"
 	form.ScalarValues["max_retries"] = "6"
 	form.ScalarValues["retry_backoff"] = "5s"
+	form.ScalarValues["messages_init_seq_agent"] = "true"
 	form.KeyValueValues["required_headers"] = []HeaderKV{
 		{Key: "user-agent", Value: "copilot/2.0"},
 		{Key: "x-custom", Value: "yes"},
@@ -151,6 +154,9 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	}
 	if decoded.RetryBackoff.Duration() != 5*time.Second {
 		t.Fatalf("unexpected retry_backoff: %s", decoded.RetryBackoff.Duration())
+	}
+	if !decoded.MessagesInitSeqAgent {
+		t.Fatalf("expected messages_init_seq_agent=true")
 	}
 	if decoded.RequiredHeaders["x-custom"] != "yes" {
 		t.Fatalf("expected required_headers[x-custom]=yes")
@@ -184,6 +190,12 @@ func TestDecodeFormToSettings_Validation(t *testing.T) {
 			name: "invalid int",
 			mutate: func(form *SettingsForm) {
 				form.ScalarValues["max_retries"] = "abc"
+			},
+		},
+		{
+			name: "invalid bool",
+			mutate: func(form *SettingsForm) {
+				form.ScalarValues["messages_init_seq_agent"] = "maybe"
 			},
 		},
 		{

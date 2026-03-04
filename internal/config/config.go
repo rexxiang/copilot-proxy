@@ -10,12 +10,13 @@ import (
 )
 
 type Settings struct {
-	ListenAddr      string            `json:"listen_addr" ui:"label=Listen;widget=text;visible=false;readonly=true;order=10"`
-	UpstreamBase    string            `json:"upstream_base" ui:"label=Upstream;widget=url;visible=true;readonly=true;order=20"`
-	RequiredHeaders map[string]string `json:"required_headers,omitempty" ui:"label=Headers;widget=kv;visible=true;readonly=false;order=60"`
-	UpstreamTimeout Duration          `json:"upstream_timeout" ui:"label=Timeout;widget=duration;visible=true;readonly=false;order=30"`
-	MaxRetries      int               `json:"max_retries" ui:"label=Retries;widget=int;visible=true;readonly=false;order=40;min=1"`
-	RetryBackoff    Duration          `json:"retry_backoff" ui:"label=Backoff;widget=duration;visible=true;readonly=false;order=50"`
+	ListenAddr           string            `json:"listen_addr" ui:"label=Listen;widget=text;visible=false;readonly=true;order=10"`
+	UpstreamBase         string            `json:"upstream_base" ui:"label=Upstream;widget=url;visible=true;readonly=true;order=20"`
+	RequiredHeaders      map[string]string `json:"required_headers,omitempty" ui:"label=Headers;widget=kv;visible=true;readonly=false;order=60"`
+	UpstreamTimeout      Duration          `json:"upstream_timeout" ui:"label=Timeout;widget=duration;visible=true;readonly=false;order=30"`
+	MaxRetries           int               `json:"max_retries" ui:"label=Retries;widget=int;visible=true;readonly=false;order=40;min=1"`
+	RetryBackoff         Duration          `json:"retry_backoff" ui:"label=Backoff;widget=duration;visible=true;readonly=false;order=50"`
+	MessagesInitSeqAgent bool              `json:"messages_init_seq_agent" ui:"label=MsgInitSeqAgent;widget=bool;visible=true;readonly=false;order=55;placeholder=true|false"`
 }
 
 type Account struct {
@@ -120,12 +121,13 @@ func SaveSettings(settings *Settings) error {
 
 func DefaultSettings() Settings {
 	return Settings{
-		ListenAddr:      DefaultListenAddr,
-		UpstreamBase:    CopilotAPIURL,
-		RequiredHeaders: nil,
-		UpstreamTimeout: NewDuration(DefaultUpstreamTimeout),
-		MaxRetries:      DefaultMaxRetries,
-		RetryBackoff:    NewDuration(DefaultRetryBackoff),
+		ListenAddr:           DefaultListenAddr,
+		UpstreamBase:         CopilotAPIURL,
+		RequiredHeaders:      nil,
+		UpstreamTimeout:      NewDuration(DefaultUpstreamTimeout),
+		MaxRetries:           DefaultMaxRetries,
+		RetryBackoff:         NewDuration(DefaultRetryBackoff),
+		MessagesInitSeqAgent: false,
 	}
 }
 

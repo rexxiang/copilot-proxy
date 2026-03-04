@@ -9,11 +9,18 @@ import (
 )
 
 // ParseRequestBodyMiddleware reads request body and stores info for downstream middleware.
-type ParseRequestBodyMiddleware struct{}
+type ParseRequestBodyMiddleware struct {
+	parseOptions middleware.ParseOptions
+}
 
 // NewParseRequestBody builds request parsing middleware.
 func NewParseRequestBody() ParseRequestBodyMiddleware {
 	return ParseRequestBodyMiddleware{}
+}
+
+// NewParseRequestBodyWithOptions builds request parsing middleware with custom parse options.
+func NewParseRequestBodyWithOptions(options middleware.ParseOptions) ParseRequestBodyMiddleware {
+	return ParseRequestBodyMiddleware{parseOptions: options}
 }
 
 func (m ParseRequestBodyMiddleware) Handle(ctx *middleware.Context, next middleware.Next) (*http.Response, error) {
@@ -39,7 +46,7 @@ func (m ParseRequestBodyMiddleware) Handle(ctx *middleware.Context, next middlew
 		return next()
 	}
 
-	info := middleware.ParseRequestByPath(req.URL.Path, bodyBytes)
+	info := middleware.ParseRequestByPathWithOptions(req.URL.Path, bodyBytes, m.parseOptions)
 	rc.Body = bodyBytes
 	rc.Info = info
 

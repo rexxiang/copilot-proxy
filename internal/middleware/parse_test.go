@@ -353,6 +353,7 @@ func TestParseRequestByPath(t *testing.T) {
 		path     string
 		body     string
 		model    string
+		isAgent  bool
 		isVision bool
 	}{
 		{
@@ -360,6 +361,7 @@ func TestParseRequestByPath(t *testing.T) {
 			path:     "/v1/chat/completions",
 			body:     `{"model":"gpt-4","messages":[{"role":"user","content":[{"type":"image_url"}]}]}`,
 			model:    "gpt-4",
+			isAgent:  false,
 			isVision: true,
 		},
 		{
@@ -367,6 +369,7 @@ func TestParseRequestByPath(t *testing.T) {
 			path:     "/v1/chat/completions",
 			body:     `{"model":"gpt-4","messages":[{"role":"user","content":[{"type":"image"}]}]}`,
 			model:    "gpt-4",
+			isAgent:  false,
 			isVision: false, // ChatCompletionsParser only looks for image_url
 		},
 		{
@@ -374,6 +377,7 @@ func TestParseRequestByPath(t *testing.T) {
 			path:     "/v1/responses",
 			body:     `{"model":"gpt-4o","input":[{"role":"user","content":[{"type":"input_image"}]}]}`,
 			model:    "gpt-4o",
+			isAgent:  false,
 			isVision: true,
 		},
 		{
@@ -381,6 +385,7 @@ func TestParseRequestByPath(t *testing.T) {
 			path:     "/v1/messages",
 			body:     `{"model":"claude-3","messages":[{"role":"user","content":[{"type":"image"}]}]}`,
 			model:    "claude-3",
+			isAgent:  false,
 			isVision: true,
 		},
 		{
@@ -388,13 +393,23 @@ func TestParseRequestByPath(t *testing.T) {
 			path:     "/v1/messages",
 			body:     `{"model":"claude-3","messages":[{"role":"user","content":[{"type":"image_url"}]}]}`,
 			model:    "claude-3",
+			isAgent:  false,
 			isVision: false, // AnthropicMessagesParser only looks for image
+		},
+		{
+			name:     "messages init sequence defaults to user",
+			path:     "/v1/messages",
+			body:     `{"model":"claude-3","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"question"}]}`,
+			model:    "claude-3",
+			isAgent:  false,
+			isVision: false,
 		},
 		{
 			name:     "unknown path returns empty",
 			path:     "/unknown",
 			body:     `{"model":"gpt-4","messages":[{"role":"user","content":"hello"}]}`,
 			model:    "",
+			isAgent:  false,
 			isVision: false,
 		},
 	}
@@ -405,9 +420,24 @@ func TestParseRequestByPath(t *testing.T) {
 			if info.Model != tc.model {
 				t.Errorf("Model: got %q, want %q", info.Model, tc.model)
 			}
+			if info.IsAgent != tc.isAgent {
+				t.Errorf("IsAgent: got %v, want %v", info.IsAgent, tc.isAgent)
+			}
 			if info.IsVision != tc.isVision {
 				t.Errorf("IsVision: got %v, want %v", info.IsVision, tc.isVision)
 			}
 		})
+	}
+}
+
+func TestParseRequestByPathWithOptions_EnableMessagesInitSeqAgent(t *testing.T) {
+	body := []byte(`{"model":"claude-3","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"question"}]}`)
+
+	info := ParseRequestByPathWithOptions("/v1/messages", body, ParseOptions{
+		MessagesInitSeqAgent: true,
+	})
+
+	if !info.IsAgent {
+		t.Fatalf("expected IsAgent=true when messages_init_seq_agent enabled")
 	}
 }

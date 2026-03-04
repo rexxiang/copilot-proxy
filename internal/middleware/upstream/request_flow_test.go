@@ -227,6 +227,64 @@ func TestParseRequestBodyStoresInfoAndPreservesBody(t *testing.T) {
 	closeResponse(resp)
 }
 
+func TestParseRequestBodyMessagesInitSequenceDefaultsToUser(t *testing.T) {
+	body := `{"model":"claude-3","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"question"}]}`
+	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", bytes.NewBufferString(body))
+	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
+	ctx := &middleware.Context{Request: req}
+	mw := NewParseRequestBody()
+
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+		if !ok || rc == nil {
+			t.Fatalf("missing request context")
+		}
+		if rc.Info.IsAgent {
+			t.Fatalf("expected IsAgent=false by default for messages init sequence")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    ctx.Request,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	closeResponse(resp)
+}
+
+func TestParseRequestBodyMessagesInitSequenceCanBeEnabled(t *testing.T) {
+	body := `{"model":"claude-3","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"question"}]}`
+	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", bytes.NewBufferString(body))
+	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
+	ctx := &middleware.Context{Request: req}
+	mw := NewParseRequestBodyWithOptions(middleware.ParseOptions{
+		MessagesInitSeqAgent: true,
+	})
+
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+		if !ok || rc == nil {
+			t.Fatalf("missing request context")
+		}
+		if !rc.Info.IsAgent {
+			t.Fatalf("expected IsAgent=true when messages init sequence option is enabled")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    ctx.Request,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	closeResponse(resp)
+}
+
 func TestCaptureDebugStoresHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req.Header.Set("X-Test", "one")
