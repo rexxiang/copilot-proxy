@@ -1,0 +1,200 @@
+name: Release on PR Merge
+
+on:
+  pull_request:
+    branches:
+      - "main"
+    types:
+      - closed
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: prepare-release
+    if: ${{ github.event.pull_request.merged == true }}
+    runs-on: ubuntu-latest
+    outputs:
+      next_tag: ${{ steps.version.outputs.next_tag }}
+      release_sha: ${{ steps.version.outputs.release_sha }}
+
+    steps:
+      - name: Checkout merged commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Compute next release tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+
+          highest_major=-1
+          highest_minor=-1
+          tags="$(git tag -l 'v*' | grep -E '^v[0-9]+(\.[0-9]+)?$' || true)"
+
+          while IFS= read -r tag; do
+            [ -z "${tag}" ] && continue
+            version="${tag#v}"
+            major=0
+            minor=0
+
+            if [[ "${version}" =~ ^([0-9]+)$ ]]; then
+              major="${BASH_REMATCH[1]}"
+              minor=0
+            elif [[ "${version}" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+              major="${BASH_REMATCH[1]}"
+              minor="${BASH_REMATCH[2]}"
+            else
+              continue
+            fi
+
+            major=$((10#${major}))
+            minor=$((10#${minor}))
+
+            if (( major > highest_major || (major == highest_major && minor > highest_minor) )); then
+              highest_major="${major}"
+              highest_minor="${minor}"
+            fi
+          done <<< "${tags}"
+
+          if (( highest_major < 0 )); then
+            next_tag="v0.1"
+          else
+            next_tag="v${highest_major}.$((highest_minor + 1))"
+          fi
+
+          {
+            echo "next_tag=${next_tag}"
+            echo "release_sha=${{ github.event.pull_request.merge_commit_sha }}"
+          } >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: build-${{ matrix.goos }}-${{ matrix.goarch }}
+    if: ${{ github.event.pull_request.merged == true }}
+    runs-on: ubuntu-latest
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+
+    steps:
+      - name: Checkout merged commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build and package
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ needs.prepare.outputs.next_tag }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          BIN_NAME="copilot-proxy"
+          EXT=""
+          if [ "${GOOS}" = "windows" ]; then
+            EXT=".exe"
+          fi
+
+          ARTIFACT_BASENAME="${BIN_NAME}_${VERSION}_${GOOS}_${GOARCH}"
+          BIN_PATH="dist/${ARTIFACT_BASENAME}${EXT}"
+
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${BIN_PATH}" ./cmd/copilot-proxy
+
+          if [ "${GOOS}" = "windows" ]; then
+            (cd dist && zip "${ARTIFACT_BASENAME}.zip" "${ARTIFACT_BASENAME}${EXT}" && rm -f "${ARTIFACT_BASENAME}${EXT}")
+          else
+            (cd dist && tar -czf "${ARTIFACT_BASENAME}.tar.gz" "${ARTIFACT_BASENAME}${EXT}" && rm -f "${ARTIFACT_BASENAME}${EXT}")
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: create-release
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.merged == true }}
+    needs:
+      - prepare
+      - build
+
+    steps:
+      - name: Checkout merged commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Create release tag if missing
+        shell: bash
+        env:
+          NEXT_TAG: ${{ needs.prepare.outputs.next_tag }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+          if git rev-parse "${NEXT_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${NEXT_TAG} already exists; skip creation."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${NEXT_TAG}" -m "${NEXT_TAG}" "${RELEASE_SHA}"
+          git push origin "${NEXT_TAG}"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum * > checksums.txt)
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.next_tag }}
+          files: dist/*
+          generate_release_notes: true
