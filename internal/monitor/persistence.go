@@ -18,18 +18,13 @@ type PersistentCollector struct {
 }
 
 const (
-	hourRetentionDays  = 7
-	dayRetentionDays   = 365
-	dayHours           = 24
 	persistenceDirMode = 0o700
 )
 
 // persistedData represents the JSON structure for persistence.
-// Only activity data is persisted; records, by_model, by_status are session-only.
+// Request aggregates and records are session-only.
 type persistedData struct {
-	ActivityHour map[string]int `json:"activity_hour"` // "YYYY-MM-DD HH" -> count
-	ActivityDay  map[string]int `json:"activity_day"`  // "YYYY-MM-DD" -> count
-	SavedAt      time.Time      `json:"saved_at"`
+	SavedAt time.Time `json:"saved_at"`
 }
 
 // NewPersistentCollector creates a collector that persists to file.
@@ -67,36 +62,8 @@ func (pc *PersistentCollector) Save() error {
 		return nil
 	}
 
-	snap := pc.Snapshot()
 	now := time.Now()
-
-	// Retention periods
-	hourRetention, dayRetention := activityRetentionDurations()
-
-	// Convert time.Time keys to simplified string format, filtering old data
-	// Hour: "YYYY-MM-DD HH" (e.g., "2024-01-28 14")
-	activityHour := make(map[string]int)
-	hourCutoff := now.Add(-hourRetention)
-	for k, v := range snap.ActivityHour {
-		if k.After(hourCutoff) {
-			activityHour[k.Format("2006-01-02 15")] = v
-		}
-	}
-
-	// Day: "YYYY-MM-DD" (e.g., "2024-01-28")
-	activityDay := make(map[string]int)
-	dayCutoff := now.Add(-dayRetention)
-	for k, v := range snap.ActivityDay {
-		if k.After(dayCutoff) {
-			activityDay[k.Format("2006-01-02")] = v
-		}
-	}
-
-	data := persistedData{
-		ActivityHour: activityHour,
-		ActivityDay:  activityDay,
-		SavedAt:      now,
-	}
+	data := persistedData{SavedAt: now}
 
 	// Ensure directory exists
 	dir := filepath.Dir(pc.filePath)
@@ -132,45 +99,9 @@ func (pc *PersistentCollector) load() {
 		_ = file.Close()
 	}()
 
-	var data persistedData
-	if err := json.NewDecoder(file).Decode(&data); err != nil {
+	if err := json.NewDecoder(file).Decode(&persistedData{}); err != nil {
 		return // Corrupted file, start fresh
 	}
-
-	now := time.Now()
-
-	// Retention periods
-	hourRetention, dayRetention := activityRetentionDurations()
-
-	// Restore activity maps only (other data is session-only)
-	pc.ThreadSafeCollector.mu.Lock()
-	defer pc.ThreadSafeCollector.mu.Unlock()
-
-	// Restore activity hour map: "YYYY-MM-DD HH" -> time.Time
-	pc.activityHour = make(map[time.Time]int)
-	hourCutoff := now.Add(-hourRetention)
-	for k, v := range data.ActivityHour {
-		if t, err := time.ParseInLocation("2006-01-02 15", k, time.Local); err == nil {
-			if t.After(hourCutoff) {
-				pc.activityHour[t] = v
-			}
-		}
-	}
-
-	// Restore activity day map: "YYYY-MM-DD" -> time.Time
-	pc.activityDay = make(map[time.Time]int)
-	dayCutoff := now.Add(-dayRetention)
-	for k, v := range data.ActivityDay {
-		if t, err := time.ParseInLocation("2006-01-02", k, time.Local); err == nil {
-			if t.After(dayCutoff) {
-				pc.activityDay[t] = v
-			}
-		}
-	}
-}
-
-func activityRetentionDurations() (hourRetention time.Duration, dayRetention time.Duration) {
-	return hourRetentionDays * dayHours * time.Hour, dayRetentionDays * dayHours * time.Hour
 }
 
 // StartAutoSave starts a goroutine that saves periodically.

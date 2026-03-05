@@ -38,16 +38,15 @@ func TestMonitorModel_ViewSwitching(t *testing.T) {
 	deps := MonitorDeps{Collector: collector}
 	model := NewMonitorModel(&deps, "")
 
-	// View order: Stats(0), Activity(1), Models(2), Logs(3)
-	// Keys: 1=Stats, 2=Activity, 3=Models, 4=Logs
+	// View order: Stats(0), Models(1), Logs(2)
+	// Keys: 1=Stats, 2=Models, 3=Logs
 	tests := []struct {
 		key      string
 		expected tui.ViewState
 	}{
 		{"1", tui.ViewStats},
-		{"2", tui.ViewActivity},
-		{"3", tui.ViewModels},
-		{"4", tui.ViewLogs},
+		{"2", tui.ViewModels},
+		{"3", tui.ViewLogs},
 		{"1", tui.ViewStats},
 	}
 
@@ -75,7 +74,7 @@ func TestMonitorModel_ArrowKeyNavigation(t *testing.T) {
 		t.Fatal("expected initial state tui.ViewStats")
 	}
 
-	// Right arrow should go to tui.ViewActivity (next in order: Stats -> Activity)
+	// Right arrow should go to tui.ViewModels (next in order: Stats -> Models)
 	msg := tea.KeyMsg{Type: tea.KeyRight}
 	updated, _ := model.Update(msg)
 	updatedModel, ok := updated.(*MonitorModel)
@@ -83,8 +82,8 @@ func TestMonitorModel_ArrowKeyNavigation(t *testing.T) {
 		t.Fatalf("expected MonitorModel, got %T", updated)
 	}
 	model = *updatedModel
-	if model.state != tui.ViewActivity {
-		t.Errorf("expected tui.ViewActivity after right arrow, got %d", model.state)
+	if model.state != tui.ViewModels {
+		t.Errorf("expected tui.ViewModels after right arrow, got %d", model.state)
 	}
 
 	// Left arrow should go back to tui.ViewStats
@@ -175,7 +174,7 @@ func TestMonitorModel_TickUpdatesSnapshot(t *testing.T) {
 	}
 }
 
-func TestMonitorModel_TickUpdatesSnapshotInActivity(t *testing.T) {
+func TestMonitorModel_TickUpdatesSnapshotInLogs(t *testing.T) {
 	collector := monitor.NewCollector(100)
 	collector.RecordLocal(&monitor.RequestRecord{
 		Timestamp:  time.Now(),
@@ -185,7 +184,7 @@ func TestMonitorModel_TickUpdatesSnapshotInActivity(t *testing.T) {
 
 	deps := MonitorDeps{Collector: collector}
 	model := NewMonitorModel(&deps, "")
-	model.state = tui.ViewActivity
+	model.state = tui.ViewLogs
 
 	msg := tickMsg(time.Now())
 	updated, _ := model.Update(msg)
@@ -196,7 +195,7 @@ func TestMonitorModel_TickUpdatesSnapshotInActivity(t *testing.T) {
 	model = *updatedModel
 
 	if model.snapshot.TotalRequests != 1 {
-		t.Errorf("expected 1 request after tick in activity view, got %d", model.snapshot.TotalRequests)
+		t.Errorf("expected 1 request after tick in logs view, got %d", model.snapshot.TotalRequests)
 	}
 }
 
@@ -281,9 +280,6 @@ func TestMonitorModel_ClearStatsResetsCountersOnly(t *testing.T) {
 	if len(model.snapshot.ByModel) != 1 {
 		t.Fatalf("expected one model bucket before clear, got %d", len(model.snapshot.ByModel))
 	}
-	if len(model.snapshot.ActivityHour) == 0 {
-		t.Fatalf("expected activity counters before clear")
-	}
 
 	clearMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}}
 	updated, _ = model.Update(clearMsg)
@@ -301,9 +297,6 @@ func TestMonitorModel_ClearStatsResetsCountersOnly(t *testing.T) {
 	}
 	if len(model.snapshot.RecentRequests) != 2 {
 		t.Fatalf("expected request logs to be retained, got %d", len(model.snapshot.RecentRequests))
-	}
-	if len(model.snapshot.ActivityHour) == 0 {
-		t.Fatalf("expected activity counters to remain after stats clear")
 	}
 }
 
@@ -480,7 +473,7 @@ func TestMonitorModel_ViewRendering(t *testing.T) {
 	model = *updatedModel
 
 	// Test each view renders without panic and contains header tabs
-	views := []tui.ViewState{tui.ViewStats, tui.ViewModels, tui.ViewActivity, tui.ViewLogs}
+	views := []tui.ViewState{tui.ViewStats, tui.ViewModels, tui.ViewLogs}
 	for _, view := range views {
 		model.state = view
 		output := model.View()
@@ -491,9 +484,74 @@ func TestMonitorModel_ViewRendering(t *testing.T) {
 		if !strings.Contains(output, "1:Stats") {
 			t.Errorf("view %d missing header tabs (1:Stats)", view)
 		}
-		if !strings.Contains(output, "3:Models") {
-			t.Errorf("view %d missing header tabs (3:Models)", view)
+		if !strings.Contains(output, "2:Models") {
+			t.Errorf("view %d missing header tabs (2:Models)", view)
 		}
+		if !strings.Contains(output, "3:Logs") {
+			t.Errorf("view %d missing header tabs (3:Logs)", view)
+		}
+	}
+}
+
+func TestMonitorModel_LogsViewRenderingFitsWindowAndKeepsHeader(t *testing.T) {
+	collector := monitor.NewCollector(200)
+	now := time.Now()
+	for i := range 120 {
+		collector.RecordLocal(&monitor.RequestRecord{
+			Timestamp:    now.Add(-time.Duration(i) * time.Second),
+			Method:       "POST",
+			Path:         "/v1/chat/completions",
+			UpstreamPath: "/chat/completions",
+			Model:        "gpt-4o",
+			StatusCode:   200,
+		})
+	}
+
+	deps := MonitorDeps{Collector: collector}
+	model := NewMonitorModel(&deps, "127.0.0.1:4000")
+	model.state = tui.ViewLogs
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 12})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	updated, _ = model.Update(tickMsg(time.Now()))
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	output := model.View()
+	if !strings.Contains(output, "Copilot Proxy") {
+		t.Fatalf("expected header title in output")
+	}
+	if !strings.Contains(output, "1:Stats") || !strings.Contains(output, "2:Models") || !strings.Contains(output, "3:Logs") {
+		t.Fatalf("expected all header tabs to remain visible in logs output")
+	}
+
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) > model.height {
+		t.Fatalf("expected rendered lines <= window height (%d), got %d", model.height, len(lines))
+	}
+}
+
+func TestMonitorModel_FooterHelpShowsAccountsOnlyInStats(t *testing.T) {
+	collector := monitor.NewCollector(10)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "127.0.0.1:4000")
+	model.width = 200
+	model.height = 20
+
+	model.state = tui.ViewStats
+	statsView := model.View()
+	if !strings.Contains(statsView, "a accounts") {
+		t.Fatalf("expected stats footer help to include account shortcut")
+	}
+
+	model.state = tui.ViewModels
+	modelsView := model.View()
+	if strings.Contains(modelsView, "a accounts") {
+		t.Fatalf("expected models footer help to hide account shortcut")
+	}
+
+	model.state = tui.ViewLogs
+	logsView := model.View()
+	if strings.Contains(logsView, "a accounts") {
+		t.Fatalf("expected logs footer help to hide account shortcut")
 	}
 }
 
@@ -533,26 +591,6 @@ func TestFormatDuration(t *testing.T) {
 		result := tui.FormatDuration(tc.input)
 		if result != tc.expected {
 			t.Errorf("FormatDuration(%v) = %q, want %q", tc.input, result, tc.expected)
-		}
-	}
-}
-
-func TestHeatmapCell(t *testing.T) {
-	tests := []struct {
-		count    int
-		maxCount int
-	}{
-		{0, 100},
-		{5, 100},
-		{15, 100},
-		{30, 100},
-		{75, 100},
-	}
-
-	for _, tc := range tests {
-		result := tui.HeatmapCell(tc.count, tc.maxCount)
-		if result == "" {
-			t.Errorf("HeatmapCell(%d, %d) returned empty string", tc.count, tc.maxCount)
 		}
 	}
 }

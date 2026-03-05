@@ -116,9 +116,6 @@ type Snapshot struct {
 	ByStatus       map[int]int64
 	RecentRequests []RequestRecord
 	ActiveRequests []RequestRecord // Requests currently in progress (StatusCode == 0)
-	ActivityMinute map[time.Time]int
-	ActivityHour   map[time.Time]int
-	ActivityDay    map[time.Time]int
 }
 
 // UserInfo contains Copilot subscription information.

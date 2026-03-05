@@ -92,7 +92,7 @@ func TestCollector_RecordVisionAndAgent(t *testing.T) {
 	}
 }
 
-func TestCollector_AgentRequestTrackedSeparatelyInStatsAndActivity(t *testing.T) {
+func TestCollector_AgentRequestTrackedSeparatelyInStatsAndHistory(t *testing.T) {
 	c := NewCollector(100)
 	now := time.Now()
 
@@ -128,14 +128,6 @@ func TestCollector_AgentRequestTrackedSeparatelyInStatsAndActivity(t *testing.T)
 	if stats.TotalTime != 100*time.Millisecond {
 		t.Fatalf("expected total time to include only user requests, got %v", stats.TotalTime)
 	}
-	if len(snap.ActivityMinute) != 1 {
-		t.Fatalf("expected a single minute bucket, got %d", len(snap.ActivityMinute))
-	}
-	for _, count := range snap.ActivityMinute {
-		if count != 2 {
-			t.Fatalf("expected minute bucket count=2 for user+agent aggregation, got %d", count)
-		}
-	}
 	if len(snap.RecentRequests) != 2 {
 		t.Fatalf("expected recent requests to retain both user and agent records, got %d", len(snap.RecentRequests))
 	}
@@ -168,9 +160,6 @@ func TestCollector_AgentOnlyRequestIncludedInModelStats(t *testing.T) {
 	if stats.AgentReqs != 1 {
 		t.Fatalf("expected agent request count to be one, got %d", stats.AgentReqs)
 	}
-	if len(snap.ActivityMinute) == 0 || len(snap.ActivityHour) == 0 || len(snap.ActivityDay) == 0 {
-		t.Fatalf("expected activity buckets for successful agent request")
-	}
 	if len(snap.RecentRequests) != 1 {
 		t.Fatalf("expected recent requests to keep agent record, got %d", len(snap.RecentRequests))
 	}
@@ -202,7 +191,7 @@ func TestCollector_RecordErrors(t *testing.T) {
 	}
 }
 
-func TestCollector_ClientCanceledCountedAsTotalButNotErrorOrActivity(t *testing.T) {
+func TestCollector_ClientCanceledCountedAsTotalButNotError(t *testing.T) {
 	c := NewCollector(100)
 
 	c.RecordLocal(&RequestRecord{
@@ -225,9 +214,6 @@ func TestCollector_ClientCanceledCountedAsTotalButNotErrorOrActivity(t *testing.
 	}
 	if stats.Errors != 0 {
 		t.Fatalf("expected canceled request not to count as error, got %d", stats.Errors)
-	}
-	if len(snap.ActivityMinute) != 0 || len(snap.ActivityHour) != 0 || len(snap.ActivityDay) != 0 {
-		t.Fatalf("expected canceled request not to add activity buckets")
 	}
 }
 
@@ -269,46 +255,6 @@ func TestCollector_Reset(t *testing.T) {
 	}
 	if len(snap.RecentRequests) != 0 {
 		t.Errorf("expected empty recent requests after reset, got %d", len(snap.RecentRequests))
-	}
-}
-
-func TestCollector_ActivityAggregation(t *testing.T) {
-	c := NewCollector(100)
-
-	now := time.Now()
-	// Record requests at different times
-	times := []time.Time{
-		now,
-		now.Add(-30 * time.Second), // Same minute
-		now.Add(-2 * time.Minute),  // Different minute
-		now.Add(-30 * time.Minute), // Same hour
-		now.Add(-2 * time.Hour),    // Different hour
-		now.Add(-25 * time.Hour),   // Different day
-	}
-
-	for _, ts := range times {
-		c.RecordLocal(&RequestRecord{
-			Timestamp:  ts,
-			Model:      "gpt-4o",
-			StatusCode: 200,
-		})
-	}
-
-	snap := c.Snapshot()
-
-	// Check minute aggregation (first two should be same minute)
-	if len(snap.ActivityMinute) < 2 {
-		t.Errorf("expected at least 2 minute buckets, got %d", len(snap.ActivityMinute))
-	}
-
-	// Check hour aggregation
-	if len(snap.ActivityHour) < 2 {
-		t.Errorf("expected at least 2 hour buckets, got %d", len(snap.ActivityHour))
-	}
-
-	// Check day aggregation
-	if len(snap.ActivityDay) < 2 {
-		t.Errorf("expected at least 2 day buckets, got %d", len(snap.ActivityDay))
 	}
 }
 

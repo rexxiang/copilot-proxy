@@ -46,10 +46,7 @@ type monitorKeyMap struct {
 	right     key.Binding
 	stats     key.Binding
 	models    key.Binding
-	activity  key.Binding
 	logs      key.Binding
-	prevMode  key.Binding
-	nextMode  key.Binding
 	refresh   key.Binding
 	up        key.Binding
 	down      key.Binding
@@ -70,11 +67,8 @@ func newMonitorKeyMap() monitorKeyMap {
 		left:      key.NewBinding(key.WithKeys("left"), key.WithHelp("←", "prev")),
 		right:     key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "next")),
 		stats:     key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "stats")),
-		models:    key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "models")),
-		activity:  key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "activity")),
-		logs:      key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "logs")),
-		prevMode:  key.NewBinding(key.WithKeys(",", "，", "<", "《"), key.WithHelp(",/<", "prev mode")),
-		nextMode:  key.NewBinding(key.WithKeys(".", "。", ">", "》"), key.WithHelp("./>", "next mode")),
+		models:    key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "models")),
+		logs:      key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "logs")),
 		refresh:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑", "up")),
 		down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓", "down")),
@@ -95,7 +89,7 @@ func (k *monitorKeyMap) ShortHelp() []key.Binding {
 
 func (k *monitorKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.left, k.right, k.stats, k.models, k.activity, k.logs},
+		{k.left, k.right, k.stats, k.models, k.logs},
 		{k.refresh, k.accounts, k.settings, k.quit},
 	}
 }
@@ -164,7 +158,6 @@ type MonitorModel struct {
 
 	// View components
 	statsView       *tui.StatsView
-	activityView    *tui.ActivityView
 	modelsView      *tui.ModelsView
 	logsView        *tui.LogsView
 	configModal     *tui.ConfigModal
@@ -226,7 +219,6 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 
 		// Initialize view components
 		statsView:    tui.NewStatsView(),
-		activityView: tui.NewActivityView(),
 		modelsView:   tui.NewModelsView(),
 		logsView:     tui.NewLogsView(),
 		configModal:  tui.NewConfigModal(),
@@ -239,7 +231,6 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 
 	// Set up view components
 	model.statsView.SetState(sharedState)
-	model.activityView.SetState(sharedState)
 	model.modelsView.SetState(sharedState)
 	model.logsView.SetState(sharedState)
 
@@ -415,9 +406,6 @@ func (m *MonitorModel) handleGlobalKey(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 		return true, model, cmd
 	case key.Matches(msg, m.keys.models):
 		model, cmd := m.handleDirectView(tui.ViewModels)
-		return true, model, cmd
-	case key.Matches(msg, m.keys.activity):
-		model, cmd := m.handleDirectView(tui.ViewActivity)
 		return true, model, cmd
 	case key.Matches(msg, m.keys.logs):
 		model, cmd := m.handleDirectView(tui.ViewLogs)
@@ -854,8 +842,6 @@ func (m *MonitorModel) handleClearLogsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.sharedState.Snapshot = m.snapshot
 		m.setStatus(tui.ViewStats, "Stats counters cleared")
 		return m, nil
-	case tui.ViewActivity:
-		return m.handleCurrentViewKey(msg)
 	case tui.ViewModels:
 		return m.handleCurrentViewKey(msg)
 	case tui.ViewLogs:
@@ -873,8 +859,6 @@ func (m *MonitorModel) handleRefresh() (tea.Model, tea.Cmd) {
 		m.setStatus(tui.ViewModels, "Refreshing models...")
 		cmd := m.loadModelsCmd()
 		return m, cmd
-	case tui.ViewActivity:
-		return m, nil
 	case tui.ViewLogs:
 		return m, nil
 	default:
@@ -885,10 +869,7 @@ func (m *MonitorModel) handleRefresh() (tea.Model, tea.Cmd) {
 func (m *MonitorModel) handleWindowSize(msg tea.WindowSizeMsg) {
 	m.width = msg.Width
 	m.height = msg.Height
-	m.statsView.SetSize(msg.Width, msg.Height)
-	m.activityView.SetSize(msg.Width, msg.Height)
-	m.modelsView.SetSize(msg.Width, msg.Height)
-	m.logsView.SetSize(msg.Width, msg.Height)
+	m.applyViewSizes()
 	m.sharedState.Width = msg.Width
 	m.sharedState.Height = msg.Height
 }
@@ -968,8 +949,6 @@ func (m *MonitorModel) handleViewEnter() tea.Cmd {
 			m.setStatus(tui.ViewModels, "Refreshing models...")
 			return m.loadModelsCmd()
 		}
-	case tui.ViewActivity:
-		return nil
 	case tui.ViewLogs:
 		return nil
 	}
@@ -980,8 +959,6 @@ func (m *MonitorModel) currentViewHandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 	switch m.state {
 	case tui.ViewStats:
 		return m.statsView.HandleKey(msg)
-	case tui.ViewActivity:
-		return m.activityView.HandleKey(msg)
 	case tui.ViewModels:
 		return m.modelsView.HandleKey(msg)
 	case tui.ViewLogs:
@@ -994,8 +971,6 @@ func (m *MonitorModel) currentViewHandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 func (m *MonitorModel) currentViewHandleMouse(msg tea.MouseMsg) (bool, tea.Cmd) {
 	switch m.state {
 	case tui.ViewStats:
-		return false, nil
-	case tui.ViewActivity:
 		return false, nil
 	case tui.ViewModels:
 		return false, nil
@@ -1012,14 +987,14 @@ func (m *MonitorModel) View() string {
 		return ""
 	}
 
+	m.applyViewSizes()
+
 	var content string
 	switch m.state {
 	case tui.ViewStats:
 		content = m.statsView.View()
 	case tui.ViewModels:
 		content = m.modelsView.View()
-	case tui.ViewActivity:
-		content = m.activityView.View()
 	case tui.ViewLogs:
 		content = m.logsView.View()
 	}
@@ -1040,8 +1015,8 @@ func (m *MonitorModel) renderHeader() string {
 	title := tui.TitleStyle.Render("Copilot Proxy")
 
 	tabs := []string{}
-	tabNames := []string{"Stats", "Activity", "Models", "Logs"}
-	viewOrder := []tui.ViewState{tui.ViewStats, tui.ViewActivity, tui.ViewModels, tui.ViewLogs}
+	tabNames := []string{"Stats", "Models", "Logs"}
+	viewOrder := []tui.ViewState{tui.ViewStats, tui.ViewModels, tui.ViewLogs}
 	for i, name := range tabNames {
 		label := fmt.Sprintf("%d:%s", i+1, name)
 		if viewOrder[i] == m.state {
@@ -1062,6 +1037,60 @@ func (m *MonitorModel) renderHeader() string {
 }
 
 func (m *MonitorModel) renderFooter() string {
-	helpView := m.help.View(&m.keys)
+	helpKeys := m.keys
+	m.resetFooterKeyVisibility(&helpKeys)
+	m.applyFooterKeyOverrides(&helpKeys)
+	helpView := m.help.View(&helpKeys)
 	return tui.DimStyle.Render(helpView)
+}
+
+func (m *MonitorModel) applyFooterKeyOverrides(helpKeys *monitorKeyMap) {
+	if helpKeys == nil {
+		return
+	}
+	switch m.state {
+	case tui.ViewStats:
+		m.footerKeysForStats(helpKeys)
+	case tui.ViewModels:
+		m.footerKeysForModels(helpKeys)
+	case tui.ViewLogs:
+		m.footerKeysForLogs(helpKeys)
+	default:
+		m.footerKeysForStats(helpKeys)
+	}
+}
+
+func (m *MonitorModel) footerKeysForStats(helpKeys *monitorKeyMap) {
+	helpKeys.accounts.SetEnabled(true)
+}
+
+func (m *MonitorModel) footerKeysForModels(_ *monitorKeyMap) {}
+
+func (m *MonitorModel) footerKeysForLogs(_ *monitorKeyMap) {}
+
+func (m *MonitorModel) resetFooterKeyVisibility(helpKeys *monitorKeyMap) {
+	if helpKeys == nil {
+		return
+	}
+	helpKeys.accounts.SetEnabled(false)
+}
+
+func (m *MonitorModel) applyViewSizes() {
+	contentHeight := m.calculateContentHeight()
+	m.statsView.SetSize(m.width, contentHeight)
+	m.modelsView.SetSize(m.width, contentHeight)
+	m.logsView.SetSize(m.width, contentHeight)
+}
+
+func (m *MonitorModel) calculateContentHeight() int {
+	if m.height <= 0 {
+		return 0
+	}
+	headerHeight := lipgloss.Height(m.renderHeader())
+	footerHeight := lipgloss.Height(m.renderFooter())
+	contentHeight := m.height - headerHeight - footerHeight
+	if contentHeight < 1 {
+		return 1
+	}
+	return contentHeight
 }
