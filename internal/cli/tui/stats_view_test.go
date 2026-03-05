@@ -18,6 +18,15 @@ func makeTaggedStyle(tag string) lipgloss.Style {
 	return lipgloss.NewStyle().BorderStyle(border).BorderLeft(true)
 }
 
+func statsRowForModel(rendered, model string) string {
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.Contains(line, model) {
+			return line
+		}
+	}
+	return ""
+}
+
 func TestStatsView_PremiumModelShowsUserAndAllCounts(t *testing.T) {
 	state := &SharedState{
 		Snapshot: monitor.Snapshot{
@@ -60,6 +69,126 @@ func TestStatsView_PremiumModelShowsUserAndAllCounts(t *testing.T) {
 	}
 	if !strings.Contains(row, "1/1") {
 		t.Fatalf("expected premium errors to show user/agent as 1/1, row=%q", row)
+	}
+}
+
+func TestStatsView_AvgTimeUsesUserAndAgentRequestTotal(t *testing.T) {
+	state := &SharedState{
+		Snapshot: monitor.Snapshot{
+			ByModel: map[string]*monitor.ModelStats{
+				"gpt-4o": {
+					Count:       2,
+					AgentReqs:   2,
+					Errors:      0,
+					AgentErrors: 0,
+					TotalTime:   100 * time.Millisecond, // should not drive Avg Time now
+				},
+			},
+			RecentRequests: []monitor.RequestRecord{
+				{Timestamp: time.Now(), Model: "gpt-4o", StatusCode: 200, Duration: 100 * time.Millisecond, IsAgent: false},
+				{Timestamp: time.Now(), Model: "gpt-4o", StatusCode: 200, Duration: 200 * time.Millisecond, IsAgent: false},
+				{Timestamp: time.Now(), Model: "gpt-4o", StatusCode: 200, Duration: 300 * time.Millisecond, IsAgent: true},
+				{Timestamp: time.Now(), Model: "gpt-4o", StatusCode: 200, Duration: 400 * time.Millisecond, IsAgent: true},
+			},
+			TotalRequests: 2,
+		},
+		Models: []monitor.ModelInfo{
+			{ID: "gpt-4o", IsPremium: true},
+		},
+	}
+
+	view := NewStatsView()
+	view.SetState(state)
+
+	row := statsRowForModel(view.View(), "gpt-4o")
+	if row == "" {
+		t.Fatalf("expected row for gpt-4o")
+	}
+	if !strings.Contains(row, "250ms") {
+		t.Fatalf("expected avg time 250ms with U+A denominator, row=%q", row)
+	}
+}
+
+func TestStatsView_AvgTimeIncludesAgentDurations(t *testing.T) {
+	state := &SharedState{
+		Snapshot: monitor.Snapshot{
+			ByModel: map[string]*monitor.ModelStats{
+				"gpt-4o-mini": {
+					Count:       1,
+					AgentReqs:   1,
+					Errors:      0,
+					AgentErrors: 0,
+					TotalTime:   100 * time.Millisecond, // old logic would show 100ms
+				},
+			},
+			RecentRequests: []monitor.RequestRecord{
+				{Timestamp: time.Now(), Model: "gpt-4o-mini", StatusCode: 200, Duration: 100 * time.Millisecond, IsAgent: false},
+				{Timestamp: time.Now(), Model: "gpt-4o-mini", StatusCode: 200, Duration: 900 * time.Millisecond, IsAgent: true},
+			},
+			TotalRequests: 1,
+		},
+		Models: []monitor.ModelInfo{
+			{ID: "gpt-4o-mini", IsPremium: true},
+		},
+	}
+
+	view := NewStatsView()
+	view.SetState(state)
+
+	row := statsRowForModel(view.View(), "gpt-4o-mini")
+	if row == "" {
+		t.Fatalf("expected row for gpt-4o-mini")
+	}
+	if !strings.Contains(row, "500ms") {
+		t.Fatalf("expected avg time 500ms including agent duration, row=%q", row)
+	}
+	if strings.Contains(row, "100ms") {
+		t.Fatalf("expected avg time not to fall back to user-only timing, row=%q", row)
+	}
+}
+
+func TestStatsView_AvgTimeForStreamUsesTotalDuration(t *testing.T) {
+	state := &SharedState{
+		Snapshot: monitor.Snapshot{
+			ByModel: map[string]*monitor.ModelStats{
+				"stream-model": {
+					Count:       1,
+					AgentReqs:   0,
+					Errors:      0,
+					AgentErrors: 0,
+					TotalTime:   300 * time.Millisecond, // old logic would show 300ms
+				},
+			},
+			RecentRequests: []monitor.RequestRecord{
+				{
+					Timestamp:             time.Now(),
+					Model:                 "stream-model",
+					StatusCode:            200,
+					Duration:              1800 * time.Millisecond,
+					IsStream:              true,
+					FirstResponseDuration: 300 * time.Millisecond,
+					Streaming:             false,
+				},
+			},
+			TotalRequests: 1,
+		},
+		Models: []monitor.ModelInfo{
+			{ID: "stream-model", IsPremium: true},
+		},
+	}
+
+	view := NewStatsView()
+	view.SetState(state)
+
+	row := statsRowForModel(view.View(), "stream-model")
+	if row == "" {
+		t.Fatalf("expected row for stream-model")
+	}
+	if !strings.Contains(row, "1.8s") {
+		t.Fatalf("expected stream avg time to use total duration 1.8s, row=%q", row)
+	}
+	if strings.Contains(row, "300ms") {
+		t.Fatalf("expected stream avg time not to use first-response-only duration, row=%q", row)
 	}
 }
 
