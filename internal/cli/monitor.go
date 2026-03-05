@@ -11,6 +11,7 @@ import (
 	"copilot-proxy/internal/auth"
 	"copilot-proxy/internal/cli/tui"
 	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/debounce"
 	"copilot-proxy/internal/models"
 	"copilot-proxy/internal/monitor"
 
@@ -155,6 +156,8 @@ type MonitorModel struct {
 	statusView      tui.ViewState // Which view the status message belongs to
 	loadedUserInfo  bool
 	loadedModels    bool
+	userInfoQueue   debounce.Debouncer
+	premiumDetector agentPremiumRefreshDetector
 
 	// View components
 	statsView       *tui.StatsView
@@ -216,6 +219,8 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 		currentSettings: config.DefaultSettings(),
 		statusView:      tui.ViewStats,
 		sharedState:     sharedState,
+		userInfoQueue:   debounce.New(userInfoRefreshDebounceDelay, debounce.ModeLeading),
+		premiumDetector: newAgentPremiumRefreshDetector(),
 
 		// Initialize view components
 		statsView:    tui.NewStatsView(),
@@ -242,9 +247,9 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 
 // Init initializes the model.
 func (m *MonitorModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{
-		tickCmd(),
-		m.loadUserInfoCmd(),
+	cmds := []tea.Cmd{tickCmd()}
+	if cmd := m.enqueueUserInfoRefresh(userInfoRefreshSourceStartup); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 
 	// Only load models if global cache is empty
@@ -339,6 +344,8 @@ func (m *MonitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleModelsLoaded(msg)
 	case userInfoLoadedMsg:
 		m.handleUserInfoLoaded(msg)
+	case userInfoRefreshDueMsg:
+		return m.handleUserInfoRefreshDue(msg)
 	case accountDeviceCodeMsg:
 		return m.handleAccountDeviceCode(msg)
 	case accountTokenMsg:
@@ -371,9 +378,41 @@ func newMonitorHTTPClient() *http.Client {
 }
 
 func (m *MonitorModel) beginUserInfoRefresh() tea.Cmd {
+	return m.startUserInfoRefreshIfNeeded()
+}
+
+func (m *MonitorModel) enqueueUserInfoRefresh(source userInfoRefreshSource) tea.Cmd {
+	if source == userInfoRefreshSourceManual {
+		m.setStatus(tui.ViewStats, "Queued user info refresh (3s)")
+	}
+	result := m.userInfoQueue.Trigger()
+	if !result.Schedule {
+		return nil
+	}
+	return scheduleUserInfoDue(result.Seq, result.Delay)
+}
+
+func (m *MonitorModel) startUserInfoRefreshIfNeeded() tea.Cmd {
+	if m.userInfoQueue.State().InFlight {
+		return nil
+	}
+	m.userInfoQueue.MarkStarted()
 	m.loading = true
 	m.setStatus(tui.ViewStats, "Refreshing user info...")
 	return m.loadUserInfoCmd()
+}
+
+func scheduleUserInfoDue(seq int, delay time.Duration) tea.Cmd {
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return userInfoRefreshDueMsg{seq: seq}
+	})
+}
+
+func (m *MonitorModel) handleUserInfoRefreshDue(msg userInfoRefreshDueMsg) (tea.Model, tea.Cmd) {
+	if !m.userInfoQueue.AcceptDue(msg.seq) {
+		return m, nil
+	}
+	return m, m.startUserInfoRefreshIfNeeded()
 }
 
 func (m *MonitorModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -853,7 +892,7 @@ func (m *MonitorModel) handleClearLogsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *MonitorModel) handleRefresh() (tea.Model, tea.Cmd) {
 	switch m.state {
 	case tui.ViewStats:
-		return m, m.beginUserInfoRefresh()
+		return m, m.enqueueUserInfoRefresh(userInfoRefreshSourceManual)
 	case tui.ViewModels:
 		m.loading = true
 		m.setStatus(tui.ViewModels, "Refreshing models...")
@@ -875,11 +914,18 @@ func (m *MonitorModel) handleWindowSize(msg tea.WindowSizeMsg) {
 }
 
 func (m *MonitorModel) handleTick() (tea.Model, tea.Cmd) {
+	cmds := []tea.Cmd{tickCmd()}
 	if m.collector != nil {
 		m.snapshot = m.collector.Snapshot()
 		m.sharedState.Snapshot = m.snapshot
+		premiumSet := premiumModelSet(m.sharedState.Models)
+		if len(premiumSet) > 0 && m.premiumDetector.HasNewEligible(m.snapshot, premiumSet) {
+			if cmd := m.enqueueUserInfoRefresh(userInfoRefreshSourceAgentPremium); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 	}
-	return m, tickCmd()
+	return m, tea.Batch(cmds...)
 }
 
 func (m *MonitorModel) handleModelsLoaded(msg modelsLoadedMsg) {
@@ -897,6 +943,7 @@ func (m *MonitorModel) handleModelsLoaded(msg modelsLoadedMsg) {
 }
 
 func (m *MonitorModel) handleUserInfoLoaded(msg userInfoLoadedMsg) {
+	m.userInfoQueue.MarkFinished()
 	m.loading = false
 	if msg.err == nil {
 		m.userInfo = msg.info

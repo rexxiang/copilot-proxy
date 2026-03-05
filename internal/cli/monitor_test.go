@@ -427,6 +427,178 @@ func TestMonitorModel_InitLoadsUserInfo(t *testing.T) {
 	}
 }
 
+func TestMonitorModel_InitQueuesUserInfoRefresh(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
+
+	cmd := model.Init()
+	if cmd == nil {
+		t.Fatalf("expected init command")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.BatchMsg); !ok {
+		t.Fatalf("expected BatchMsg from init, got %T", msg)
+	}
+	state := model.userInfoQueue.State()
+	if !state.Pending {
+		t.Fatalf("expected init to queue user info refresh")
+	}
+	if !state.Armed {
+		t.Fatalf("expected init to arm debounce timer")
+	}
+	if state.InFlight {
+		t.Fatalf("expected init queue to be waiting, not in-flight")
+	}
+}
+
+func TestMonitorModel_ManualRefreshQueuesUserInfoRefresh(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
+	model.state = tui.ViewStats
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	if cmd == nil {
+		t.Fatalf("expected manual refresh to enqueue debounce command")
+	}
+	state := model.userInfoQueue.State()
+	if !state.Pending || !state.Armed {
+		t.Fatalf("expected manual refresh to queue and arm debounce")
+	}
+	if state.InFlight {
+		t.Fatalf("expected manual refresh to wait for due trigger before calling API")
+	}
+	if !strings.Contains(model.statusMsg, "Queued user info refresh (3s)") {
+		t.Fatalf("expected queue status message, got %q", model.statusMsg)
+	}
+}
+
+func TestMonitorModel_AgentPremiumEventQueuesRefresh(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	deps := MonitorDeps{
+		Collector: collector,
+		Models: []monitor.ModelInfo{
+			{ID: "gpt-4o", IsPremium: true},
+		},
+	}
+	model := NewMonitorModel(&deps, "")
+
+	collector.RecordLocal(&monitor.RequestRecord{
+		RequestID:  "req-agent-premium-1",
+		Timestamp:  time.Now(),
+		Model:      "gpt-4o",
+		StatusCode: 200,
+		IsAgent:    true,
+	})
+
+	updated, _ := model.Update(tickMsg(time.Now()))
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	state := model.userInfoQueue.State()
+	if !state.Pending || !state.Armed {
+		t.Fatalf("expected agent premium event to enqueue user info refresh")
+	}
+}
+
+func TestMonitorModel_FirstTriggerDebounceDoesNotResetOnBurst(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	deps := MonitorDeps{
+		Collector: collector,
+		Models: []monitor.ModelInfo{
+			{ID: "gpt-4o", IsPremium: true},
+		},
+	}
+	model := NewMonitorModel(&deps, "")
+
+	collector.RecordLocal(&monitor.RequestRecord{
+		RequestID:  "req-agent-premium-1",
+		Timestamp:  time.Now(),
+		Model:      "gpt-4o",
+		StatusCode: 200,
+		IsAgent:    true,
+	})
+	updated, _ := model.Update(tickMsg(time.Now()))
+	model = *mustMonitorModelFromUpdate(t, updated)
+	firstState := model.userInfoQueue.State()
+	firstSeq := firstState.Seq
+	if firstSeq == 0 {
+		t.Fatalf("expected first burst event to arm debounce sequence")
+	}
+
+	collector.RecordLocal(&monitor.RequestRecord{
+		RequestID:  "req-agent-premium-2",
+		Timestamp:  time.Now().Add(time.Second),
+		Model:      "gpt-4o",
+		StatusCode: 200,
+		IsAgent:    true,
+	})
+	updated, _ = model.Update(tickMsg(time.Now().Add(time.Second)))
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	state := model.userInfoQueue.State()
+	if state.Seq != firstSeq {
+		t.Fatalf("expected first-trigger debounce to keep seq=%d, got %d", firstSeq, state.Seq)
+	}
+	if !state.Pending || !state.Armed {
+		t.Fatalf("expected queue to remain pending/armed during burst")
+	}
+}
+
+func TestMonitorModel_DueMsgStartsUserInfoRefresh(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
+	model.state = tui.ViewStats
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	seq := model.userInfoQueue.State().Seq
+
+	updated, cmd := model.Update(userInfoRefreshDueMsg{seq: seq})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	if cmd == nil {
+		t.Fatalf("expected due message to start user info API refresh")
+	}
+	state := model.userInfoQueue.State()
+	if !state.InFlight {
+		t.Fatalf("expected queue inFlight=true after due trigger")
+	}
+	if state.Armed {
+		t.Fatalf("expected queue armed=false after consuming due trigger")
+	}
+}
+
+func TestMonitorModel_UserInfoLoadFailureClearsQueue(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
+	model.state = tui.ViewStats
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	seq := model.userInfoQueue.State().Seq
+
+	updated, _ = model.Update(userInfoRefreshDueMsg{seq: seq})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if !model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected in-flight refresh before load completion")
+	}
+
+	updated, _ = model.Update(userInfoLoadedMsg{err: errors.New("fetch failed")})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	state := model.userInfoQueue.State()
+	if state.Pending {
+		t.Fatalf("expected queue pending=false after failed refresh completion")
+	}
+	if state.Armed {
+		t.Fatalf("expected queue armed=false after failed refresh completion")
+	}
+	if state.InFlight {
+		t.Fatalf("expected queue inFlight=false after failed refresh completion")
+	}
+}
+
 func TestMonitorModel_WindowResize(t *testing.T) {
 	collector := monitor.NewCollector(100)
 	deps := MonitorDeps{Collector: collector}
