@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -527,6 +528,52 @@ func TestMonitorModel_LogsViewRenderingFitsWindowAndKeepsHeader(t *testing.T) {
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 	if len(lines) > model.height {
 		t.Fatalf("expected rendered lines <= window height (%d), got %d", model.height, len(lines))
+	}
+}
+
+func TestMonitorModel_LogsViewSmallWindowRendersAndPages(t *testing.T) {
+	collector := monitor.NewCollector(50)
+	now := time.Now()
+	for i := range 12 {
+		collector.RecordLocal(&monitor.RequestRecord{
+			Timestamp:    now.Add(-time.Duration(i) * time.Second),
+			Method:       "POST",
+			Path:         "/v1/chat/completions",
+			UpstreamPath: "/chat/completions",
+			Model:        fmt.Sprintf("model-%02d", i),
+			StatusCode:   200,
+			Duration:     50 * time.Millisecond,
+		})
+	}
+
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "127.0.0.1:4000")
+	model.state = tui.ViewLogs
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 6})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	updated, _ = model.Update(tickMsg(time.Now()))
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	before := model.View()
+	if !strings.Contains(before, "1:Stats") || !strings.Contains(before, "2:Models") || !strings.Contains(before, "3:Logs") {
+		t.Fatalf("expected all header tabs in small-window logs output")
+	}
+	if !strings.Contains(before, "model-00") {
+		t.Fatalf("expected first logs page to show newest row in small window")
+	}
+	if strings.Contains(before, "model-01") {
+		t.Fatalf("expected first small-window page to show a single row")
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	after := model.View()
+	if !strings.Contains(after, "model-01") {
+		t.Fatalf("expected pgdown to advance logs row in small window")
+	}
+	if strings.Contains(after, "model-00") {
+		t.Fatalf("expected previous logs row to page out in small window")
 	}
 }
 

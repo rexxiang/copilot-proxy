@@ -295,14 +295,7 @@ func (v *StatsView) HandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 }
 
 func (v *StatsView) VisibleLines() int {
-	if v.height <= 0 {
-		return 0
-	}
-	visible := v.height - statsReservedLines
-	if visible < 1 {
-		return 1
-	}
-	return visible
+	return ClampVisibleLines(v.height, statsReservedLines, 0)
 }
 
 func (v *StatsView) maxOffset() int {

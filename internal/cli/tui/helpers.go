@@ -109,3 +109,20 @@ func RenderProgressBar(percent float64, width int) string {
 		DimStyle.Render(strings.Repeat(progressBarEmpty, empty))
 	return bar
 }
+
+// ClampVisibleLines converts a view height and reserved layout lines into
+// a safe, scrollable row count.
+func ClampVisibleLines(height, reservedLines, fallbackWhenUnset int) int {
+	if height <= 0 {
+		if fallbackWhenUnset < 0 {
+			return 0
+		}
+		return fallbackWhenUnset
+	}
+
+	visible := height - reservedLines
+	if visible < 1 {
+		return 1
+	}
+	return visible
+}

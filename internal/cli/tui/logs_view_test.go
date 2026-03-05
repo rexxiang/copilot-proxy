@@ -586,6 +586,39 @@ func TestLogsView_PgDownPagesDown(t *testing.T) {
 	}
 }
 
+func TestLogsView_SmallHeightClampsVisibleLinesAndPaging(t *testing.T) {
+	now := time.Now()
+	records := make([]monitor.RequestRecord, 0, 5)
+	for i := range 5 {
+		records = append(records, monitor.RequestRecord{
+			Timestamp:  now.Add(-time.Duration(i) * time.Second),
+			Method:     "POST",
+			Path:       "/v1/chat/completions",
+			Model:      fmt.Sprintf("model-%02d", i),
+			StatusCode: 200,
+			Duration:   50 * time.Millisecond,
+		})
+	}
+
+	view := NewLogsView()
+	view.SetSize(120, 3)
+	view.SetState(&SharedState{
+		Snapshot: monitor.Snapshot{RecentRequests: records},
+	})
+
+	if got := view.VisibleLines(); got != 1 {
+		t.Fatalf("expected VisibleLines to clamp to 1 for tiny height, got %d", got)
+	}
+
+	handled, _ := view.HandleKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	if !handled {
+		t.Fatalf("expected PgDown key to be handled")
+	}
+	if view.offset != 1 {
+		t.Fatalf("expected offset 1 after PgDown with clamped page size, got %d", view.offset)
+	}
+}
+
 func TestLogsView_SpaceDoesNotPageDown(t *testing.T) {
 	now := time.Now()
 	records := make([]monitor.RequestRecord, 0, 20)
