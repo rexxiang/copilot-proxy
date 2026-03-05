@@ -80,7 +80,7 @@ internal/
 
 - **Auth source of truth**: `~/.config/copilot-proxy/auth.json`, with `@default` as active account.
 - **Runtime auth consistency**: account changes from TUI must update both disk and in-process auth store.
-- **Monitor views**: Stats / Activity / Models / Logs, refreshed by periodic tick.
+- **Monitor views**: Stats / Models / Logs, refreshed by periodic tick.
 - **Stats account modal** (`a`, Stats view only):
   - switch active account
   - add account via device-flow (`Add Account`)
@@ -99,7 +99,6 @@ internal/
 
 - `~/.config/copilot-proxy/auth.json`
 - `~/.config/copilot-proxy/settings.json`
-- `~/.config/copilot-proxy/metrics.json`
 - `~/.config/copilot-proxy/log/error/YYYYMMDD.md`
 - `~/.config/copilot-proxy/log/debug/YYYYMMDD.md`
 

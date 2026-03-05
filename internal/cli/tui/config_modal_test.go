@@ -20,7 +20,6 @@ func TestConfigModal_OpenUsesVisibleFieldSpecs(t *testing.T) {
 		ListenAddr:           "127.0.0.1:4000",
 		UpstreamBase:         "https://api.githubcopilot.com",
 		MessagesInitSeqAgent: false,
-		RequiredHeaders:      map[string]string{"user-agent": "copilot/0.0.400"},
 		UpstreamTimeout:      config.NewDuration(5 * time.Minute),
 		MaxRetries:           3,
 		RetryBackoff:         config.NewDuration(time.Second),
@@ -37,7 +36,7 @@ func TestConfigModal_OpenUsesVisibleFieldSpecs(t *testing.T) {
 		"max_retries",
 		"retry_backoff",
 		"messages_init_seq_agent",
-		"required_headers",
+		"reasoning_policies_ui",
 	}
 	if len(keys) != len(expected) {
 		t.Fatalf("unexpected visible key count: got %d want %d", len(keys), len(expected))
@@ -56,17 +55,32 @@ func TestConfigModal_ReadOnlyFieldCannotBeEdited(t *testing.T) {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	before := modal.FieldValue("upstream_base")
-	action := modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	if action != ModalActionNone {
-		t.Fatalf("expected no action, got %v", action)
+	if modal.CurrentFieldKey() == "upstream_base" {
+		t.Fatalf("readonly field should not receive initial focus")
 	}
-	after := modal.FieldValue("upstream_base")
-	if after != before {
-		t.Fatalf("readonly field should stay unchanged: got %q want %q", after, before)
+	for i := 0; i < 32; i++ {
+		if modal.CurrentFieldKey() == "upstream_base" {
+			t.Fatalf("readonly field should not be selectable")
+		}
+		_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyTab})
 	}
-	if modal.IsDirty() {
-		t.Fatalf("readonly edit should not mark dirty")
+	if modal.CurrentFieldKey() == "upstream_base" {
+		t.Fatalf("readonly field should not be selectable after tab cycle")
+	}
+	for i := 0; i < 32; i++ {
+		if modal.CurrentFieldKey() == "upstream_base" {
+			t.Fatalf("readonly field should not be selectable")
+		}
+		_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	for i := 0; i < 32; i++ {
+		if modal.CurrentFieldKey() == "upstream_base" {
+			t.Fatalf("readonly field should not be selectable")
+		}
+		_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if modal.CurrentFieldKey() == "upstream_base" {
+		t.Fatalf("readonly field should not be selectable after up/down cycle")
 	}
 }
 
@@ -104,8 +118,7 @@ func TestConfigModal_BuildCandidateFromEditedForm(t *testing.T) {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyDown}) // upstream_timeout
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyDown}) // max_retries
+	focusFieldByKey(t, modal, "max_retries")
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}})
 
 	candidate, err := modal.BuildCandidate(&base)
@@ -134,43 +147,178 @@ func TestConfigModal_BuildCandidatePreservesBoolField(t *testing.T) {
 	}
 }
 
-func TestConfigModal_KeyValueAddDelete(t *testing.T) {
+func TestConfigModal_ObjectArrayAddDelete(t *testing.T) {
 	modal := NewConfigModal()
 	settings := config.DefaultSettings()
 	if err := modal.Open(&settings); err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyEnd}) // jump to required_headers
-	if modal.CurrentFieldKey() != "required_headers" {
-		t.Fatalf("expected required_headers focused, got %q", modal.CurrentFieldKey())
+	focusFieldByKey(t, modal, "reasoning_policies_ui")
+	if modal.CurrentFieldKey() != "reasoning_policies_ui" {
+		t.Fatalf("expected reasoning_policies_ui focused, got %q", modal.CurrentFieldKey())
 	}
 
-	if modal.KeyValueRowCount("required_headers") != 1 {
-		t.Fatalf("expected one default kv row for empty map")
+	if got := len(modal.form.ObjectArrayValues["reasoning_policies_ui"]); got != 1 {
+		t.Fatalf("expected one default array row, got %d", got)
 	}
 
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlN})
-	if modal.KeyValueRowCount("required_headers") != 2 {
-		t.Fatalf("expected two kv rows after ctrl+n")
+	if got := len(modal.form.ObjectArrayValues["reasoning_policies_ui"]); got != 2 {
+		t.Fatalf("expected two rows after ctrl+n, got %d", got)
 	}
 
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlD})
-	if modal.KeyValueRowCount("required_headers") != 1 {
-		t.Fatalf("expected one kv row after ctrl+d")
+	if got := len(modal.form.ObjectArrayValues["reasoning_policies_ui"]); got != 1 {
+		t.Fatalf("expected one row after ctrl+d, got %d", got)
 	}
 }
 
-func TestConfigModal_OpenEmptyMapAddsDefaultRow(t *testing.T) {
+func TestConfigModal_ArrayAlwaysKeepsTrailingBlankOnOpen(t *testing.T) {
+	modal := NewConfigModal()
+	settings := config.DefaultSettings()
+	settings.ReasoningPolicies = []config.ReasoningPolicy{
+		{Model: "gpt-5-mini", Target: "responses", Effort: "high"},
+	}
+	if err := modal.Open(&settings); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	rows := modal.form.ObjectArrayValues["reasoning_policies_ui"]
+	if len(rows) != 2 {
+		t.Fatalf("expected one data row plus one trailing blank row, got %d", len(rows))
+	}
+	if !isArrayRowEmpty(rows[len(rows)-1]) {
+		t.Fatalf("expected last row to be blank, got %#v", rows[len(rows)-1])
+	}
+}
+
+func TestConfigModal_ArrayTypingLastBlankAutoAppendsBlank(t *testing.T) {
 	modal := NewConfigModal()
 	settings := config.DefaultSettings()
 	if err := modal.Open(&settings); err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyEnd})
-	if got := modal.KeyValueRowCount("required_headers"); got != 1 {
-		t.Fatalf("expected one default row for empty map, got %d", got)
+	focusFieldByKey(t, modal, "reasoning_policies_ui")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("gpt-5-mini")})
+
+	rows := modal.form.ObjectArrayValues["reasoning_policies_ui"]
+	if len(rows) != 2 {
+		t.Fatalf("expected appended trailing blank row after editing, got %d", len(rows))
+	}
+	if !isArrayRowEmpty(rows[len(rows)-1]) {
+		t.Fatalf("expected last row to be blank, got %#v", rows[len(rows)-1])
+	}
+}
+
+func TestConfigModal_ArrayDeleteLastRowStillKeepsBlank(t *testing.T) {
+	modal := NewConfigModal()
+	settings := config.DefaultSettings()
+	if err := modal.Open(&settings); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "reasoning_policies_ui")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("gpt-5-mini")})
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyDown}) // move to trailing blank row
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlD})
+
+	rows := modal.form.ObjectArrayValues["reasoning_policies_ui"]
+	if len(rows) != 2 {
+		t.Fatalf("expected data row plus trailing blank row after deleting last row, got %d", len(rows))
+	}
+	if !isArrayRowEmpty(rows[len(rows)-1]) {
+		t.Fatalf("expected last row to be blank, got %#v", rows[len(rows)-1])
+	}
+}
+
+func TestConfigModal_ArrayDeleteOnlyRowRecreatesBlank(t *testing.T) {
+	modal := NewConfigModal()
+	settings := config.DefaultSettings()
+	if err := modal.Open(&settings); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "reasoning_policies_ui")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlD})
+
+	rows := modal.form.ObjectArrayValues["reasoning_policies_ui"]
+	if len(rows) != 1 {
+		t.Fatalf("expected one trailing blank row after deleting only row, got %d", len(rows))
+	}
+	if !isArrayRowEmpty(rows[0]) {
+		t.Fatalf("expected remaining row to be blank, got %#v", rows[0])
+	}
+}
+
+func TestConfigModal_ArrayUpDownMovesRowCursor(t *testing.T) {
+	modal := NewConfigModal()
+	settings := config.DefaultSettings()
+	if err := modal.Open(&settings); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "reasoning_policies_ui")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("gpt-5-mini")})
+
+	cursor := modal.arrayCursors["reasoning_policies_ui"]
+	if cursor.row != 0 {
+		t.Fatalf("expected initial row cursor 0, got %d", cursor.row)
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyDown})
+	cursor = modal.arrayCursors["reasoning_policies_ui"]
+	if cursor.row != 1 {
+		t.Fatalf("expected row cursor to move down to 1, got %d", cursor.row)
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	cursor = modal.arrayCursors["reasoning_policies_ui"]
+	if cursor.row != 0 {
+		t.Fatalf("expected row cursor to move up to 0, got %d", cursor.row)
+	}
+}
+
+func TestConfigModal_ArrayVerticalBoundaryMovesFieldFocus(t *testing.T) {
+	modal := NewConfigModal()
+	settings := config.DefaultSettings()
+	if err := modal.Open(&settings); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "reasoning_policies_ui")
+	if modal.CurrentFieldKey() != "reasoning_policies_ui" {
+		t.Fatalf("expected reasoning_policies_ui focused, got %q", modal.CurrentFieldKey())
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if modal.CurrentFieldKey() != "messages_init_seq_agent" {
+		t.Fatalf("expected focus to move to previous field, got %q", modal.CurrentFieldKey())
+	}
+
+	focusFieldByKey(t, modal, "reasoning_policies_ui")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if modal.CurrentFieldKey() == "reasoning_policies_ui" {
+		t.Fatalf("expected focus to leave array field at bottom boundary")
+	}
+	if modal.CurrentFieldKey() == "upstream_base" {
+		t.Fatalf("expected readonly field to be skipped on boundary navigation")
+	}
+}
+
+func TestConfigModal_CtrlSSaves(t *testing.T) {
+	modal := NewConfigModal()
+	settings := config.DefaultSettings()
+	if err := modal.Open(&settings); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	if action := modal.HandleKey(tea.KeyMsg{Type: tea.KeyEnter}); action != ModalActionNone {
+		t.Fatalf("enter should not save anymore, got %v", action)
+	}
+	if action := modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlS}); action != ModalActionSave {
+		t.Fatalf("ctrl+s should save, got %v", action)
 	}
 }
 
@@ -181,30 +329,11 @@ func TestConfigModal_ViewShowsCursorForEditableField(t *testing.T) {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyDown}) // upstream_timeout
+	focusFieldByKey(t, modal, "upstream_timeout")
 
 	view := stripANSI(modal.View())
 	if !strings.Contains(view, "Timeout") || !strings.Contains(view, "[5m0s") {
 		t.Fatalf("expected timeout input box in view, got:\n%s", view)
-	}
-}
-
-func TestConfigModal_ViewRendersKeyValueAsTwoInputs(t *testing.T) {
-	modal := NewConfigModal()
-	settings := config.DefaultSettings()
-	if err := modal.Open(&settings); err != nil {
-		t.Fatalf("Open error: %v", err)
-	}
-
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyEnd})   // required_headers
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlN}) // add row
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x-test")})
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlRight})
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
-
-	view := stripANSI(modal.View())
-	if !strings.Contains(view, "[x-test] : [1") {
-		t.Fatalf("expected key/value dual input row, got:\n%s", view)
 	}
 }
 
@@ -215,7 +344,7 @@ func TestConfigModal_RealCursorMovementOnScalarInput(t *testing.T) {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyDown}) // upstream_timeout
+	focusFieldByKey(t, modal, "upstream_timeout")
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyLeft})
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 
@@ -224,59 +353,83 @@ func TestConfigModal_RealCursorMovementOnScalarInput(t *testing.T) {
 	}
 }
 
-func TestConfigModal_RealCursorMovementOnKeyValueInput(t *testing.T) {
+func TestConfigModal_BuildCandidateFromReasoningPolicyArray(t *testing.T) {
 	modal := NewConfigModal()
-	settings := config.DefaultSettings()
-	if err := modal.Open(&settings); err != nil {
+	base := config.DefaultSettings()
+	if err := modal.Open(&base); err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyEnd})   // required_headers
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlN}) // add row
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ab")})
+	focusFieldByKey(t, modal, "reasoning_policies_ui")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("gpt-5-mini")})
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlRight})
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("12")})
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyLeft})
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("responses")})
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlRight})
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("high")})
 
-	base := config.DefaultSettings()
 	candidate, err := modal.BuildCandidate(&base)
 	if err != nil {
 		t.Fatalf("BuildCandidate error: %v", err)
 	}
-	if got := candidate.RequiredHeaders["ab"]; got != "1x2" {
-		t.Fatalf("expected cursor-aware value edit, got %q", got)
+	if len(candidate.ReasoningPolicies) != 1 {
+		t.Fatalf("expected one reasoning policy, got %#v", candidate.ReasoningPolicies)
+	}
+	if candidate.ReasoningPolicies[0].Model != "gpt-5-mini" {
+		t.Fatalf("unexpected model: %#v", candidate.ReasoningPolicies[0])
+	}
+	if candidate.ReasoningPolicies[0].Target != "responses" || candidate.ReasoningPolicies[0].Effort != "high" {
+		t.Fatalf("unexpected policy values: %#v", candidate.ReasoningPolicies[0])
 	}
 }
 
-func TestConfigModal_BuildCandidateDropsBlankKeyOrValueRows(t *testing.T) {
+func TestConfigModal_InputWidthIsAdaptiveNotFixed(t *testing.T) {
+	short := newModalTextInput("a", "")
+	long := newModalTextInput(strings.Repeat("x", 256), "")
+	if short.Width >= long.Width {
+		t.Fatalf("expected long input to have wider box: short=%d long=%d", short.Width, long.Width)
+	}
+	if long.Width != adaptiveInputWidthMax {
+		t.Fatalf("expected long width capped at %d, got %d", adaptiveInputWidthMax, long.Width)
+	}
+
 	modal := NewConfigModal()
 	settings := config.DefaultSettings()
 	if err := modal.Open(&settings); err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
-
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyEnd}) // required_headers default row
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x-keep")})
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlRight})
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
-
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlN}) // second row
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x-drop")})
-
-	base := config.DefaultSettings()
-	candidate, err := modal.BuildCandidate(&base)
-	if err != nil {
-		t.Fatalf("BuildCandidate error: %v", err)
+	focusFieldByKey(t, modal, "upstream_timeout")
+	before := modal.scalarInputs["upstream_timeout"].Width
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("x", 32))})
+	after := modal.scalarInputs["upstream_timeout"].Width
+	if after <= before {
+		t.Fatalf("expected width to expand after typing: before=%d after=%d", before, after)
 	}
-	if got := candidate.RequiredHeaders["x-keep"]; got != "1" {
-		t.Fatalf("expected x-keep=1, got %q", got)
+}
+
+func focusFieldByKey(t *testing.T, modal *ConfigModal, key string) {
+	t.Helper()
+	if modal == nil {
+		t.Fatalf("modal is nil")
 	}
-	if _, ok := candidate.RequiredHeaders["x-drop"]; ok {
-		t.Fatalf("expected x-drop row to be removed when value is empty")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyHome})
+	for i := 0; i < 128; i++ {
+		if modal.CurrentFieldKey() == key {
+			return
+		}
+		_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyTab})
 	}
+	t.Fatalf("failed to focus field %q, current=%q", key, modal.CurrentFieldKey())
 }
 
 func stripANSI(input string) string {
 	return ansiCodePattern.ReplaceAllString(input, "")
+}
+
+func isArrayRowEmpty(row map[string]string) bool {
+	for _, value := range row {
+		if strings.TrimSpace(value) != "" {
+			return false
+		}
+	}
+	return true
 }

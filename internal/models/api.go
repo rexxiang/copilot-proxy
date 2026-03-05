@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/reasoning"
 
 	"github.com/google/uuid"
 )
@@ -75,8 +76,11 @@ type modelData struct {
 		Multiplier float64 `json:"multiplier"`
 	} `json:"billing"`
 	Capabilities struct {
-		Family string `json:"family"`
-		Type   string `json:"type"`
+		Family   string `json:"family"`
+		Type     string `json:"type"`
+		Supports struct {
+			ReasoningEffort []string `json:"reasoning_effort"`
+		} `json:"supports"`
 		Limits struct {
 			MaxContextWindowTokens int `json:"max_context_window_tokens"`
 			MaxPromptTokens        int `json:"max_prompt_tokens"`
@@ -181,17 +185,18 @@ func parseResponse(resp *http.Response) ([]ModelInfo, error) {
 		}
 
 		items = append(items, ModelInfo{
-			ID:              m.ID,
-			Name:            m.Name,
-			Vendor:          m.Vendor,
-			Endpoints:       endpoints,
-			IsPremium:       m.Billing.IsPremium,
-			Multiplier:      m.Billing.Multiplier,
-			Preview:         m.Preview,
-			Family:          m.Capabilities.Family,
-			ContextWindow:   m.Capabilities.Limits.MaxContextWindowTokens,
-			MaxPromptTokens: m.Capabilities.Limits.MaxPromptTokens,
-			MaxOutputTokens: m.Capabilities.Limits.MaxOutputTokens,
+			ID:                       m.ID,
+			Name:                     m.Name,
+			Vendor:                   m.Vendor,
+			Endpoints:                endpoints,
+			SupportedReasoningEffort: reasoning.NormalizeSupportedEfforts(m.Capabilities.Supports.ReasoningEffort),
+			IsPremium:                m.Billing.IsPremium,
+			Multiplier:               m.Billing.Multiplier,
+			Preview:                  m.Preview,
+			Family:                   m.Capabilities.Family,
+			ContextWindow:            m.Capabilities.Limits.MaxContextWindowTokens,
+			MaxPromptTokens:          m.Capabilities.Limits.MaxPromptTokens,
+			MaxOutputTokens:          m.Capabilities.Limits.MaxOutputTokens,
 		})
 	}
 

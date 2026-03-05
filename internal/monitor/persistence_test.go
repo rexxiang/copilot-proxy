@@ -3,6 +3,7 @@ package monitor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -36,7 +37,18 @@ func TestPersistentCollector_SaveLoad(t *testing.T) {
 		t.Fatal("metrics file was not created")
 	}
 
-	// Load into new collector - only activity data is restored
+	contents, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read persisted file: %v", err)
+	}
+	if !strings.Contains(string(contents), `"saved_at"`) {
+		t.Fatalf("expected persisted file to include saved_at")
+	}
+	if strings.Contains(string(contents), `"activity_hour"`) || strings.Contains(string(contents), `"activity_day"`) {
+		t.Fatalf("expected persisted file to omit legacy activity keys")
+	}
+
+	// Load into new collector - stats data remains session-only
 	pc2 := NewPersistentCollector(100, filePath)
 	snap := pc2.Snapshot()
 
@@ -46,15 +58,6 @@ func TestPersistentCollector_SaveLoad(t *testing.T) {
 	}
 	if len(snap.ByModel) != 0 {
 		t.Errorf("expected 0 models after load (not persisted), got %d", len(snap.ByModel))
-	}
-
-	// Activity data IS persisted
-	// The 2 records should have created entries in activity_hour and activity_day
-	if len(snap.ActivityHour) == 0 {
-		t.Error("expected activity_hour data to be persisted")
-	}
-	if len(snap.ActivityDay) == 0 {
-		t.Error("expected activity_day data to be persisted")
 	}
 }
 
@@ -145,28 +148,35 @@ func TestPersistentCollector_RecordRequest(t *testing.T) {
 	}
 }
 
-func TestPersistentCollector_SaveLoadPersistsAgentActivity(t *testing.T) {
+func TestPersistentCollector_LoadIgnoresLegacyActivityData(t *testing.T) {
 	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "agent_metrics.json")
+	filePath := filepath.Join(tmpDir, "legacy_metrics.json")
+
+	legacy := `{
+  "activity_hour": {"2026-03-05 09": 12},
+  "activity_day": {"2026-03-05": 34},
+  "saved_at": "2026-03-05T09:00:00Z"
+}`
+	if err := os.WriteFile(filePath, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy metrics: %v", err)
+	}
 
 	pc := NewPersistentCollector(100, filePath)
-	pc.RecordLocal(&RequestRecord{
-		Timestamp:  time.Now(),
-		Model:      "gpt-4.1",
-		StatusCode: 200,
-		IsAgent:    true,
-	})
+	snap := pc.Snapshot()
+	if snap.TotalRequests != 0 || len(snap.ByModel) != 0 || len(snap.RecentRequests) != 0 {
+		t.Fatalf("expected clean session state after loading legacy metrics file")
+	}
+
+	pc.RecordLocal(&RequestRecord{Timestamp: time.Now(), Model: "gpt-4.1", StatusCode: 200})
 	if err := pc.Save(); err != nil {
-		t.Fatalf("Save failed: %v", err)
+		t.Fatalf("save updated metrics: %v", err)
 	}
 
-	pc2 := NewPersistentCollector(100, filePath)
-	snap := pc2.Snapshot()
-
-	if len(snap.ActivityHour) == 0 {
-		t.Fatal("expected agent activity_hour data to be persisted")
+	contents, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read updated metrics file: %v", err)
 	}
-	if len(snap.ActivityDay) == 0 {
-		t.Fatal("expected agent activity_day data to be persisted")
+	if strings.Contains(string(contents), `"activity_hour"`) || strings.Contains(string(contents), `"activity_day"`) {
+		t.Fatalf("expected updated metrics file to drop legacy activity keys")
 	}
 }

@@ -82,9 +82,17 @@ When enabled, `/v1/messages` requests where all message roles are `user` and mes
 
 ```json
 {
-  "messages_init_seq_agent": false
+  "messages_init_seq_agent": false,
+  "reasoning_policies": {
+    "gpt-5-mini@responses": "low",
+    "grok-code-fast-1@chat": "none"
+  }
 }
 ```
+
+`reasoning_policies` values must be `none|low|medium|high`.  
+For `/v1/messages` requests, reasoning effort is only sent upstream when the selected model reports supported levels via `/models` capability metadata.
+Map-style settings (for example `required_headers` and `reasoning_policies`) are storage fields; TUI edits should be done through dedicated array-object shadow fields.
 
 ## Account Management
 

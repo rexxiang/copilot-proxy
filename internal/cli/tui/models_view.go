@@ -195,8 +195,5 @@ func (v *ModelsView) HandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 }
 
 func (v *ModelsView) VisibleLines() int {
-	if v.height <= 0 {
-		return 0
-	}
-	return v.height - modelsDefaultVisibleOffset
+	return ClampVisibleLines(v.height, modelsDefaultVisibleOffset, 0)
 }

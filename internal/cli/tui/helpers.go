@@ -12,9 +12,6 @@ const (
 	endpointAbbrevMax   = 10
 	tokensPerMillion    = 1_000_000
 	tokensPerThousand   = 1_000
-	heatLowThreshold    = 10
-	heatMedThreshold    = 25
-	heatHighThreshold   = 50
 	progressBarFilled   = "■"
 	progressBarEmpty    = "□"
 )
@@ -113,21 +110,19 @@ func RenderProgressBar(percent float64, width int) string {
 	return bar
 }
 
-//goland:noinspection GoUnusedParameter
-func HeatmapCell(count, maxCount int) string {
-	// Use ■ character with background color to show activity level
-	cell := "■"
-	if count == 0 {
-		return HeatNone.Render(cell) + " "
+// ClampVisibleLines converts a view height and reserved layout lines into
+// a safe, scrollable row count.
+func ClampVisibleLines(height, reservedLines, fallbackWhenUnset int) int {
+	if height <= 0 {
+		if fallbackWhenUnset < 0 {
+			return 0
+		}
+		return fallbackWhenUnset
 	}
-	if count <= heatLowThreshold {
-		return HeatLow.Render(cell) + " "
+
+	visible := height - reservedLines
+	if visible < 1 {
+		return 1
 	}
-	if count <= heatMedThreshold {
-		return HeatMed.Render(cell) + " "
-	}
-	if count <= heatHighThreshold {
-		return HeatHigh.Render(cell) + " "
-	}
-	return HeatMax.Render(cell) + " "
+	return visible
 }

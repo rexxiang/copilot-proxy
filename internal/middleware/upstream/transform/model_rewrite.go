@@ -31,6 +31,7 @@ func RewriteModel(req *http.Request, rc *middleware.RequestContext, catalog mode
 		if rc != nil {
 			rc.Info.MappedModel = ""
 			rc.Info.SelectedModelEndpoints = nil
+			rc.Info.SupportedReasoningEffort = nil
 		}
 		restoreModelRewriteBody(req, bodyBytes)
 		return
@@ -41,11 +42,13 @@ func RewriteModel(req *http.Request, rc *middleware.RequestContext, catalog mode
 	}
 	selected, changed := "", false
 	selectedEndpoints := []string(nil)
+	supportedReasoningEffort := []string(nil)
 	if catalog != nil && selector != nil {
 		if selectedModel, mapped, found := selector.SelectModelInfo(catalog.GetModels(), info.Model); found {
 			selected = selectedModel.ID
 			changed = mapped
 			selectedEndpoints = cloneStringSlice(selectedModel.Endpoints)
+			supportedReasoningEffort = cloneStringSlice(selectedModel.SupportedReasoningEffort)
 		}
 	}
 	if selected != "" {
@@ -54,9 +57,11 @@ func RewriteModel(req *http.Request, rc *middleware.RequestContext, catalog mode
 		info.MappedModel = info.Model
 	}
 	info.SelectedModelEndpoints = selectedEndpoints
+	info.SupportedReasoningEffort = supportedReasoningEffort
 	if rc != nil {
 		rc.Info.MappedModel = info.MappedModel
 		rc.Info.SelectedModelEndpoints = cloneStringSlice(info.SelectedModelEndpoints)
+		rc.Info.SupportedReasoningEffort = cloneStringSlice(info.SupportedReasoningEffort)
 	}
 	if changed {
 		mapped := selected

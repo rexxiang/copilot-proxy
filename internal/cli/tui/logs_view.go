@@ -472,9 +472,6 @@ func (v *LogsView) clearLogsStatus() {
 }
 
 func (v *LogsView) VisibleLines() int {
-	if v.height <= 0 {
-		return logsDefaultVisible
-	}
-	// Account for header, table header, separator, footer, debug status
-	return v.height - logsFooterOffset
+	// Account for header, table header, separator, footer, debug status.
+	return ClampVisibleLines(v.height, logsFooterOffset, logsDefaultVisible)
 }

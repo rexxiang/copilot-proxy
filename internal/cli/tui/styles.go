@@ -44,10 +44,4 @@ var (
 
 	PremiumStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("214"))
-
-	HeatLow  = lipgloss.NewStyle().Foreground(lipgloss.Color("22"))
-	HeatMed  = lipgloss.NewStyle().Foreground(lipgloss.Color("28"))
-	HeatHigh = lipgloss.NewStyle().Foreground(lipgloss.Color("34"))
-	HeatMax  = lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
-	HeatNone = lipgloss.NewStyle().Foreground(lipgloss.Color("236"))
 )

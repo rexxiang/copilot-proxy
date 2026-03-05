@@ -72,6 +72,47 @@ func TestMessagesToResponsesRequestMaxOutputTokensThreshold(t *testing.T) {
 	}
 }
 
+func TestMessagesToResponsesRequestWithOptionsUsesPolicyEffort(t *testing.T) {
+	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	converted, ok := MessagesToResponsesRequestWithOptions([]byte(reqBody), MessagesReasoningOptions{
+		PolicyEffort:             "medium",
+		SupportedReasoningEffort: []string{"low", "medium", "high"},
+	})
+	if !ok {
+		t.Fatalf("MessagesToResponsesRequestWithOptions failed")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(converted, &parsed); err != nil {
+		t.Fatalf("unmarshal converted: %v", err)
+	}
+	reasoning, ok := parsed["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected reasoning object, got %T", parsed["reasoning"])
+	}
+	if reasoning["effort"] != "medium" {
+		t.Fatalf("expected policy effort medium, got %v", reasoning["effort"])
+	}
+}
+
+func TestMessagesToResponsesRequestWithOptionsSkipsWhenUnsupported(t *testing.T) {
+	reqBody := `{"model":"gpt-4o","output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`
+	converted, ok := MessagesToResponsesRequestWithOptions([]byte(reqBody), MessagesReasoningOptions{
+		SupportedReasoningEffort: nil,
+	})
+	if !ok {
+		t.Fatalf("MessagesToResponsesRequestWithOptions failed")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(converted, &parsed); err != nil {
+		t.Fatalf("unmarshal converted: %v", err)
+	}
+	if _, exists := parsed["reasoning"]; exists {
+		t.Fatalf("expected reasoning omitted when model has no supported effort, got %v", parsed["reasoning"])
+	}
+}
+
 func TestResponsesToMessagesResponsePreservesReasoningAsThinkingBlock(t *testing.T) {
 	respBody := `{"id":"resp_1","model":"gpt-4o","output":[` +
 		`{"type":"reasoning","summary":[{"type":"summary_text","text":"first reason"},{"type":"summary_text","text":"second reason"}]},` +

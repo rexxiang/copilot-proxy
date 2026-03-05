@@ -51,8 +51,9 @@ func (v *StatsView) View() string {
 
 	entries := v.sortedModelEntries()
 	premiumByModel := v.premiumByModel()
+	modelDurationSums := v.modelDurationSums()
 	start, end, visible := v.visibleWindow(len(entries))
-	v.renderModelRows(&sb, entries, premiumByModel, start, end)
+	v.renderModelRows(&sb, entries, premiumByModel, modelDurationSums, start, end)
 	v.renderRowsFooter(&sb, len(entries), start, end, visible)
 
 	v.renderSummary(&sb)
@@ -135,6 +136,22 @@ func (v *StatsView) premiumByModel() map[string]bool {
 	return premium
 }
 
+func (v *StatsView) modelDurationSums() map[string]time.Duration {
+	sums := make(map[string]time.Duration)
+	if v == nil || v.state == nil {
+		return sums
+	}
+
+	for i := range v.state.Snapshot.RecentRequests {
+		record := v.state.Snapshot.RecentRequests[i]
+		if record.Model == "" || record.StatusCode <= 0 {
+			continue
+		}
+		sums[record.Model] += record.Duration
+	}
+	return sums
+}
+
 func (v *StatsView) visibleWindow(totalRows int) (start, end, visible int) {
 	visible = v.VisibleLines()
 	if visible < 1 {
@@ -160,6 +177,7 @@ func (v *StatsView) renderModelRows(
 	sb *strings.Builder,
 	entries []statsModelEntry,
 	premiumByModel map[string]bool,
+	modelDurationSums map[string]time.Duration,
 	start, end int,
 ) {
 	if sb == nil {
@@ -172,10 +190,11 @@ func (v *StatsView) renderModelRows(
 		userErrors := entry.stats.Errors
 		agentErrors := entry.stats.AgentErrors
 		allErrors := userErrors + agentErrors
+		totalRequests := userRequests + agentRequests
 
 		avgTime := time.Duration(0)
-		if userRequests > 0 {
-			avgTime = entry.stats.TotalTime / time.Duration(userRequests)
+		if totalRequests > 0 {
+			avgTime = modelDurationSums[entry.name] / time.Duration(totalRequests)
 		}
 
 		reqText := fmt.Sprintf("%d/%d", userRequests, agentRequests)
@@ -295,14 +314,7 @@ func (v *StatsView) HandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 }
 
 func (v *StatsView) VisibleLines() int {
-	if v.height <= 0 {
-		return 0
-	}
-	visible := v.height - statsReservedLines
-	if visible < 1 {
-		return 1
-	}
-	return visible
+	return ClampVisibleLines(v.height, statsReservedLines, 0)
 }
 
 func (v *StatsView) maxOffset() int {

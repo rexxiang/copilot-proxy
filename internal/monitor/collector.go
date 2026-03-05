@@ -12,7 +12,7 @@ type Collector interface {
 	Reset()
 }
 
-// StatsResetter can clear aggregate counters while retaining request history and activity buckets.
+// StatsResetter can clear aggregate counters while retaining request history.
 type StatsResetter interface {
 	ResetStats()
 }
@@ -43,10 +43,6 @@ type ThreadSafeCollector struct {
 	total            int64
 	debugEnabled     bool
 	maxDebugBodySize int
-	// Persistent activity counters (not recalculated from records)
-	activityMinute map[time.Time]int
-	activityHour   map[time.Time]int
-	activityDay    map[time.Time]int
 	// Active requests tracking (StatusCode == 0)
 	activeRequests map[string]*RequestRecord // key: requestID
 }
@@ -59,9 +55,6 @@ func NewCollector(maxHistory int) *ThreadSafeCollector {
 		byModel:          make(map[string]*ModelStats),
 		byStatus:         make(map[int]int64),
 		maxDebugBodySize: DefaultMaxDebugBodySize,
-		activityMinute:   make(map[time.Time]int),
-		activityHour:     make(map[time.Time]int),
-		activityDay:      make(map[time.Time]int),
 		activeRequests:   make(map[string]*RequestRecord),
 	}
 }
@@ -163,20 +156,6 @@ func (c *ThreadSafeCollector) Snapshot() Snapshot {
 	recentRequests := make([]RequestRecord, len(c.records))
 	copy(recentRequests, c.records)
 
-	// Copy persistent activity maps
-	activityMinute := make(map[time.Time]int, len(c.activityMinute))
-	for k, v := range c.activityMinute {
-		activityMinute[k] = v
-	}
-	activityHour := make(map[time.Time]int, len(c.activityHour))
-	for k, v := range c.activityHour {
-		activityHour[k] = v
-	}
-	activityDay := make(map[time.Time]int, len(c.activityDay))
-	for k, v := range c.activityDay {
-		activityDay[k] = v
-	}
-
 	// Copy active requests
 	activeRequests := make([]RequestRecord, 0, len(c.activeRequests))
 	for _, record := range c.activeRequests {
@@ -189,9 +168,6 @@ func (c *ThreadSafeCollector) Snapshot() Snapshot {
 		ByStatus:       byStatus,
 		RecentRequests: recentRequests,
 		ActiveRequests: activeRequests,
-		ActivityMinute: activityMinute,
-		ActivityHour:   activityHour,
-		ActivityDay:    activityDay,
 	}
 }
 
@@ -203,14 +179,11 @@ func (c *ThreadSafeCollector) Reset() {
 	c.records = make([]RequestRecord, 0, c.maxLen)
 	c.byModel = make(map[string]*ModelStats)
 	c.byStatus = make(map[int]int64)
-	c.activityMinute = make(map[time.Time]int)
-	c.activityHour = make(map[time.Time]int)
-	c.activityDay = make(map[time.Time]int)
 	c.activeRequests = make(map[string]*RequestRecord)
 	c.total = 0
 }
 
-// ResetStats clears aggregate counters while keeping recent request logs and activity history.
+// ResetStats clears aggregate counters while keeping recent request logs.
 func (c *ThreadSafeCollector) ResetStats() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -314,16 +287,6 @@ func (c *ThreadSafeCollector) recordInternal(r *RequestRecord) {
 				stats.Errors++
 			}
 		}
-	}
-
-	// Activity counters track successful model requests from both user and agent.
-	if r.Model != "" && r.StatusCode > 0 && r.StatusCode < statusErrorMin {
-		minuteKey := r.Timestamp.Truncate(time.Minute)
-		hourKey := r.Timestamp.Truncate(time.Hour)
-		dayKey := time.Date(r.Timestamp.Year(), r.Timestamp.Month(), r.Timestamp.Day(), 0, 0, 0, 0, r.Timestamp.Location())
-		c.activityMinute[minuteKey]++
-		c.activityHour[hourKey]++
-		c.activityDay[dayKey]++
 	}
 
 	// Add to recent records (ring buffer behavior)

@@ -11,6 +11,7 @@ import (
 	"copilot-proxy/internal/auth"
 	"copilot-proxy/internal/cli/tui"
 	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/debounce"
 	"copilot-proxy/internal/models"
 	"copilot-proxy/internal/monitor"
 
@@ -46,10 +47,7 @@ type monitorKeyMap struct {
 	right     key.Binding
 	stats     key.Binding
 	models    key.Binding
-	activity  key.Binding
 	logs      key.Binding
-	prevMode  key.Binding
-	nextMode  key.Binding
 	refresh   key.Binding
 	up        key.Binding
 	down      key.Binding
@@ -70,11 +68,8 @@ func newMonitorKeyMap() monitorKeyMap {
 		left:      key.NewBinding(key.WithKeys("left"), key.WithHelp("←", "prev")),
 		right:     key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "next")),
 		stats:     key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "stats")),
-		models:    key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "models")),
-		activity:  key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "activity")),
-		logs:      key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "logs")),
-		prevMode:  key.NewBinding(key.WithKeys(",", "，", "<", "《"), key.WithHelp(",/<", "prev mode")),
-		nextMode:  key.NewBinding(key.WithKeys(".", "。", ">", "》"), key.WithHelp("./>", "next mode")),
+		models:    key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "models")),
+		logs:      key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "logs")),
 		refresh:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑", "up")),
 		down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓", "down")),
@@ -95,7 +90,7 @@ func (k *monitorKeyMap) ShortHelp() []key.Binding {
 
 func (k *monitorKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.left, k.right, k.stats, k.models, k.activity, k.logs},
+		{k.left, k.right, k.stats, k.models, k.logs},
 		{k.refresh, k.accounts, k.settings, k.quit},
 	}
 }
@@ -137,34 +132,36 @@ type settingsAppliedMsg struct {
 
 // MonitorModel is the main bubbletea model for the monitor TUI.
 type MonitorModel struct {
-	state           tui.ViewState
-	collector       monitor.Collector
-	debugLogger     *monitor.DebugLogger
-	models          []monitor.ModelInfo
-	userInfo        *monitor.UserInfo
-	snapshot        monitor.Snapshot
-	width           int
-	height          int
-	help            help.Model
-	keys            monitorKeyMap
-	serverAddr      string
-	quitting        bool
-	loading         bool
-	lastRefresh     time.Time
-	authConfig      *config.AuthConfig
-	httpClient      *http.Client
-	proxyInvoker    models.RequestDoer
-	loadSettings    func() (config.Settings, error)
-	applySettings   func(config.Settings) (config.Settings, error)
-	currentSettings config.Settings
-	statusMsg       string
-	statusView      tui.ViewState // Which view the status message belongs to
-	loadedUserInfo  bool
-	loadedModels    bool
+	state                        tui.ViewState
+	collector                    monitor.Collector
+	debugLogger                  *monitor.DebugLogger
+	models                       []monitor.ModelInfo
+	userInfo                     *monitor.UserInfo
+	snapshot                     monitor.Snapshot
+	width                        int
+	height                       int
+	help                         help.Model
+	keys                         monitorKeyMap
+	serverAddr                   string
+	quitting                     bool
+	loading                      bool
+	lastRefresh                  time.Time
+	authConfig                   *config.AuthConfig
+	httpClient                   *http.Client
+	proxyInvoker                 models.RequestDoer
+	loadSettings                 func() (config.Settings, error)
+	applySettings                func(config.Settings) (config.Settings, error)
+	currentSettings              config.Settings
+	statusMsg                    string
+	statusView                   tui.ViewState // Which view the status message belongs to
+	loadedUserInfo               bool
+	loadedModels                 bool
+	userInfoQueue                debounce.Debouncer
+	premiumDetector              agentPremiumRefreshDetector
+	userInfoRefreshAfterInFlight bool
 
 	// View components
 	statsView       *tui.StatsView
-	activityView    *tui.ActivityView
 	modelsView      *tui.ModelsView
 	logsView        *tui.LogsView
 	configModal     *tui.ConfigModal
@@ -223,10 +220,11 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 		currentSettings: config.DefaultSettings(),
 		statusView:      tui.ViewStats,
 		sharedState:     sharedState,
+		userInfoQueue:   debounce.New(userInfoRefreshDebounceDelay, debounce.ModeLeading),
+		premiumDetector: newAgentPremiumRefreshDetector(),
 
 		// Initialize view components
 		statsView:    tui.NewStatsView(),
-		activityView: tui.NewActivityView(),
 		modelsView:   tui.NewModelsView(),
 		logsView:     tui.NewLogsView(),
 		configModal:  tui.NewConfigModal(),
@@ -239,7 +237,6 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 
 	// Set up view components
 	model.statsView.SetState(sharedState)
-	model.activityView.SetState(sharedState)
 	model.modelsView.SetState(sharedState)
 	model.logsView.SetState(sharedState)
 
@@ -251,9 +248,9 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 
 // Init initializes the model.
 func (m *MonitorModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{
-		tickCmd(),
-		m.loadUserInfoCmd(),
+	cmds := []tea.Cmd{tickCmd()}
+	if cmd := m.enqueueUserInfoRefresh(userInfoRefreshSourceStartup); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 
 	// Only load models if global cache is empty
@@ -347,7 +344,9 @@ func (m *MonitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case modelsLoadedMsg:
 		m.handleModelsLoaded(msg)
 	case userInfoLoadedMsg:
-		m.handleUserInfoLoaded(msg)
+		return m.handleUserInfoLoaded(msg)
+	case userInfoRefreshDueMsg:
+		return m.handleUserInfoRefreshDue(msg)
 	case accountDeviceCodeMsg:
 		return m.handleAccountDeviceCode(msg)
 	case accountTokenMsg:
@@ -380,9 +379,53 @@ func newMonitorHTTPClient() *http.Client {
 }
 
 func (m *MonitorModel) beginUserInfoRefresh() tea.Cmd {
+	return m.startUserInfoRefreshIfNeeded()
+}
+
+func (m *MonitorModel) beginUserInfoRefreshDeferred() tea.Cmd {
+	if m.userInfoQueue.State().InFlight {
+		m.userInfoRefreshAfterInFlight = true
+		return nil
+	}
+	return m.startUserInfoRefreshIfNeeded()
+}
+
+func (m *MonitorModel) enqueueUserInfoRefresh(source userInfoRefreshSource) tea.Cmd {
+	result := m.userInfoQueue.Trigger()
+	if !result.Schedule {
+		if source == userInfoRefreshSourceManual && m.userInfoQueue.State().InFlight {
+			m.userInfoRefreshAfterInFlight = true
+			m.setStatus(tui.ViewStats, "User info refresh queued after current request")
+		}
+		return nil
+	}
+	if source == userInfoRefreshSourceManual {
+		m.setStatus(tui.ViewStats, "Queued user info refresh (3s)")
+	}
+	return scheduleUserInfoDue(result.Seq, result.Delay)
+}
+
+func (m *MonitorModel) startUserInfoRefreshIfNeeded() tea.Cmd {
+	if m.userInfoQueue.State().InFlight {
+		return nil
+	}
+	m.userInfoQueue.MarkStarted()
 	m.loading = true
 	m.setStatus(tui.ViewStats, "Refreshing user info...")
 	return m.loadUserInfoCmd()
+}
+
+func scheduleUserInfoDue(seq int, delay time.Duration) tea.Cmd {
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return userInfoRefreshDueMsg{seq: seq}
+	})
+}
+
+func (m *MonitorModel) handleUserInfoRefreshDue(msg userInfoRefreshDueMsg) (tea.Model, tea.Cmd) {
+	if !m.userInfoQueue.AcceptDue(msg.seq) {
+		return m, nil
+	}
+	return m, m.startUserInfoRefreshIfNeeded()
 }
 
 func (m *MonitorModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -415,9 +458,6 @@ func (m *MonitorModel) handleGlobalKey(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 		return true, model, cmd
 	case key.Matches(msg, m.keys.models):
 		model, cmd := m.handleDirectView(tui.ViewModels)
-		return true, model, cmd
-	case key.Matches(msg, m.keys.activity):
-		model, cmd := m.handleDirectView(tui.ViewActivity)
 		return true, model, cmd
 	case key.Matches(msg, m.keys.logs):
 		model, cmd := m.handleDirectView(tui.ViewLogs)
@@ -520,7 +560,7 @@ func (m *MonitorModel) handleAccountModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 		m.userInfo = nil
 		m.sharedState.UserInfo = nil
 		m.loadedUserInfo = false
-		return m, m.beginUserInfoRefresh()
+		return m, m.beginUserInfoRefreshDeferred()
 	case tui.AccountModalActionAdd:
 		return m.startAddAccountFlow()
 	case tui.AccountModalActionCancelAdd:
@@ -716,7 +756,7 @@ func (m *MonitorModel) handleAccountUser(msg accountUserMsg) (tea.Model, tea.Cmd
 		m.userInfo = nil
 		m.sharedState.UserInfo = nil
 		m.loadedUserInfo = false
-		return m, m.beginUserInfoRefresh()
+		return m, m.beginUserInfoRefreshDeferred()
 	}
 
 	return m, nil
@@ -854,8 +894,6 @@ func (m *MonitorModel) handleClearLogsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.sharedState.Snapshot = m.snapshot
 		m.setStatus(tui.ViewStats, "Stats counters cleared")
 		return m, nil
-	case tui.ViewActivity:
-		return m.handleCurrentViewKey(msg)
 	case tui.ViewModels:
 		return m.handleCurrentViewKey(msg)
 	case tui.ViewLogs:
@@ -867,14 +905,12 @@ func (m *MonitorModel) handleClearLogsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *MonitorModel) handleRefresh() (tea.Model, tea.Cmd) {
 	switch m.state {
 	case tui.ViewStats:
-		return m, m.beginUserInfoRefresh()
+		return m, m.enqueueUserInfoRefresh(userInfoRefreshSourceManual)
 	case tui.ViewModels:
 		m.loading = true
 		m.setStatus(tui.ViewModels, "Refreshing models...")
 		cmd := m.loadModelsCmd()
 		return m, cmd
-	case tui.ViewActivity:
-		return m, nil
 	case tui.ViewLogs:
 		return m, nil
 	default:
@@ -885,20 +921,24 @@ func (m *MonitorModel) handleRefresh() (tea.Model, tea.Cmd) {
 func (m *MonitorModel) handleWindowSize(msg tea.WindowSizeMsg) {
 	m.width = msg.Width
 	m.height = msg.Height
-	m.statsView.SetSize(msg.Width, msg.Height)
-	m.activityView.SetSize(msg.Width, msg.Height)
-	m.modelsView.SetSize(msg.Width, msg.Height)
-	m.logsView.SetSize(msg.Width, msg.Height)
+	m.applyViewSizes()
 	m.sharedState.Width = msg.Width
 	m.sharedState.Height = msg.Height
 }
 
 func (m *MonitorModel) handleTick() (tea.Model, tea.Cmd) {
+	cmds := []tea.Cmd{tickCmd()}
 	if m.collector != nil {
 		m.snapshot = m.collector.Snapshot()
 		m.sharedState.Snapshot = m.snapshot
+		premiumSet := premiumModelSet(m.sharedState.Models)
+		if len(premiumSet) > 0 && m.premiumDetector.HasNewEligible(m.snapshot, premiumSet) {
+			if cmd := m.enqueueUserInfoRefresh(userInfoRefreshSourceAgentPremium); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 	}
-	return m, tickCmd()
+	return m, tea.Batch(cmds...)
 }
 
 func (m *MonitorModel) handleModelsLoaded(msg modelsLoadedMsg) {
@@ -915,16 +955,22 @@ func (m *MonitorModel) handleModelsLoaded(msg modelsLoadedMsg) {
 	m.setStatus(tui.ViewModels, fmt.Sprintf("Models: %v", msg.err))
 }
 
-func (m *MonitorModel) handleUserInfoLoaded(msg userInfoLoadedMsg) {
+func (m *MonitorModel) handleUserInfoLoaded(msg userInfoLoadedMsg) (tea.Model, tea.Cmd) {
+	m.userInfoQueue.MarkFinished()
+	if m.userInfoRefreshAfterInFlight {
+		m.userInfoRefreshAfterInFlight = false
+		return m, m.startUserInfoRefreshIfNeeded()
+	}
 	m.loading = false
 	if msg.err == nil {
 		m.userInfo = msg.info
 		m.setStatus(tui.ViewStats, "User info updated")
 		m.loadedUserInfo = true
 		m.sharedState.UserInfo = msg.info
-		return
+		return m, nil
 	}
 	m.setStatus(tui.ViewStats, fmt.Sprintf("User: %v", msg.err))
+	return m, nil
 }
 
 func (m *MonitorModel) handleSettingsApplied(msg *settingsAppliedMsg) {
@@ -968,8 +1014,6 @@ func (m *MonitorModel) handleViewEnter() tea.Cmd {
 			m.setStatus(tui.ViewModels, "Refreshing models...")
 			return m.loadModelsCmd()
 		}
-	case tui.ViewActivity:
-		return nil
 	case tui.ViewLogs:
 		return nil
 	}
@@ -980,8 +1024,6 @@ func (m *MonitorModel) currentViewHandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 	switch m.state {
 	case tui.ViewStats:
 		return m.statsView.HandleKey(msg)
-	case tui.ViewActivity:
-		return m.activityView.HandleKey(msg)
 	case tui.ViewModels:
 		return m.modelsView.HandleKey(msg)
 	case tui.ViewLogs:
@@ -994,8 +1036,6 @@ func (m *MonitorModel) currentViewHandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 func (m *MonitorModel) currentViewHandleMouse(msg tea.MouseMsg) (bool, tea.Cmd) {
 	switch m.state {
 	case tui.ViewStats:
-		return false, nil
-	case tui.ViewActivity:
 		return false, nil
 	case tui.ViewModels:
 		return false, nil
@@ -1012,14 +1052,14 @@ func (m *MonitorModel) View() string {
 		return ""
 	}
 
+	m.applyViewSizes()
+
 	var content string
 	switch m.state {
 	case tui.ViewStats:
 		content = m.statsView.View()
 	case tui.ViewModels:
 		content = m.modelsView.View()
-	case tui.ViewActivity:
-		content = m.activityView.View()
 	case tui.ViewLogs:
 		content = m.logsView.View()
 	}
@@ -1040,8 +1080,8 @@ func (m *MonitorModel) renderHeader() string {
 	title := tui.TitleStyle.Render("Copilot Proxy")
 
 	tabs := []string{}
-	tabNames := []string{"Stats", "Activity", "Models", "Logs"}
-	viewOrder := []tui.ViewState{tui.ViewStats, tui.ViewActivity, tui.ViewModels, tui.ViewLogs}
+	tabNames := []string{"Stats", "Models", "Logs"}
+	viewOrder := []tui.ViewState{tui.ViewStats, tui.ViewModels, tui.ViewLogs}
 	for i, name := range tabNames {
 		label := fmt.Sprintf("%d:%s", i+1, name)
 		if viewOrder[i] == m.state {
@@ -1062,6 +1102,60 @@ func (m *MonitorModel) renderHeader() string {
 }
 
 func (m *MonitorModel) renderFooter() string {
-	helpView := m.help.View(&m.keys)
+	helpKeys := m.keys
+	m.resetFooterKeyVisibility(&helpKeys)
+	m.applyFooterKeyOverrides(&helpKeys)
+	helpView := m.help.View(&helpKeys)
 	return tui.DimStyle.Render(helpView)
+}
+
+func (m *MonitorModel) applyFooterKeyOverrides(helpKeys *monitorKeyMap) {
+	if helpKeys == nil {
+		return
+	}
+	switch m.state {
+	case tui.ViewStats:
+		m.footerKeysForStats(helpKeys)
+	case tui.ViewModels:
+		m.footerKeysForModels(helpKeys)
+	case tui.ViewLogs:
+		m.footerKeysForLogs(helpKeys)
+	default:
+		m.footerKeysForStats(helpKeys)
+	}
+}
+
+func (m *MonitorModel) footerKeysForStats(helpKeys *monitorKeyMap) {
+	helpKeys.accounts.SetEnabled(true)
+}
+
+func (m *MonitorModel) footerKeysForModels(_ *monitorKeyMap) {}
+
+func (m *MonitorModel) footerKeysForLogs(_ *monitorKeyMap) {}
+
+func (m *MonitorModel) resetFooterKeyVisibility(helpKeys *monitorKeyMap) {
+	if helpKeys == nil {
+		return
+	}
+	helpKeys.accounts.SetEnabled(false)
+}
+
+func (m *MonitorModel) applyViewSizes() {
+	contentHeight := m.calculateContentHeight()
+	m.statsView.SetSize(m.width, contentHeight)
+	m.modelsView.SetSize(m.width, contentHeight)
+	m.logsView.SetSize(m.width, contentHeight)
+}
+
+func (m *MonitorModel) calculateContentHeight() int {
+	if m.height <= 0 {
+		return 0
+	}
+	headerHeight := lipgloss.Height(m.renderHeader())
+	footerHeight := lipgloss.Height(m.renderFooter())
+	contentHeight := m.height - headerHeight - footerHeight
+	if contentHeight < 1 {
+		return 1
+	}
+	return contentHeight
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -38,16 +39,15 @@ func TestMonitorModel_ViewSwitching(t *testing.T) {
 	deps := MonitorDeps{Collector: collector}
 	model := NewMonitorModel(&deps, "")
 
-	// View order: Stats(0), Activity(1), Models(2), Logs(3)
-	// Keys: 1=Stats, 2=Activity, 3=Models, 4=Logs
+	// View order: Stats(0), Models(1), Logs(2)
+	// Keys: 1=Stats, 2=Models, 3=Logs
 	tests := []struct {
 		key      string
 		expected tui.ViewState
 	}{
 		{"1", tui.ViewStats},
-		{"2", tui.ViewActivity},
-		{"3", tui.ViewModels},
-		{"4", tui.ViewLogs},
+		{"2", tui.ViewModels},
+		{"3", tui.ViewLogs},
 		{"1", tui.ViewStats},
 	}
 
@@ -75,7 +75,7 @@ func TestMonitorModel_ArrowKeyNavigation(t *testing.T) {
 		t.Fatal("expected initial state tui.ViewStats")
 	}
 
-	// Right arrow should go to tui.ViewActivity (next in order: Stats -> Activity)
+	// Right arrow should go to tui.ViewModels (next in order: Stats -> Models)
 	msg := tea.KeyMsg{Type: tea.KeyRight}
 	updated, _ := model.Update(msg)
 	updatedModel, ok := updated.(*MonitorModel)
@@ -83,8 +83,8 @@ func TestMonitorModel_ArrowKeyNavigation(t *testing.T) {
 		t.Fatalf("expected MonitorModel, got %T", updated)
 	}
 	model = *updatedModel
-	if model.state != tui.ViewActivity {
-		t.Errorf("expected tui.ViewActivity after right arrow, got %d", model.state)
+	if model.state != tui.ViewModels {
+		t.Errorf("expected tui.ViewModels after right arrow, got %d", model.state)
 	}
 
 	// Left arrow should go back to tui.ViewStats
@@ -175,7 +175,7 @@ func TestMonitorModel_TickUpdatesSnapshot(t *testing.T) {
 	}
 }
 
-func TestMonitorModel_TickUpdatesSnapshotInActivity(t *testing.T) {
+func TestMonitorModel_TickUpdatesSnapshotInLogs(t *testing.T) {
 	collector := monitor.NewCollector(100)
 	collector.RecordLocal(&monitor.RequestRecord{
 		Timestamp:  time.Now(),
@@ -185,7 +185,7 @@ func TestMonitorModel_TickUpdatesSnapshotInActivity(t *testing.T) {
 
 	deps := MonitorDeps{Collector: collector}
 	model := NewMonitorModel(&deps, "")
-	model.state = tui.ViewActivity
+	model.state = tui.ViewLogs
 
 	msg := tickMsg(time.Now())
 	updated, _ := model.Update(msg)
@@ -196,7 +196,7 @@ func TestMonitorModel_TickUpdatesSnapshotInActivity(t *testing.T) {
 	model = *updatedModel
 
 	if model.snapshot.TotalRequests != 1 {
-		t.Errorf("expected 1 request after tick in activity view, got %d", model.snapshot.TotalRequests)
+		t.Errorf("expected 1 request after tick in logs view, got %d", model.snapshot.TotalRequests)
 	}
 }
 
@@ -281,9 +281,6 @@ func TestMonitorModel_ClearStatsResetsCountersOnly(t *testing.T) {
 	if len(model.snapshot.ByModel) != 1 {
 		t.Fatalf("expected one model bucket before clear, got %d", len(model.snapshot.ByModel))
 	}
-	if len(model.snapshot.ActivityHour) == 0 {
-		t.Fatalf("expected activity counters before clear")
-	}
 
 	clearMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}}
 	updated, _ = model.Update(clearMsg)
@@ -301,9 +298,6 @@ func TestMonitorModel_ClearStatsResetsCountersOnly(t *testing.T) {
 	}
 	if len(model.snapshot.RecentRequests) != 2 {
 		t.Fatalf("expected request logs to be retained, got %d", len(model.snapshot.RecentRequests))
-	}
-	if len(model.snapshot.ActivityHour) == 0 {
-		t.Fatalf("expected activity counters to remain after stats clear")
 	}
 }
 
@@ -433,6 +427,262 @@ func TestMonitorModel_InitLoadsUserInfo(t *testing.T) {
 	}
 }
 
+func TestMonitorModel_InitQueuesUserInfoRefresh(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
+
+	cmd := model.Init()
+	if cmd == nil {
+		t.Fatalf("expected init command")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.BatchMsg); !ok {
+		t.Fatalf("expected BatchMsg from init, got %T", msg)
+	}
+	state := model.userInfoQueue.State()
+	if !state.Pending {
+		t.Fatalf("expected init to queue user info refresh")
+	}
+	if !state.Armed {
+		t.Fatalf("expected init to arm debounce timer")
+	}
+	if state.InFlight {
+		t.Fatalf("expected init queue to be waiting, not in-flight")
+	}
+}
+
+func TestMonitorModel_ManualRefreshQueuesUserInfoRefresh(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
+	model.state = tui.ViewStats
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	if cmd == nil {
+		t.Fatalf("expected manual refresh to enqueue debounce command")
+	}
+	state := model.userInfoQueue.State()
+	if !state.Pending || !state.Armed {
+		t.Fatalf("expected manual refresh to queue and arm debounce")
+	}
+	if state.InFlight {
+		t.Fatalf("expected manual refresh to wait for due trigger before calling API")
+	}
+	if !strings.Contains(model.statusMsg, "Queued user info refresh (3s)") {
+		t.Fatalf("expected queue status message, got %q", model.statusMsg)
+	}
+}
+
+func TestMonitorModel_AgentPremiumEventQueuesRefresh(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	deps := MonitorDeps{
+		Collector: collector,
+		Models: []monitor.ModelInfo{
+			{ID: "gpt-4o", IsPremium: true},
+		},
+	}
+	model := NewMonitorModel(&deps, "")
+
+	collector.RecordLocal(&monitor.RequestRecord{
+		RequestID:  "req-agent-premium-1",
+		Timestamp:  time.Now(),
+		Model:      "gpt-4o",
+		StatusCode: 200,
+		IsAgent:    true,
+	})
+
+	updated, _ := model.Update(tickMsg(time.Now()))
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	state := model.userInfoQueue.State()
+	if !state.Pending || !state.Armed {
+		t.Fatalf("expected agent premium event to enqueue user info refresh")
+	}
+}
+
+func TestMonitorModel_FirstTriggerDebounceDoesNotResetOnBurst(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	deps := MonitorDeps{
+		Collector: collector,
+		Models: []monitor.ModelInfo{
+			{ID: "gpt-4o", IsPremium: true},
+		},
+	}
+	model := NewMonitorModel(&deps, "")
+
+	collector.RecordLocal(&monitor.RequestRecord{
+		RequestID:  "req-agent-premium-1",
+		Timestamp:  time.Now(),
+		Model:      "gpt-4o",
+		StatusCode: 200,
+		IsAgent:    true,
+	})
+	updated, _ := model.Update(tickMsg(time.Now()))
+	model = *mustMonitorModelFromUpdate(t, updated)
+	firstState := model.userInfoQueue.State()
+	firstSeq := firstState.Seq
+	if firstSeq == 0 {
+		t.Fatalf("expected first burst event to arm debounce sequence")
+	}
+
+	collector.RecordLocal(&monitor.RequestRecord{
+		RequestID:  "req-agent-premium-2",
+		Timestamp:  time.Now().Add(time.Second),
+		Model:      "gpt-4o",
+		StatusCode: 200,
+		IsAgent:    true,
+	})
+	updated, _ = model.Update(tickMsg(time.Now().Add(time.Second)))
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	state := model.userInfoQueue.State()
+	if state.Seq != firstSeq {
+		t.Fatalf("expected first-trigger debounce to keep seq=%d, got %d", firstSeq, state.Seq)
+	}
+	if !state.Pending || !state.Armed {
+		t.Fatalf("expected queue to remain pending/armed during burst")
+	}
+}
+
+func TestMonitorModel_DueMsgStartsUserInfoRefresh(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
+	model.state = tui.ViewStats
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	seq := model.userInfoQueue.State().Seq
+
+	updated, cmd := model.Update(userInfoRefreshDueMsg{seq: seq})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	if cmd == nil {
+		t.Fatalf("expected due message to start user info API refresh")
+	}
+	state := model.userInfoQueue.State()
+	if !state.InFlight {
+		t.Fatalf("expected queue inFlight=true after due trigger")
+	}
+	if state.Armed {
+		t.Fatalf("expected queue armed=false after consuming due trigger")
+	}
+}
+
+func TestMonitorModel_UserInfoLoadFailureClearsQueue(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
+	model.state = tui.ViewStats
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	seq := model.userInfoQueue.State().Seq
+
+	updated, _ = model.Update(userInfoRefreshDueMsg{seq: seq})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if !model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected in-flight refresh before load completion")
+	}
+
+	updated, _ = model.Update(userInfoLoadedMsg{err: errors.New("fetch failed")})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	state := model.userInfoQueue.State()
+	if state.Pending {
+		t.Fatalf("expected queue pending=false after failed refresh completion")
+	}
+	if state.Armed {
+		t.Fatalf("expected queue armed=false after failed refresh completion")
+	}
+	if state.InFlight {
+		t.Fatalf("expected queue inFlight=false after failed refresh completion")
+	}
+}
+
+func TestMonitorModel_ManualRefreshDuringInFlightDefersFollowUp(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
+	model.state = tui.ViewStats
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	seq := model.userInfoQueue.State().Seq
+
+	updated, _ = model.Update(userInfoRefreshDueMsg{seq: seq})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if !model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected first refresh to be in-flight")
+	}
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	if cmd != nil {
+		t.Fatalf("expected no immediate API call when deferring to post in-flight")
+	}
+	if !model.userInfoRefreshAfterInFlight {
+		t.Fatalf("expected manual refresh to defer follow-up while in-flight")
+	}
+	if strings.Contains(model.statusMsg, "Queued user info refresh (3s)") {
+		t.Fatalf("did not expect 3s queue status while in-flight, got %q", model.statusMsg)
+	}
+	if !strings.Contains(model.statusMsg, "after current request") {
+		t.Fatalf("expected in-flight queue status, got %q", model.statusMsg)
+	}
+
+	updated, cmd = model.Update(userInfoLoadedMsg{
+		info: &monitor.UserInfo{Plan: "business", Organization: "old"},
+	})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	if cmd == nil {
+		t.Fatalf("expected deferred refresh to start after current request completes")
+	}
+	if !model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected deferred refresh to become in-flight")
+	}
+}
+
+func TestMonitorModel_ViewEnterDuringInFlightDoesNotDeferRefresh(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
+	model.state = tui.ViewStats
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	seq := model.userInfoQueue.State().Seq
+
+	updated, _ = model.Update(userInfoRefreshDueMsg{seq: seq})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if !model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected first refresh to be in-flight")
+	}
+
+	model.state = tui.ViewModels
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if cmd != nil {
+		t.Fatalf("expected no immediate cmd when entering stats during in-flight refresh")
+	}
+	if model.userInfoRefreshAfterInFlight {
+		t.Fatalf("expected view-enter refresh not to mark deferred follow-up")
+	}
+
+	updated, cmd = model.Update(userInfoLoadedMsg{
+		info: &monitor.UserInfo{Plan: "business", Organization: "current"},
+	})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if cmd != nil {
+		t.Fatalf("expected no follow-up refresh for passive view-enter attempt")
+	}
+	if model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected in-flight flag to clear after completion")
+	}
+	if model.sharedState.UserInfo == nil {
+		t.Fatalf("expected user info to be updated from completed in-flight refresh")
+	}
+}
+
 func TestMonitorModel_WindowResize(t *testing.T) {
 	collector := monitor.NewCollector(100)
 	deps := MonitorDeps{Collector: collector}
@@ -480,7 +730,7 @@ func TestMonitorModel_ViewRendering(t *testing.T) {
 	model = *updatedModel
 
 	// Test each view renders without panic and contains header tabs
-	views := []tui.ViewState{tui.ViewStats, tui.ViewModels, tui.ViewActivity, tui.ViewLogs}
+	views := []tui.ViewState{tui.ViewStats, tui.ViewModels, tui.ViewLogs}
 	for _, view := range views {
 		model.state = view
 		output := model.View()
@@ -491,9 +741,120 @@ func TestMonitorModel_ViewRendering(t *testing.T) {
 		if !strings.Contains(output, "1:Stats") {
 			t.Errorf("view %d missing header tabs (1:Stats)", view)
 		}
-		if !strings.Contains(output, "3:Models") {
-			t.Errorf("view %d missing header tabs (3:Models)", view)
+		if !strings.Contains(output, "2:Models") {
+			t.Errorf("view %d missing header tabs (2:Models)", view)
 		}
+		if !strings.Contains(output, "3:Logs") {
+			t.Errorf("view %d missing header tabs (3:Logs)", view)
+		}
+	}
+}
+
+func TestMonitorModel_LogsViewRenderingFitsWindowAndKeepsHeader(t *testing.T) {
+	collector := monitor.NewCollector(200)
+	now := time.Now()
+	for i := range 120 {
+		collector.RecordLocal(&monitor.RequestRecord{
+			Timestamp:    now.Add(-time.Duration(i) * time.Second),
+			Method:       "POST",
+			Path:         "/v1/chat/completions",
+			UpstreamPath: "/chat/completions",
+			Model:        "gpt-4o",
+			StatusCode:   200,
+		})
+	}
+
+	deps := MonitorDeps{Collector: collector}
+	model := NewMonitorModel(&deps, "127.0.0.1:4000")
+	model.state = tui.ViewLogs
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 12})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	updated, _ = model.Update(tickMsg(time.Now()))
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	output := model.View()
+	if !strings.Contains(output, "Copilot Proxy") {
+		t.Fatalf("expected header title in output")
+	}
+	if !strings.Contains(output, "1:Stats") || !strings.Contains(output, "2:Models") || !strings.Contains(output, "3:Logs") {
+		t.Fatalf("expected all header tabs to remain visible in logs output")
+	}
+
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) > model.height {
+		t.Fatalf("expected rendered lines <= window height (%d), got %d", model.height, len(lines))
+	}
+}
+
+func TestMonitorModel_LogsViewSmallWindowRendersAndPages(t *testing.T) {
+	collector := monitor.NewCollector(50)
+	now := time.Now()
+	for i := range 12 {
+		collector.RecordLocal(&monitor.RequestRecord{
+			Timestamp:    now.Add(-time.Duration(i) * time.Second),
+			Method:       "POST",
+			Path:         "/v1/chat/completions",
+			UpstreamPath: "/chat/completions",
+			Model:        fmt.Sprintf("model-%02d", i),
+			StatusCode:   200,
+			Duration:     50 * time.Millisecond,
+		})
+	}
+
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "127.0.0.1:4000")
+	model.state = tui.ViewLogs
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 6})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	updated, _ = model.Update(tickMsg(time.Now()))
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	before := model.View()
+	if !strings.Contains(before, "1:Stats") || !strings.Contains(before, "2:Models") || !strings.Contains(before, "3:Logs") {
+		t.Fatalf("expected all header tabs in small-window logs output")
+	}
+	if !strings.Contains(before, "model-00") {
+		t.Fatalf("expected first logs page to show newest row in small window")
+	}
+	if strings.Contains(before, "model-01") {
+		t.Fatalf("expected first small-window page to show a single row")
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	after := model.View()
+	if !strings.Contains(after, "model-01") {
+		t.Fatalf("expected pgdown to advance logs row in small window")
+	}
+	if strings.Contains(after, "model-00") {
+		t.Fatalf("expected previous logs row to page out in small window")
+	}
+}
+
+func TestMonitorModel_FooterHelpShowsAccountsOnlyInStats(t *testing.T) {
+	collector := monitor.NewCollector(10)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "127.0.0.1:4000")
+	model.width = 200
+	model.height = 20
+
+	model.state = tui.ViewStats
+	statsView := model.View()
+	if !strings.Contains(statsView, "a accounts") {
+		t.Fatalf("expected stats footer help to include account shortcut")
+	}
+
+	model.state = tui.ViewModels
+	modelsView := model.View()
+	if strings.Contains(modelsView, "a accounts") {
+		t.Fatalf("expected models footer help to hide account shortcut")
+	}
+
+	model.state = tui.ViewLogs
+	logsView := model.View()
+	if strings.Contains(logsView, "a accounts") {
+		t.Fatalf("expected logs footer help to hide account shortcut")
 	}
 }
 
@@ -533,26 +894,6 @@ func TestFormatDuration(t *testing.T) {
 		result := tui.FormatDuration(tc.input)
 		if result != tc.expected {
 			t.Errorf("FormatDuration(%v) = %q, want %q", tc.input, result, tc.expected)
-		}
-	}
-}
-
-func TestHeatmapCell(t *testing.T) {
-	tests := []struct {
-		count    int
-		maxCount int
-	}{
-		{0, 100},
-		{5, 100},
-		{15, 100},
-		{30, 100},
-		{75, 100},
-	}
-
-	for _, tc := range tests {
-		result := tui.HeatmapCell(tc.count, tc.maxCount)
-		if result == "" {
-			t.Errorf("HeatmapCell(%d, %d) returned empty string", tc.count, tc.maxCount)
 		}
 	}
 }
@@ -778,7 +1119,7 @@ func TestMonitorModel_ConfigModalSaveAppliesSettings(t *testing.T) {
 	}
 	model = *updatedModel
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	updatedModel, ok = updated.(*MonitorModel)
 	if !ok {
 		t.Fatalf("expected MonitorModel, got %T", updated)
@@ -905,6 +1246,69 @@ func TestMonitorModel_AccountModalActivateSuccessRefreshes(t *testing.T) {
 	}
 	if model.loadedUserInfo {
 		t.Fatalf("expected loadedUserInfo to reset before refresh")
+	}
+}
+
+func TestMonitorModel_AccountModalActivateDefersRefreshWhenInFlight(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	auth := &config.AuthConfig{
+		Default: "u1",
+		Accounts: []config.Account{
+			{User: "u1", GhToken: "ghu-1"},
+			{User: "u2", GhToken: "ghu-2"},
+		},
+	}
+	deps := MonitorDeps{
+		Collector:  collector,
+		AuthConfig: auth,
+		UserInfo:   &monitor.UserInfo{Plan: "business"},
+		ActivateAccount: func(user string) error {
+			auth.Default = user
+			return nil
+		},
+	}
+	model := NewMonitorModel(&deps, "")
+	model.state = tui.ViewStats
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	seq := model.userInfoQueue.State().Seq
+	updated, _ = model.Update(userInfoRefreshDueMsg{seq: seq})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if !model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected initial refresh to be in-flight")
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if cmd != nil {
+		t.Fatalf("expected account activation refresh to defer while in-flight")
+	}
+	if !model.userInfoRefreshAfterInFlight {
+		t.Fatalf("expected deferred refresh flag after account activation during in-flight")
+	}
+	if model.sharedState.UserInfo != nil {
+		t.Fatalf("expected shared user info to stay cleared until deferred refresh runs")
+	}
+
+	updated, cmd = model.Update(userInfoLoadedMsg{
+		info: &monitor.UserInfo{Plan: "business", Organization: "stale"},
+	})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	if cmd == nil {
+		t.Fatalf("expected deferred refresh to start when in-flight request completes")
+	}
+	if !model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected deferred account refresh to become in-flight")
+	}
+	if model.sharedState.UserInfo != nil {
+		t.Fatalf("expected stale in-flight result to be ignored before deferred refresh")
 	}
 }
 

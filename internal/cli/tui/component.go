@@ -12,7 +12,6 @@ type ViewState int
 
 const (
 	ViewStats ViewState = iota
-	ViewActivity
 	ViewModels
 	ViewLogs
 )

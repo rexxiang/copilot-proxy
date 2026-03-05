@@ -21,6 +21,9 @@ func TestFetchModels(t *testing.T) {
 				"capabilities": map[string]any{
 					"type":   "chat",
 					"family": "gpt-4o",
+					"supports": map[string]any{
+						"reasoning_effort": []string{"low", "high", "medium"},
+					},
 					"limits": map[string]any{
 						"max_context_window_tokens": 128000,
 						"max_prompt_tokens":         128000,
@@ -58,6 +61,9 @@ func TestFetchModels(t *testing.T) {
 				"capabilities": map[string]any{
 					"type":   "chat",
 					"family": "claude-sonnet",
+					"supports": map[string]any{
+						"reasoning_effort": []string{"high"},
+					},
 					"limits": map[string]any{
 						"max_context_window_tokens": 144000,
 						"max_prompt_tokens":         140000,
@@ -126,6 +132,12 @@ func TestFetchModels(t *testing.T) {
 	if gpt4o.MaxOutputTokens != 16000 {
 		t.Errorf("expected gpt-4o max output tokens 16000, got %d", gpt4o.MaxOutputTokens)
 	}
+	if len(gpt4o.SupportedReasoningEffort) != 3 {
+		t.Fatalf("expected three reasoning effort levels, got %#v", gpt4o.SupportedReasoningEffort)
+	}
+	if gpt4o.SupportedReasoningEffort[0] != "low" || gpt4o.SupportedReasoningEffort[1] != "medium" || gpt4o.SupportedReasoningEffort[2] != "high" {
+		t.Fatalf("expected normalized reasoning levels [low medium high], got %#v", gpt4o.SupportedReasoningEffort)
+	}
 
 	claude := findModel(items, "claude-3.5-sonnet")
 	if claude == nil {
@@ -145,6 +157,9 @@ func TestFetchModels(t *testing.T) {
 	}
 	if claude.MaxOutputTokens != 10000 {
 		t.Errorf("expected claude max output tokens 10000, got %d", claude.MaxOutputTokens)
+	}
+	if len(claude.SupportedReasoningEffort) != 1 || claude.SupportedReasoningEffort[0] != "high" {
+		t.Fatalf("expected claude supported reasoning [high], got %#v", claude.SupportedReasoningEffort)
 	}
 }
 
