@@ -132,32 +132,33 @@ type settingsAppliedMsg struct {
 
 // MonitorModel is the main bubbletea model for the monitor TUI.
 type MonitorModel struct {
-	state           tui.ViewState
-	collector       monitor.Collector
-	debugLogger     *monitor.DebugLogger
-	models          []monitor.ModelInfo
-	userInfo        *monitor.UserInfo
-	snapshot        monitor.Snapshot
-	width           int
-	height          int
-	help            help.Model
-	keys            monitorKeyMap
-	serverAddr      string
-	quitting        bool
-	loading         bool
-	lastRefresh     time.Time
-	authConfig      *config.AuthConfig
-	httpClient      *http.Client
-	proxyInvoker    models.RequestDoer
-	loadSettings    func() (config.Settings, error)
-	applySettings   func(config.Settings) (config.Settings, error)
-	currentSettings config.Settings
-	statusMsg       string
-	statusView      tui.ViewState // Which view the status message belongs to
-	loadedUserInfo  bool
-	loadedModels    bool
-	userInfoQueue   debounce.Debouncer
-	premiumDetector agentPremiumRefreshDetector
+	state                        tui.ViewState
+	collector                    monitor.Collector
+	debugLogger                  *monitor.DebugLogger
+	models                       []monitor.ModelInfo
+	userInfo                     *monitor.UserInfo
+	snapshot                     monitor.Snapshot
+	width                        int
+	height                       int
+	help                         help.Model
+	keys                         monitorKeyMap
+	serverAddr                   string
+	quitting                     bool
+	loading                      bool
+	lastRefresh                  time.Time
+	authConfig                   *config.AuthConfig
+	httpClient                   *http.Client
+	proxyInvoker                 models.RequestDoer
+	loadSettings                 func() (config.Settings, error)
+	applySettings                func(config.Settings) (config.Settings, error)
+	currentSettings              config.Settings
+	statusMsg                    string
+	statusView                   tui.ViewState // Which view the status message belongs to
+	loadedUserInfo               bool
+	loadedModels                 bool
+	userInfoQueue                debounce.Debouncer
+	premiumDetector              agentPremiumRefreshDetector
+	userInfoRefreshAfterInFlight bool
 
 	// View components
 	statsView       *tui.StatsView
@@ -343,7 +344,7 @@ func (m *MonitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case modelsLoadedMsg:
 		m.handleModelsLoaded(msg)
 	case userInfoLoadedMsg:
-		m.handleUserInfoLoaded(msg)
+		return m.handleUserInfoLoaded(msg)
 	case userInfoRefreshDueMsg:
 		return m.handleUserInfoRefreshDue(msg)
 	case accountDeviceCodeMsg:
@@ -381,13 +382,25 @@ func (m *MonitorModel) beginUserInfoRefresh() tea.Cmd {
 	return m.startUserInfoRefreshIfNeeded()
 }
 
-func (m *MonitorModel) enqueueUserInfoRefresh(source userInfoRefreshSource) tea.Cmd {
-	if source == userInfoRefreshSourceManual {
-		m.setStatus(tui.ViewStats, "Queued user info refresh (3s)")
+func (m *MonitorModel) beginUserInfoRefreshDeferred() tea.Cmd {
+	if m.userInfoQueue.State().InFlight {
+		m.userInfoRefreshAfterInFlight = true
+		return nil
 	}
+	return m.startUserInfoRefreshIfNeeded()
+}
+
+func (m *MonitorModel) enqueueUserInfoRefresh(source userInfoRefreshSource) tea.Cmd {
 	result := m.userInfoQueue.Trigger()
 	if !result.Schedule {
+		if source == userInfoRefreshSourceManual && m.userInfoQueue.State().InFlight {
+			m.userInfoRefreshAfterInFlight = true
+			m.setStatus(tui.ViewStats, "User info refresh queued after current request")
+		}
 		return nil
+	}
+	if source == userInfoRefreshSourceManual {
+		m.setStatus(tui.ViewStats, "Queued user info refresh (3s)")
 	}
 	return scheduleUserInfoDue(result.Seq, result.Delay)
 }
@@ -547,7 +560,7 @@ func (m *MonitorModel) handleAccountModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 		m.userInfo = nil
 		m.sharedState.UserInfo = nil
 		m.loadedUserInfo = false
-		return m, m.beginUserInfoRefresh()
+		return m, m.beginUserInfoRefreshDeferred()
 	case tui.AccountModalActionAdd:
 		return m.startAddAccountFlow()
 	case tui.AccountModalActionCancelAdd:
@@ -743,7 +756,7 @@ func (m *MonitorModel) handleAccountUser(msg accountUserMsg) (tea.Model, tea.Cmd
 		m.userInfo = nil
 		m.sharedState.UserInfo = nil
 		m.loadedUserInfo = false
-		return m, m.beginUserInfoRefresh()
+		return m, m.beginUserInfoRefreshDeferred()
 	}
 
 	return m, nil
@@ -942,17 +955,22 @@ func (m *MonitorModel) handleModelsLoaded(msg modelsLoadedMsg) {
 	m.setStatus(tui.ViewModels, fmt.Sprintf("Models: %v", msg.err))
 }
 
-func (m *MonitorModel) handleUserInfoLoaded(msg userInfoLoadedMsg) {
+func (m *MonitorModel) handleUserInfoLoaded(msg userInfoLoadedMsg) (tea.Model, tea.Cmd) {
 	m.userInfoQueue.MarkFinished()
+	if m.userInfoRefreshAfterInFlight {
+		m.userInfoRefreshAfterInFlight = false
+		return m, m.startUserInfoRefreshIfNeeded()
+	}
 	m.loading = false
 	if msg.err == nil {
 		m.userInfo = msg.info
 		m.setStatus(tui.ViewStats, "User info updated")
 		m.loadedUserInfo = true
 		m.sharedState.UserInfo = msg.info
-		return
+		return m, nil
 	}
 	m.setStatus(tui.ViewStats, fmt.Sprintf("User: %v", msg.err))
+	return m, nil
 }
 
 func (m *MonitorModel) handleSettingsApplied(msg *settingsAppliedMsg) {

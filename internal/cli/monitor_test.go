@@ -599,6 +599,90 @@ func TestMonitorModel_UserInfoLoadFailureClearsQueue(t *testing.T) {
 	}
 }
 
+func TestMonitorModel_ManualRefreshDuringInFlightDefersFollowUp(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
+	model.state = tui.ViewStats
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	seq := model.userInfoQueue.State().Seq
+
+	updated, _ = model.Update(userInfoRefreshDueMsg{seq: seq})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if !model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected first refresh to be in-flight")
+	}
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	if cmd != nil {
+		t.Fatalf("expected no immediate API call when deferring to post in-flight")
+	}
+	if !model.userInfoRefreshAfterInFlight {
+		t.Fatalf("expected manual refresh to defer follow-up while in-flight")
+	}
+	if strings.Contains(model.statusMsg, "Queued user info refresh (3s)") {
+		t.Fatalf("did not expect 3s queue status while in-flight, got %q", model.statusMsg)
+	}
+	if !strings.Contains(model.statusMsg, "after current request") {
+		t.Fatalf("expected in-flight queue status, got %q", model.statusMsg)
+	}
+
+	updated, cmd = model.Update(userInfoLoadedMsg{
+		info: &monitor.UserInfo{Plan: "business", Organization: "old"},
+	})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	if cmd == nil {
+		t.Fatalf("expected deferred refresh to start after current request completes")
+	}
+	if !model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected deferred refresh to become in-flight")
+	}
+}
+
+func TestMonitorModel_ViewEnterDuringInFlightDoesNotDeferRefresh(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
+	model.state = tui.ViewStats
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	seq := model.userInfoQueue.State().Seq
+
+	updated, _ = model.Update(userInfoRefreshDueMsg{seq: seq})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if !model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected first refresh to be in-flight")
+	}
+
+	model.state = tui.ViewModels
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if cmd != nil {
+		t.Fatalf("expected no immediate cmd when entering stats during in-flight refresh")
+	}
+	if model.userInfoRefreshAfterInFlight {
+		t.Fatalf("expected view-enter refresh not to mark deferred follow-up")
+	}
+
+	updated, cmd = model.Update(userInfoLoadedMsg{
+		info: &monitor.UserInfo{Plan: "business", Organization: "current"},
+	})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if cmd != nil {
+		t.Fatalf("expected no follow-up refresh for passive view-enter attempt")
+	}
+	if model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected in-flight flag to clear after completion")
+	}
+	if model.sharedState.UserInfo == nil {
+		t.Fatalf("expected user info to be updated from completed in-flight refresh")
+	}
+}
+
 func TestMonitorModel_WindowResize(t *testing.T) {
 	collector := monitor.NewCollector(100)
 	deps := MonitorDeps{Collector: collector}
@@ -1162,6 +1246,69 @@ func TestMonitorModel_AccountModalActivateSuccessRefreshes(t *testing.T) {
 	}
 	if model.loadedUserInfo {
 		t.Fatalf("expected loadedUserInfo to reset before refresh")
+	}
+}
+
+func TestMonitorModel_AccountModalActivateDefersRefreshWhenInFlight(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	auth := &config.AuthConfig{
+		Default: "u1",
+		Accounts: []config.Account{
+			{User: "u1", GhToken: "ghu-1"},
+			{User: "u2", GhToken: "ghu-2"},
+		},
+	}
+	deps := MonitorDeps{
+		Collector:  collector,
+		AuthConfig: auth,
+		UserInfo:   &monitor.UserInfo{Plan: "business"},
+		ActivateAccount: func(user string) error {
+			auth.Default = user
+			return nil
+		},
+	}
+	model := NewMonitorModel(&deps, "")
+	model.state = tui.ViewStats
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	seq := model.userInfoQueue.State().Seq
+	updated, _ = model.Update(userInfoRefreshDueMsg{seq: seq})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if !model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected initial refresh to be in-flight")
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if cmd != nil {
+		t.Fatalf("expected account activation refresh to defer while in-flight")
+	}
+	if !model.userInfoRefreshAfterInFlight {
+		t.Fatalf("expected deferred refresh flag after account activation during in-flight")
+	}
+	if model.sharedState.UserInfo != nil {
+		t.Fatalf("expected shared user info to stay cleared until deferred refresh runs")
+	}
+
+	updated, cmd = model.Update(userInfoLoadedMsg{
+		info: &monitor.UserInfo{Plan: "business", Organization: "stale"},
+	})
+	model = *mustMonitorModelFromUpdate(t, updated)
+
+	if cmd == nil {
+		t.Fatalf("expected deferred refresh to start when in-flight request completes")
+	}
+	if !model.userInfoQueue.State().InFlight {
+		t.Fatalf("expected deferred account refresh to become in-flight")
+	}
+	if model.sharedState.UserInfo != nil {
+		t.Fatalf("expected stale in-flight result to be ignored before deferred refresh")
 	}
 }
 
