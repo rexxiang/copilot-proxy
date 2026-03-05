@@ -291,6 +291,22 @@ func TestMessagesToChatRequestMapsMaxEffortToHigh(t *testing.T) {
 	}
 }
 
+func TestMessagesToChatRequestMapsXHighToHigh(t *testing.T) {
+	reqBody := `{"model":"gpt-4o","output_config":{"effort":"xhigh"},"messages":[{"role":"user","content":"hi"}]}`
+	converted, ok := MessagesToChatRequest([]byte(reqBody))
+	if !ok {
+		t.Fatalf("MessagesToChatRequest failed")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(converted, &parsed); err != nil {
+		t.Fatalf("unmarshal converted: %v", err)
+	}
+	if parsed["reasoning_effort"] != normalizedEffortHigh {
+		t.Fatalf("expected reasoning_effort=high for xhigh, got %v", parsed["reasoning_effort"])
+	}
+}
+
 func TestMessagesToChatRequestMapsMinimalEffortToLow(t *testing.T) {
 	reqBody := `{"model":"gpt-4o","output_config":{"effort":"minimal"},"messages":[{"role":"user","content":"hi"}]}`
 	converted, ok := MessagesToChatRequest([]byte(reqBody))
@@ -307,26 +323,56 @@ func TestMessagesToChatRequestMapsMinimalEffortToLow(t *testing.T) {
 	}
 }
 
-func TestMessagesToChatRequestDefaultsReasoningEffortToHighWhenMissing(t *testing.T) {
+func TestMessagesToChatRequestMapsUnknownEffortToNone(t *testing.T) {
+	reqBody := `{"model":"gpt-4o","output_config":{"effort":"unknown"},"messages":[{"role":"user","content":"hi"}]}`
+	converted, ok := MessagesToChatRequest([]byte(reqBody))
+	if !ok {
+		t.Fatalf("MessagesToChatRequest failed")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(converted, &parsed); err != nil {
+		t.Fatalf("unmarshal converted: %v", err)
+	}
+	if _, ok := parsed["reasoning_effort"]; ok {
+		t.Fatalf("expected no reasoning_effort for unknown effort, got %v", parsed["reasoning_effort"])
+	}
+}
+
+func TestMessagesToChatRequestWithOptionsRequiresSupportedEffort(t *testing.T) {
+	reqBody := `{"model":"gpt-4o","output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`
+	converted, ok := MessagesToChatRequestWithOptions([]byte(reqBody), MessagesReasoningOptions{
+		SupportedReasoningEffort: nil,
+	})
+	if !ok {
+		t.Fatalf("MessagesToChatRequestWithOptions failed")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(converted, &parsed); err != nil {
+		t.Fatalf("unmarshal converted: %v", err)
+	}
+	if _, exists := parsed["reasoning_effort"]; exists {
+		t.Fatalf("expected no reasoning_effort when supported list is empty, got %v", parsed["reasoning_effort"])
+	}
+}
+
+func TestMessagesToChatRequestSkipsReasoningEffortWhenMissingOrEmpty(t *testing.T) {
 	cases := []struct {
-		name   string
-		body   string
-		effort string
+		name string
+		body string
 	}{
 		{
-			name:   "missing output config",
-			body:   `{"model":"gpt-4o","thinking":{"type":"enabled"},"messages":[{"role":"user","content":"hi"}]}`,
-			effort: normalizedEffortHigh,
+			name: "missing output config",
+			body: `{"model":"gpt-4o","thinking":{"type":"enabled"},"messages":[{"role":"user","content":"hi"}]}`,
 		},
 		{
-			name:   "top level ignored",
-			body:   `{"model":"gpt-4o","reasoning_effort":"low","messages":[{"role":"user","content":"hi"}]}`,
-			effort: normalizedEffortHigh,
+			name: "top level ignored",
+			body: `{"model":"gpt-4o","reasoning_effort":"low","messages":[{"role":"user","content":"hi"}]}`,
 		},
 		{
-			name:   "empty effort",
-			body:   `{"model":"gpt-4o","output_config":{"effort":""},"messages":[{"role":"user","content":"hi"}]}`,
-			effort: normalizedEffortHigh,
+			name: "empty effort",
+			body: `{"model":"gpt-4o","output_config":{"effort":""},"messages":[{"role":"user","content":"hi"}]}`,
 		},
 	}
 
@@ -341,8 +387,8 @@ func TestMessagesToChatRequestDefaultsReasoningEffortToHighWhenMissing(t *testin
 			if err := json.Unmarshal(converted, &parsed); err != nil {
 				t.Fatalf("unmarshal converted: %v", err)
 			}
-			if parsed["reasoning_effort"] != tc.effort {
-				t.Fatalf("expected reasoning_effort=%s, got %v", tc.effort, parsed["reasoning_effort"])
+			if _, ok := parsed["reasoning_effort"]; ok {
+				t.Fatalf("expected no reasoning_effort, got %v", parsed["reasoning_effort"])
 			}
 		})
 	}

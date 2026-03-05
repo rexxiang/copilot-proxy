@@ -12,6 +12,7 @@ import (
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/models"
+	"copilot-proxy/internal/reasoning"
 )
 
 const messagesStreamBody = `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stream":true}`
@@ -331,5 +332,128 @@ func TestEndpointPipelineRewritesModelForMessagesPassthrough(t *testing.T) {
 	}
 	if parsed["model"] != "gpt-5-mini" {
 		t.Fatalf("expected rewritten model gpt-5-mini, got %v", parsed["model"])
+	}
+}
+
+func TestEndpointPipelineAppliesReasoningPolicyWithModelSupport(t *testing.T) {
+	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o", Endpoints: []string{
+		config.UpstreamResponsesPath,
+	}, SupportedReasoningEffort: []string{"low"}}}}
+	mw := NewMessagesTranslate(catalog, nil, config.PathMapping, map[string]string{
+		"gpt-4o@responses": "high",
+	})
+
+	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"http://localhost"+config.MessagesPath,
+		strings.NewReader(reqBody),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+		SourceLocalPath: config.MessagesPath,
+		LocalPath:       config.MessagesPath,
+	}))
+	ctx := &middleware.Context{Request: req}
+
+	var upstreamBody []byte
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		upstreamBody, _ = io.ReadAll(ctx.Request.Body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			Request:    ctx.Request,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var parsed map[string]any
+	if err := json.Unmarshal(upstreamBody, &parsed); err != nil {
+		t.Fatalf("expected json upstream request, got %s", string(upstreamBody))
+	}
+	reasoningObj, ok := parsed["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected reasoning object, got %T", parsed["reasoning"])
+	}
+	if reasoningObj["effort"] != "low" {
+		t.Fatalf("expected mapped effort low, got %v", reasoningObj["effort"])
+	}
+}
+
+func TestEndpointPipelineSkipsReasoningWhenModelSupportMissing(t *testing.T) {
+	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o", Endpoints: []string{
+		config.UpstreamChatCompletionsPath,
+	}}}}
+	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+
+	reqBody := `{"model":"gpt-4o","output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"http://localhost"+config.MessagesPath,
+		strings.NewReader(reqBody),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+		SourceLocalPath: config.MessagesPath,
+		LocalPath:       config.MessagesPath,
+	}))
+	ctx := &middleware.Context{Request: req}
+
+	var upstreamBody []byte
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		upstreamBody, _ = io.ReadAll(ctx.Request.Body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			Request:    ctx.Request,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var parsed map[string]any
+	if err := json.Unmarshal(upstreamBody, &parsed); err != nil {
+		t.Fatalf("expected json upstream request, got %s", string(upstreamBody))
+	}
+	if _, ok := parsed["reasoning_effort"]; ok {
+		t.Fatalf("expected no reasoning_effort without model support, got %v", parsed["reasoning_effort"])
+	}
+}
+
+func TestMessagesTranslate_UsesBuiltinReasoningPoliciesWhenNoConfig(t *testing.T) {
+	mw := NewMessagesTranslate(&stubCatalog{}, nil, config.PathMapping)
+
+	got, ok := reasoning.MatchPolicy(mw.reasoningPolicies, "gpt-5-mini", reasoning.TargetResponses)
+	if !ok || got != reasoning.EffortNone {
+		t.Fatalf("expected builtin gpt-5-mini@responses=none, got %q ok=%v", got, ok)
+	}
+
+	got, ok = reasoning.MatchPolicy(mw.reasoningPolicies, "grok-code-fast-1", reasoning.TargetChat)
+	if !ok || got != reasoning.EffortNone {
+		t.Fatalf("expected builtin grok-code-fast-1@chat=none, got %q ok=%v", got, ok)
+	}
+}
+
+func TestMessagesTranslate_ConfigPolicyOverridesBuiltin(t *testing.T) {
+	mw := NewMessagesTranslate(&stubCatalog{}, nil, config.PathMapping, map[string]string{
+		"gpt-5-mini@responses": "high",
+	})
+
+	got, ok := reasoning.MatchPolicy(mw.reasoningPolicies, "gpt-5-mini", reasoning.TargetResponses)
+	if !ok || got != reasoning.EffortHigh {
+		t.Fatalf("expected override gpt-5-mini@responses=high, got %q ok=%v", got, ok)
 	}
 }

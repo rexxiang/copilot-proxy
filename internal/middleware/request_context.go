@@ -9,11 +9,12 @@ import (
 
 // RequestInfo contains metadata extracted from the request body.
 type RequestInfo struct {
-	IsVision               bool     // Request contains image content
-	IsAgent                bool     // Request initiated by agent (not user)
-	Model                  string   // Model name from request body
-	MappedModel            string   // Model name after mapping
-	SelectedModelEndpoints []string // Endpoints from selector-chosen model (raw catalog values, not normalized)
+	IsVision                 bool     // Request contains image content
+	IsAgent                  bool     // Request initiated by agent (not user)
+	Model                    string   // Model name from request body
+	MappedModel              string   // Model name after mapping
+	SelectedModelEndpoints   []string // Endpoints from selector-chosen model (raw catalog values, not normalized)
+	SupportedReasoningEffort []string // Model-supported reasoning effort levels (low/medium/high)
 }
 
 type requestContextKey struct{}

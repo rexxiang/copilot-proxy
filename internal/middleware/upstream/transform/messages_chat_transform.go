@@ -47,6 +47,12 @@ const (
 )
 
 func MessagesToChatRequest(body []byte) ([]byte, bool) {
+	return MessagesToChatRequestWithOptions(body, MessagesReasoningOptions{
+		SupportedReasoningEffort: []string{"low", "medium", "high"},
+	})
+}
+
+func MessagesToChatRequestWithOptions(body []byte, options MessagesReasoningOptions) ([]byte, bool) {
 	var req anthropicRequest
 	if json.Unmarshal(body, &req) != nil {
 		return nil, false
@@ -70,7 +76,7 @@ func MessagesToChatRequest(body []byte) ([]byte, bool) {
 		"model":    req.Model,
 		"messages": chatMessages,
 	}
-	appendChatRequestParams(out, &req)
+	appendChatRequestParams(out, &req, options)
 	updated, err := json.Marshal(out)
 	if err != nil {
 		return nil, false
@@ -78,7 +84,7 @@ func MessagesToChatRequest(body []byte) ([]byte, bool) {
 	return updated, true
 }
 
-func appendChatRequestParams(out map[string]any, req *anthropicRequest) {
+func appendChatRequestParams(out map[string]any, req *anthropicRequest, options MessagesReasoningOptions) {
 	if req == nil {
 		return
 	}
@@ -110,20 +116,9 @@ func appendChatRequestParams(out map[string]any, req *anthropicRequest) {
 			out["tool_choice"] = translated
 		}
 	}
-	if effort, ok := extractMessagesEffort(req); ok {
+	if effort, ok := resolveMessagesReasoningEffort(req.OutputConfig, options); ok {
 		out["reasoning_effort"] = effort
 	}
-}
-
-func extractMessagesEffort(req *anthropicRequest) (string, bool) {
-	if req == nil || req.OutputConfig == nil {
-		return normalizedEffortHigh, true
-	}
-	rawEffort, _ := req.OutputConfig["effort"].(string)
-	if strings.TrimSpace(rawEffort) == "" {
-		return normalizedEffortHigh, true
-	}
-	return NormalizeEffort(rawEffort)
 }
 
 func convertAnthropicTools(tools any) any {

@@ -40,6 +40,12 @@ type anthropicResponsesInput struct {
 }
 
 func MessagesToResponsesRequest(body []byte) ([]byte, bool) {
+	return MessagesToResponsesRequestWithOptions(body, MessagesReasoningOptions{
+		SupportedReasoningEffort: []string{"low", "medium", "high"},
+	})
+}
+
+func MessagesToResponsesRequestWithOptions(body []byte, options MessagesReasoningOptions) ([]byte, bool) {
 	var req anthropicResponsesRequest
 	if json.Unmarshal(body, &req) != nil {
 		return nil, false
@@ -82,8 +88,11 @@ func MessagesToResponsesRequest(body []byte) ([]byte, bool) {
 			out["tool_choice"] = choice
 		}
 	}
-	if reasoning, ok := buildResponsesReasoningFromOutputConfig(req.OutputConfig); ok {
-		out["reasoning"] = reasoning
+	if reasoningEffort, ok := resolveMessagesReasoningEffort(req.OutputConfig, options); ok {
+		out["reasoning"] = map[string]any{
+			"summary": "auto",
+			"effort":  reasoningEffort,
+		}
 	}
 
 	updated, err := json.Marshal(out)

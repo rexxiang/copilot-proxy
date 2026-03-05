@@ -1119,7 +1119,7 @@ func TestMonitorModel_ConfigModalSaveAppliesSettings(t *testing.T) {
 	}
 	model = *updatedModel
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	updatedModel, ok = updated.(*MonitorModel)
 	if !ok {
 		t.Fatalf("expected MonitorModel, got %T", updated)

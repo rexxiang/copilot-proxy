@@ -7,16 +7,27 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"copilot-proxy/internal/reasoning"
 )
 
 type Settings struct {
-	ListenAddr           string            `json:"listen_addr" ui:"label=Listen;widget=text;visible=false;readonly=true;order=10"`
-	UpstreamBase         string            `json:"upstream_base" ui:"label=Upstream;widget=url;visible=true;readonly=true;order=20"`
-	RequiredHeaders      map[string]string `json:"required_headers,omitempty" ui:"label=Headers;widget=kv;visible=true;readonly=false;order=60"`
+	ListenAddr   string `json:"listen_addr" ui:"label=Listen;widget=text;visible=false;readonly=true;order=10"`
+	UpstreamBase string `json:"upstream_base" ui:"label=Upstream;widget=url;visible=true;readonly=true;order=20"`
+	// Map fields are storage-only in settings.json; TUI editing should use shadow array fields with ui tags.
+	RequiredHeaders      map[string]string `json:"required_headers,omitempty" ui:"label=Headers;widget=kv;visible=false;readonly=false;order=60"`
 	UpstreamTimeout      Duration          `json:"upstream_timeout" ui:"label=Timeout;widget=duration;visible=true;readonly=false;order=30"`
 	MaxRetries           int               `json:"max_retries" ui:"label=Retries;widget=int;visible=true;readonly=false;order=40;min=1"`
 	RetryBackoff         Duration          `json:"retry_backoff" ui:"label=Backoff;widget=duration;visible=true;readonly=false;order=50"`
 	MessagesInitSeqAgent bool              `json:"messages_init_seq_agent" ui:"label=MsgInitSeqAgent;widget=bool;visible=true;readonly=false;order=55;placeholder=true|false"`
+	ReasoningPoliciesMap map[string]string `json:"reasoning_policies,omitempty" ui:"label=ReasoningPoliciesMap;widget=kv;visible=false;readonly=false;order=65"`
+	ReasoningPolicies    []ReasoningPolicy `json:"-" ui:"key=reasoning_policies_ui;label=ReasoningPolicies;widget=array;visible=true;readonly=false;order=66;description=UI shadow list for reasoning_policies map. Use model@target rules with effort none|low|medium|high."`
+}
+
+type ReasoningPolicy struct {
+	Model  string `json:"model" ui:"label=Model;widget=text;visible=true;readonly=false;order=10;placeholder=gpt-5-mini"`
+	Target string `json:"target" ui:"label=Target;widget=text;visible=true;readonly=false;order=20;enum=chat,responses"`
+	Effort string `json:"effort" ui:"label=Effort;widget=text;visible=true;readonly=false;order=30;enum=none,low,medium,high"`
 }
 
 type Account struct {
@@ -109,14 +120,22 @@ func LoadSettings() (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
-	return applyDefaults(&settings), nil
+	loaded := applyDefaults(&settings)
+	if err := loaded.syncReasoningPoliciesFromMap(); err != nil {
+		return Settings{}, fmt.Errorf("decode reasoning policies: %w", err)
+	}
+	return loaded, nil
 }
 
 func SaveSettings(settings *Settings) error {
 	if settings == nil {
 		return ErrInvalidConfigPath
 	}
-	return saveJSON(SettingsPath, applyDefaults(settings))
+	sanitized := applyDefaults(settings)
+	if err := sanitized.syncReasoningPoliciesToMap(); err != nil {
+		return fmt.Errorf("encode reasoning policies: %w", err)
+	}
+	return saveJSON(SettingsPath, sanitized)
 }
 
 func DefaultSettings() Settings {
@@ -128,6 +147,8 @@ func DefaultSettings() Settings {
 		MaxRetries:           DefaultMaxRetries,
 		RetryBackoff:         NewDuration(DefaultRetryBackoff),
 		MessagesInitSeqAgent: false,
+		ReasoningPoliciesMap: nil,
+		ReasoningPolicies:    nil,
 	}
 }
 
@@ -303,4 +324,47 @@ func normalizeHeaders(headers map[string]string) map[string]string {
 		normalized[strings.ToLower(key)] = value
 	}
 	return normalized
+}
+
+func (settings *Settings) syncReasoningPoliciesFromMap() error {
+	if settings == nil {
+		return nil
+	}
+	parsed, err := reasoning.ParsePolicyMap(settings.ReasoningPoliciesMap)
+	if err != nil {
+		return err
+	}
+	if len(parsed) == 0 {
+		settings.ReasoningPolicies = nil
+		return nil
+	}
+	settings.ReasoningPolicies = make([]ReasoningPolicy, 0, len(parsed))
+	for _, item := range parsed {
+		settings.ReasoningPolicies = append(settings.ReasoningPolicies, ReasoningPolicy{
+			Model:  item.Model,
+			Target: item.Target,
+			Effort: item.Effort,
+		})
+	}
+	return nil
+}
+
+func (settings *Settings) syncReasoningPoliciesToMap() error {
+	if settings == nil {
+		return nil
+	}
+	items := make([]reasoning.Policy, 0, len(settings.ReasoningPolicies))
+	for _, item := range settings.ReasoningPolicies {
+		items = append(items, reasoning.Policy{
+			Model:  item.Model,
+			Target: item.Target,
+			Effort: item.Effort,
+		})
+	}
+	encoded, err := reasoning.BuildPolicyMap(items)
+	if err != nil {
+		return err
+	}
+	settings.ReasoningPoliciesMap = encoded
+	return nil
 }

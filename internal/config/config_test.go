@@ -60,6 +60,36 @@ func TestSaveLoadSettings(t *testing.T) {
 	}
 }
 
+func TestSaveLoadSettingsReasoningPoliciesShadowSync(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	input := DefaultSettings()
+	input.ReasoningPolicies = []ReasoningPolicy{
+		{Model: "gpt-5-mini", Target: "responses", Effort: "low"},
+		{Model: "grok-code-fast-1", Target: "chat", Effort: "none"},
+	}
+
+	if err := SaveSettings(&input); err != nil {
+		t.Fatalf("SaveSettings error: %v", err)
+	}
+
+	output, err := LoadSettings()
+	if err != nil {
+		t.Fatalf("LoadSettings error: %v", err)
+	}
+
+	if len(output.ReasoningPoliciesMap) != 2 {
+		t.Fatalf("expected reasoning policies map persisted, got %#v", output.ReasoningPoliciesMap)
+	}
+	if output.ReasoningPoliciesMap["gpt-5-mini@responses"] != "low" {
+		t.Fatalf("expected map value gpt-5-mini@responses=low, got %#v", output.ReasoningPoliciesMap)
+	}
+	if len(output.ReasoningPolicies) != 2 {
+		t.Fatalf("expected shadow reasoning policies loaded, got %#v", output.ReasoningPolicies)
+	}
+}
+
 func TestLoadAuthMissing(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

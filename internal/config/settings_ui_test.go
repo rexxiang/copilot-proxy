@@ -31,7 +31,9 @@ func TestSettingsFieldSpecs_Matrix(t *testing.T) {
 		{key: "max_retries", widget: WidgetInt, visible: true, readonly: false},
 		{key: "retry_backoff", widget: WidgetDuration, visible: true, readonly: false},
 		{key: "messages_init_seq_agent", widget: WidgetBool, visible: true, readonly: false},
-		{key: "required_headers", widget: WidgetKeyValue, visible: true, readonly: false},
+		{key: "required_headers", widget: WidgetKeyValue, visible: false, readonly: false},
+		{key: "reasoning_policies", widget: WidgetKeyValue, visible: false, readonly: false},
+		{key: "reasoning_policies_ui", widget: WidgetArray, visible: true, readonly: false},
 	}
 
 	for i := range cases {
@@ -103,6 +105,43 @@ func TestBuildFieldSpecsForType_LabelTag(t *testing.T) {
 	}
 }
 
+func TestBuildFieldSpecsForType_EnumAndDescription(t *testing.T) {
+	type sample struct {
+		Mode string `json:"mode" ui:"label=Mode;visible=true;readonly=false;enum=a,b,'c';description=mode field"`
+	}
+
+	specs, err := buildFieldSpecsForType(reflect.TypeOf(sample{}))
+	if err != nil {
+		t.Fatalf("buildFieldSpecsForType error: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected one spec, got %d", len(specs))
+	}
+	if specs[0].Description != "mode field" {
+		t.Fatalf("unexpected description: %q", specs[0].Description)
+	}
+	if !reflect.DeepEqual(specs[0].EnumValues, []string{"a", "b", "c"}) {
+		t.Fatalf("unexpected enum values: %#v", specs[0].EnumValues)
+	}
+}
+
+func TestBuildFieldSpecsForType_UIOnlyFieldUsesTagKey(t *testing.T) {
+	type sample struct {
+		Hidden string `json:"-" ui:"key=hidden_key;label=Hidden;widget=text;visible=true;readonly=false"`
+	}
+
+	specs, err := buildFieldSpecsForType(reflect.TypeOf(sample{}))
+	if err != nil {
+		t.Fatalf("buildFieldSpecsForType error: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected one spec, got %d", len(specs))
+	}
+	if specs[0].Key != "hidden_key" {
+		t.Fatalf("expected hidden_key, got %q", specs[0].Key)
+	}
+}
+
 func TestEncodeDecodeSettingsForm(t *testing.T) {
 	specs, err := SettingsFieldSpecs()
 	if err != nil {
@@ -119,6 +158,9 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 		UpstreamTimeout: NewDuration(40 * time.Second),
 		MaxRetries:      3,
 		RetryBackoff:    NewDuration(2 * time.Second),
+		ReasoningPolicies: []ReasoningPolicy{
+			{Model: "gpt-5-mini", Target: "responses", Effort: "low"},
+		},
 	}
 
 	form, err := EncodeSettingsToForm(&base, specs)
@@ -130,9 +172,9 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	form.ScalarValues["max_retries"] = "6"
 	form.ScalarValues["retry_backoff"] = "5s"
 	form.ScalarValues["messages_init_seq_agent"] = "true"
-	form.KeyValueValues["required_headers"] = []HeaderKV{
-		{Key: "user-agent", Value: "copilot/2.0"},
-		{Key: "x-custom", Value: "yes"},
+	form.ObjectArrayValues["reasoning_policies_ui"] = []map[string]string{
+		{"model": "gpt-5-mini", "target": "responses", "effort": "high"},
+		{"model": "grok-code-fast-1", "target": "chat", "effort": "none"},
 	}
 
 	decoded, err := DecodeFormToSettings(&base, specs, form)
@@ -158,8 +200,14 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	if !decoded.MessagesInitSeqAgent {
 		t.Fatalf("expected messages_init_seq_agent=true")
 	}
-	if decoded.RequiredHeaders["x-custom"] != "yes" {
-		t.Fatalf("expected required_headers[x-custom]=yes")
+	if decoded.RequiredHeaders["user-agent"] != "copilot/1.0" {
+		t.Fatalf("hidden required_headers should remain unchanged")
+	}
+	if len(decoded.ReasoningPolicies) != 2 {
+		t.Fatalf("expected two reasoning policies, got %#v", decoded.ReasoningPolicies)
+	}
+	if decoded.ReasoningPolicies[0].Effort != "high" || decoded.ReasoningPolicies[1].Effort != "none" {
+		t.Fatalf("unexpected decoded reasoning policies: %#v", decoded.ReasoningPolicies)
 	}
 }
 
@@ -205,19 +253,10 @@ func TestDecodeFormToSettings_Validation(t *testing.T) {
 			},
 		},
 		{
-			name: "duplicate header",
+			name: "invalid array enum effort",
 			mutate: func(form *SettingsForm) {
-				form.KeyValueValues["required_headers"] = []HeaderKV{
-					{Key: "X-Token", Value: "1"},
-					{Key: "x-token", Value: "2"},
-				}
-			},
-		},
-		{
-			name: "empty header key",
-			mutate: func(form *SettingsForm) {
-				form.KeyValueValues["required_headers"] = []HeaderKV{
-					{Key: "", Value: "1"},
+				form.ObjectArrayValues["reasoning_policies_ui"] = []map[string]string{
+					{"model": "gpt-5-mini", "target": "responses", "effort": "max"},
 				}
 			},
 		},
@@ -231,5 +270,52 @@ func TestDecodeFormToSettings_Validation(t *testing.T) {
 		if _, err := DecodeFormToSettings(&base, specs, form); err == nil {
 			t.Fatalf("%s: expected validation error", tc.name)
 		}
+	}
+}
+
+func TestBuildFieldSpecsForType_VisibleMapFieldUnsupported(t *testing.T) {
+	type invalid struct {
+		Headers map[string]string `json:"headers" ui:"label=Headers;widget=kv;visible=true;readonly=false"`
+	}
+
+	_, err := buildFieldSpecsForType(reflect.TypeOf(invalid{}))
+	if err == nil {
+		t.Fatalf("expected error for visible map field")
+	}
+	if !strings.Contains(err.Error(), "visible map field unsupported") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEncodeDecodeMapRowsSupportsObjectValue(t *testing.T) {
+	type mapValue struct {
+		Enabled bool   `json:"enabled"`
+		Level   string `json:"level"`
+	}
+	input := map[string]mapValue{
+		"rule-a": {Enabled: true, Level: "high"},
+	}
+
+	rows, err := encodeMapRows(reflect.ValueOf(input))
+	if err != nil {
+		t.Fatalf("encodeMapRows error: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected one row, got %d", len(rows))
+	}
+	if !strings.Contains(rows[0].Value, "\"enabled\":true") {
+		t.Fatalf("expected json value encoding, got %q", rows[0].Value)
+	}
+
+	decoded, err := decodeMapRows(rows, reflect.TypeOf(map[string]mapValue{}))
+	if err != nil {
+		t.Fatalf("decodeMapRows error: %v", err)
+	}
+	got, ok := decoded.Interface().(map[string]mapValue)
+	if !ok {
+		t.Fatalf("expected map[string]mapValue, got %T", decoded.Interface())
+	}
+	if !reflect.DeepEqual(input, got) {
+		t.Fatalf("decoded map mismatch: %#v != %#v", input, got)
 	}
 }

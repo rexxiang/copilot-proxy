@@ -140,7 +140,7 @@ func buildServerWithDepsWithContext(ctx context.Context, deps *ServerDeps) (*ser
 			MessagesInitSeqAgent: settings.MessagesInitSeqAgent,
 		}),
 		upstream.NewCaptureDebug(),
-		upstream.NewMessagesTranslate(modelCatalog, nil, config.PathMapping),
+		upstream.NewMessagesTranslate(modelCatalog, nil, config.PathMapping, settings.ReasoningPoliciesMap),
 		upstream.NewTokenInjection(),
 		upstream.NewStaticHeaders(requiredHeaders),
 		upstream.NewDynamicHeaders(),
