@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -35,8 +36,10 @@ func TestConfigModal_OpenUsesVisibleFieldSpecs(t *testing.T) {
 		"upstream_timeout",
 		"max_retries",
 		"retry_backoff",
+		"rate_limit_seconds",
 		"messages_init_seq_agent",
 		"reasoning_policies_ui",
+		"claude_haiku_fallback_models_ui",
 	}
 	if len(keys) != len(expected) {
 		t.Fatalf("unexpected visible key count: got %d want %d", len(keys), len(expected))
@@ -332,7 +335,7 @@ func TestConfigModal_ViewShowsCursorForEditableField(t *testing.T) {
 	focusFieldByKey(t, modal, "upstream_timeout")
 
 	view := stripANSI(modal.View())
-	if !strings.Contains(view, "Timeout") || !strings.Contains(view, "[5m0s") {
+	if !strings.Contains(view, "Timeout") || !strings.Contains(view, "[5m") {
 		t.Fatalf("expected timeout input box in view, got:\n%s", view)
 	}
 }
@@ -348,7 +351,7 @@ func TestConfigModal_RealCursorMovementOnScalarInput(t *testing.T) {
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyLeft})
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 
-	if got := modal.FieldValue("upstream_timeout"); got != "5m0xs" {
+	if got := modal.FieldValue("upstream_timeout"); got != "5xm" {
 		t.Fatalf("expected cursor-aware insertion, got %q", got)
 	}
 }
@@ -379,6 +382,82 @@ func TestConfigModal_BuildCandidateFromReasoningPolicyArray(t *testing.T) {
 	}
 	if candidate.ReasoningPolicies[0].Target != "responses" || candidate.ReasoningPolicies[0].Effort != "high" {
 		t.Fatalf("unexpected policy values: %#v", candidate.ReasoningPolicies[0])
+	}
+}
+
+func TestConfigModal_BuildCandidateTreatsEmptyRateLimitAsZero(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	base.RateLimitSeconds = 0
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "rate_limit_seconds")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyBackspace})
+
+	candidate, err := modal.BuildCandidate(&base)
+	if err != nil {
+		t.Fatalf("BuildCandidate error: %v", err)
+	}
+	if candidate.RateLimitSeconds != 0 {
+		t.Fatalf("expected empty rate limit to decode as 0, got %d", candidate.RateLimitSeconds)
+	}
+}
+
+func TestConfigModal_ArrayCtrlDownReordersRows(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	base.ClaudeHaikuFallbackModels = []string{"gpt-5-mini", "grok-code-fast-1"}
+	base.ClaudeHaikuFallbackModelsUI = []config.HaikuFallbackModel{
+		{Model: "gpt-5-mini"},
+		{Model: "grok-code-fast-1"},
+	}
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "claude_haiku_fallback_models_ui")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlDown})
+
+	rows := modal.form.ObjectArrayValues["claude_haiku_fallback_models_ui"]
+	if got := rows[0]["model"]; got != "grok-code-fast-1" {
+		t.Fatalf("expected first row to move down, got %#v", rows)
+	}
+	if got := rows[1]["model"]; got != "gpt-5-mini" {
+		t.Fatalf("expected second row to move up, got %#v", rows)
+	}
+
+	candidate, err := modal.BuildCandidate(&base)
+	if err != nil {
+		t.Fatalf("BuildCandidate error: %v", err)
+	}
+	if want := []string{"grok-code-fast-1", "gpt-5-mini"}; !reflect.DeepEqual(candidate.ClaudeHaikuFallbackModels, want) {
+		t.Fatalf("unexpected reordered fallbacks: got %#v want %#v", candidate.ClaudeHaikuFallbackModels, want)
+	}
+}
+
+func TestConfigModal_ArrayAltDownReordersRows(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	base.ClaudeHaikuFallbackModels = []string{"gpt-5-mini", "grok-code-fast-1"}
+	base.ClaudeHaikuFallbackModelsUI = []config.HaikuFallbackModel{
+		{Model: "gpt-5-mini"},
+		{Model: "grok-code-fast-1"},
+	}
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "claude_haiku_fallback_models_ui")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyDown, Alt: true})
+
+	rows := modal.form.ObjectArrayValues["claude_haiku_fallback_models_ui"]
+	if got := rows[0]["model"]; got != "grok-code-fast-1" {
+		t.Fatalf("expected alt+down to move first row down, got %#v", rows)
+	}
+	if got := rows[1]["model"]; got != "gpt-5-mini" {
+		t.Fatalf("expected alt+down to move second row up, got %#v", rows)
 	}
 }
 

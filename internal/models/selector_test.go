@@ -87,6 +87,39 @@ func TestSelectMappedHaikuFallsBackToGrokWhenGPT5MiniMissing(t *testing.T) {
 	}
 }
 
+func TestSelectMappedHaikuUsesConfiguredFallbackOrder(t *testing.T) {
+	selector := NewSelectorWithConfig(SelectorConfig{
+		ClaudeHaikuFallbackModels: []string{"grok-code-fast-1", modelGPT5Mini},
+	})
+	models := []ModelInfo{
+		{ID: modelGPT5Mini, Family: modelGPT5Mini},
+		{ID: "grok-code-fast-1", Family: "grok-code-fast-1"},
+		{ID: "claude-haiku-3.2", Family: "claude-haiku-3.2"},
+	}
+
+	selected, ok := selector.Select(models, "claude-haiku-3")
+	if !ok || selected != "grok-code-fast-1" {
+		t.Fatalf("expected configured haiku fallback order to prefer grok-code-fast-1, got %q (ok=%v)", selected, ok)
+	}
+}
+
+func TestSelectMappedHaikuWithEmptyConfiguredFallbacksUsesBuiltInHaikuFallback(t *testing.T) {
+	selector := NewSelectorWithConfig(SelectorConfig{
+		ClaudeHaikuFallbackModels: []string{},
+	})
+	models := []ModelInfo{
+		{ID: modelGPT5Mini, Family: modelGPT5Mini},
+		{ID: "grok-code-fast-1", Family: "grok-code-fast-1"},
+		{ID: "claude-haiku-3.10", Family: "claude-haiku-3.10"},
+		{ID: "claude-haiku-3.2", Family: "claude-haiku-3.2"},
+	}
+
+	selected, ok := selector.Select(models, "claude-haiku-3")
+	if !ok || selected != "claude-haiku-3.10" {
+		t.Fatalf("expected empty configured fallbacks to use built-in haiku fallback, got %q (ok=%v)", selected, ok)
+	}
+}
+
 func TestSelectMappedHaikuHighestVersion(t *testing.T) {
 	selector := NewSelector()
 	models := []ModelInfo{

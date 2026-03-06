@@ -30,10 +30,12 @@ func TestSettingsFieldSpecs_Matrix(t *testing.T) {
 		{key: "upstream_timeout", widget: WidgetDuration, visible: true, readonly: false},
 		{key: "max_retries", widget: WidgetInt, visible: true, readonly: false},
 		{key: "retry_backoff", widget: WidgetDuration, visible: true, readonly: false},
+		{key: "rate_limit_seconds", widget: WidgetInt, visible: true, readonly: false},
 		{key: "messages_init_seq_agent", widget: WidgetBool, visible: true, readonly: false},
 		{key: "required_headers", widget: WidgetKeyValue, visible: false, readonly: false},
 		{key: "reasoning_policies", widget: WidgetKeyValue, visible: false, readonly: false},
 		{key: "reasoning_policies_ui", widget: WidgetArray, visible: true, readonly: false},
+		{key: "claude_haiku_fallback_models_ui", widget: WidgetArray, visible: true, readonly: false},
 	}
 
 	for i := range cases {
@@ -51,6 +53,25 @@ func TestSettingsFieldSpecs_Matrix(t *testing.T) {
 		if spec.ReadOnly != tc.readonly {
 			t.Fatalf("unexpected readonly for %s: got %v want %v", tc.key, spec.ReadOnly, tc.readonly)
 		}
+	}
+}
+
+func TestSettingsFieldSpecs_UsesReadableLabels(t *testing.T) {
+	specs, err := SettingsFieldSpecs()
+	if err != nil {
+		t.Fatalf("SettingsFieldSpecs error: %v", err)
+	}
+
+	byKey := make(map[string]FieldSpec, len(specs))
+	for i := range specs {
+		byKey[specs[i].Key] = specs[i]
+	}
+
+	if got := byKey["messages_init_seq_agent"].Label; got != "Msg Init Seq Agent" {
+		t.Fatalf("unexpected messages_init_seq_agent label: %q", got)
+	}
+	if got := byKey["reasoning_policies_ui"].Label; got != "Reasoning Policies" {
+		t.Fatalf("unexpected reasoning_policies_ui label: %q", got)
 	}
 }
 
@@ -155,13 +176,16 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 		RequiredHeaders: map[string]string{
 			"user-agent": "copilot/1.0",
 		},
-		UpstreamTimeout: NewDuration(40 * time.Second),
-		MaxRetries:      3,
-		RetryBackoff:    NewDuration(2 * time.Second),
+		UpstreamTimeout:  NewDuration(40 * time.Second),
+		MaxRetries:       3,
+		RetryBackoff:     NewDuration(2 * time.Second),
+		RateLimitSeconds: 0,
 		ReasoningPolicies: []ReasoningPolicy{
 			{Model: "gpt-5-mini", Target: "responses", Effort: "low"},
 		},
+		ClaudeHaikuFallbackModels: []string{"gpt-5-mini", "grok-code-fast-1"},
 	}
+	base.syncClaudeHaikuFallbackModelsFromStorage()
 
 	form, err := EncodeSettingsToForm(&base, specs)
 	if err != nil {
@@ -171,10 +195,15 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	form.ScalarValues["upstream_timeout"] = "1m0s"
 	form.ScalarValues["max_retries"] = "6"
 	form.ScalarValues["retry_backoff"] = "5s"
+	form.ScalarValues["rate_limit_seconds"] = ""
 	form.ScalarValues["messages_init_seq_agent"] = "true"
 	form.ObjectArrayValues["reasoning_policies_ui"] = []map[string]string{
 		{"model": "gpt-5-mini", "target": "responses", "effort": "high"},
 		{"model": "grok-code-fast-1", "target": "chat", "effort": "none"},
+	}
+	form.ObjectArrayValues["claude_haiku_fallback_models_ui"] = []map[string]string{
+		{"model": "grok-code-fast-1"},
+		{"model": "gpt-5-mini"},
 	}
 
 	decoded, err := DecodeFormToSettings(&base, specs, form)
@@ -197,6 +226,9 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	if decoded.RetryBackoff.Duration() != 5*time.Second {
 		t.Fatalf("unexpected retry_backoff: %s", decoded.RetryBackoff.Duration())
 	}
+	if decoded.RateLimitSeconds != 0 {
+		t.Fatalf("expected empty rate_limit_seconds to decode as 0, got %d", decoded.RateLimitSeconds)
+	}
 	if !decoded.MessagesInitSeqAgent {
 		t.Fatalf("expected messages_init_seq_agent=true")
 	}
@@ -208,6 +240,9 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	}
 	if decoded.ReasoningPolicies[0].Effort != "high" || decoded.ReasoningPolicies[1].Effort != "none" {
 		t.Fatalf("unexpected decoded reasoning policies: %#v", decoded.ReasoningPolicies)
+	}
+	if !reflect.DeepEqual(decoded.ClaudeHaikuFallbackModels, []string{"grok-code-fast-1", "gpt-5-mini"}) {
+		t.Fatalf("unexpected decoded haiku fallbacks: %#v", decoded.ClaudeHaikuFallbackModels)
 	}
 }
 
@@ -244,6 +279,18 @@ func TestDecodeFormToSettings_Validation(t *testing.T) {
 			name: "invalid bool",
 			mutate: func(form *SettingsForm) {
 				form.ScalarValues["messages_init_seq_agent"] = "maybe"
+			},
+		},
+		{
+			name: "invalid rate limit int",
+			mutate: func(form *SettingsForm) {
+				form.ScalarValues["rate_limit_seconds"] = "abc"
+			},
+		},
+		{
+			name: "negative rate limit int",
+			mutate: func(form *SettingsForm) {
+				form.ScalarValues["rate_limit_seconds"] = "-1"
 			},
 		},
 		{

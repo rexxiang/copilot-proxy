@@ -2,13 +2,31 @@ package models
 
 import "strings"
 
-type Selector struct{}
+type Selector struct {
+	claudeHaikuFallbackModels []string
+}
+
+type SelectorConfig struct {
+	ClaudeHaikuFallbackModels []string
+}
 
 const (
 	base10 = 10
 )
 
-func NewSelector() *Selector { return &Selector{} }
+var defaultClaudeHaikuFallbackModels = []string{"gpt-5-mini", "grok-code-fast-1"}
+
+func NewSelector() *Selector {
+	return NewSelectorWithConfig(SelectorConfig{
+		ClaudeHaikuFallbackModels: defaultClaudeHaikuFallbackModels,
+	})
+}
+
+func NewSelectorWithConfig(cfg SelectorConfig) *Selector {
+	return &Selector{
+		claudeHaikuFallbackModels: normalizeModelIDs(cfg.ClaudeHaikuFallbackModels),
+	}
+}
 
 func (s *Selector) SelectModelInfo(models []ModelInfo, requested string) (ModelInfo, bool, bool) {
 	if len(models) == 0 || strings.TrimSpace(requested) == "" {
@@ -64,11 +82,10 @@ func (s *Selector) SelectMappedCaseInsensitive(models []ModelInfo, requested str
 	lowerRequested := strings.ToLower(normalized)
 	switch {
 	case strings.HasPrefix(lowerRequested, "claude-haiku-"):
-		if selected, ok := findExactID(models, "gpt-5-mini"); ok {
-			return selected, true
-		}
-		if selected, ok := findExactID(models, "grok-code-fast-1"); ok {
-			return selected, true
+		for _, candidate := range s.claudeHaikuFallbackModels {
+			if selected, ok := findExactID(models, candidate); ok {
+				return selected, true
+			}
 		}
 		if selected, ok := selectHighestVersion(models, "claude-haiku-"); ok {
 			return selected, true
@@ -189,4 +206,22 @@ func compareSegments(a, b []int) int {
 		}
 	}
 	return 0
+}
+
+func normalizeModelIDs(items []string) []string {
+	if items == nil {
+		return nil
+	}
+	normalized := make([]string, 0, len(items))
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	if len(normalized) == 0 {
+		return []string{}
+	}
+	return normalized
 }

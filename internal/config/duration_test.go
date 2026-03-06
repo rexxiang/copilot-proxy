@@ -26,6 +26,16 @@ func TestDurationUnmarshalNumberSeconds(t *testing.T) {
 	}
 }
 
+func TestDurationMarshalSimplifiesTrailingZeroUnits(t *testing.T) {
+	data, err := json.Marshal(NewDuration(5 * time.Minute))
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	if string(data) != `"5m"` {
+		t.Fatalf("expected simplified duration JSON \"5m\", got %s", string(data))
+	}
+}
+
 func TestDurationUnmarshalRejectsSubSecond(t *testing.T) {
 	var d Duration
 	if err := json.Unmarshal([]byte(`"500ms"`), &d); err == nil {

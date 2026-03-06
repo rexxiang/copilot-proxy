@@ -83,12 +83,21 @@ When enabled, `/v1/messages` requests where all message roles are `user` and mes
 ```json
 {
   "messages_init_seq_agent": false,
+  "rate_limit_seconds": 0,
+  "claude_haiku_fallback_models": [
+    "gpt-5-mini",
+    "grok-code-fast-1"
+  ],
   "reasoning_policies": {
     "gpt-5-mini@responses": "low",
     "grok-code-fast-1@chat": "none"
   }
 }
 ```
+
+`rate_limit_seconds` uses whole seconds and enforces a global cooldown between one proxied request finishing and the next starting. `0` disables rate limiting.
+
+`claude_haiku_fallback_models` is an ordered list of explicit replacement models to try for `claude-haiku-*` requests. If none are available, the proxy automatically falls back to the highest available `claude-haiku-*` model.
 
 `reasoning_policies` values must be `none|low|medium|high`.  
 For `/v1/messages` requests, reasoning effort is only sent upstream when the selected model reports supported levels via `/models` capability metadata.

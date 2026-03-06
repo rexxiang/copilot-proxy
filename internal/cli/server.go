@@ -46,9 +46,10 @@ type ServerDeps struct {
 }
 
 type serverRuntime struct {
-	server       *server.Server
-	proxyHandler http.Handler
-	authStore    upstream.AuthStore
+	server        *server.Server
+	proxyHandler  http.Handler
+	authStore     upstream.AuthStore
+	requestCloser interface{ Close() error }
 }
 
 const (
@@ -140,14 +141,16 @@ func buildServerWithDepsWithContext(ctx context.Context, deps *ServerDeps) (*ser
 			MessagesInitSeqAgent: settings.MessagesInitSeqAgent,
 		}),
 		upstream.NewCaptureDebug(),
-		upstream.NewMessagesTranslate(modelCatalog, nil, config.PathMapping, settings.ReasoningPoliciesMap),
+		upstream.NewMessagesTranslate(modelCatalog, models.NewSelectorWithConfig(models.SelectorConfig{
+			ClaudeHaikuFallbackModels: settings.ClaudeHaikuFallbackModels,
+		}), config.PathMapping, settings.ReasoningPoliciesMap),
 		upstream.NewTokenInjection(),
 		upstream.NewStaticHeaders(requiredHeaders),
 		upstream.NewDynamicHeaders(),
 		upstream.NewMetrics(deps.Metrics),
 		upstream.NewDebugLog(deps.DebugLogger),
 	}
-	proxyHandler, err := proxy.NewHandler(&proxy.HandlerConfig{
+	baseProxyHandler, err := proxy.NewHandler(&proxy.HandlerConfig{
 		UpstreamURL:         settings.UpstreamBase,
 		Transport:           transport,
 		UpstreamMiddlewares: upstreamMiddlewares,
@@ -155,10 +158,18 @@ func buildServerWithDepsWithContext(ctx context.Context, deps *ServerDeps) (*ser
 	if err != nil {
 		return nil, fmt.Errorf("build proxy handler: %w", err)
 	}
+	var proxyHandler http.Handler = baseProxyHandler
+	var requestCloser interface{ Close() error }
+	if settings.RateLimitSeconds > 0 {
+		rateLimited := proxy.NewRateLimitedHandler(proxyHandler, time.Duration(settings.RateLimitSeconds)*time.Second)
+		proxyHandler = rateLimited
+		requestCloser = rateLimited
+	}
 	return &serverRuntime{
-		server:       server.New(&settings, proxyHandler),
-		proxyHandler: proxyHandler,
-		authStore:    store,
+		server:        server.New(&settings, proxyHandler),
+		proxyHandler:  proxyHandler,
+		authStore:     store,
+		requestCloser: requestCloser,
 	}, nil
 }
 
@@ -421,6 +432,11 @@ func runWithTUI(
 		return cancel
 	}
 	stopRuntime := func(rt *serverRuntime, cancel context.CancelFunc) error {
+		if rt != nil && rt.requestCloser != nil {
+			if err := rt.requestCloser.Close(); err != nil {
+				return fmt.Errorf("close request gate: %w", err)
+			}
+		}
 		if cancel != nil {
 			cancel()
 		}

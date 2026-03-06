@@ -28,23 +28,31 @@ func TestLoadSettingsDefaultWhenMissing(t *testing.T) {
 	if settings.MessagesInitSeqAgent {
 		t.Fatalf("expected messages_init_seq_agent default false")
 	}
+	if settings.RateLimitSeconds != 0 {
+		t.Fatalf("expected rate_limit_seconds default 0, got %d", settings.RateLimitSeconds)
+	}
+	if !reflect.DeepEqual(settings.ClaudeHaikuFallbackModels, []string{"gpt-5-mini", "grok-code-fast-1"}) {
+		t.Fatalf("unexpected default haiku fallbacks: %#v", settings.ClaudeHaikuFallbackModels)
+	}
 }
 
 func TestSaveLoadSettings(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	input := Settings{
-		ListenAddr:           "127.0.0.1:1234",
-		UpstreamBase:         "https://example.com",
-		MessagesInitSeqAgent: true,
-		RequiredHeaders: map[string]string{
-			"X-Test": "1",
-		},
-		UpstreamTimeout: NewDuration(45 * time.Second),
-		MaxRetries:      5,
-		RetryBackoff:    NewDuration(2 * time.Second),
+	input := DefaultSettings()
+	input.ListenAddr = "127.0.0.1:1234"
+	input.UpstreamBase = "https://example.com"
+	input.MessagesInitSeqAgent = true
+	input.RequiredHeaders = map[string]string{
+		"X-Test": "1",
 	}
+	input.UpstreamTimeout = NewDuration(45 * time.Second)
+	input.MaxRetries = 5
+	input.RetryBackoff = NewDuration(2 * time.Second)
+	input.RateLimitSeconds = 9
+	input.ClaudeHaikuFallbackModels = []string{"grok-code-fast-1", "gpt-5-mini"}
+	input.syncClaudeHaikuFallbackModelsFromStorage()
 
 	if err := SaveSettings(&input); err != nil {
 		t.Fatalf("SaveSettings error: %v", err)
@@ -55,8 +63,42 @@ func TestSaveLoadSettings(t *testing.T) {
 		t.Fatalf("LoadSettings error: %v", err)
 	}
 
-	if !reflect.DeepEqual(input, output) {
-		t.Fatalf("settings mismatch: %#v != %#v", input, output)
+	if output.ListenAddr != input.ListenAddr {
+		t.Fatalf("unexpected listen addr: got %q want %q", output.ListenAddr, input.ListenAddr)
+	}
+	if output.UpstreamBase != input.UpstreamBase {
+		t.Fatalf("unexpected upstream base: got %q want %q", output.UpstreamBase, input.UpstreamBase)
+	}
+	if output.RateLimitSeconds != input.RateLimitSeconds {
+		t.Fatalf("unexpected rate limit seconds: got %d want %d", output.RateLimitSeconds, input.RateLimitSeconds)
+	}
+	if !reflect.DeepEqual(output.ClaudeHaikuFallbackModels, input.ClaudeHaikuFallbackModels) {
+		t.Fatalf("unexpected haiku fallbacks: got %#v want %#v", output.ClaudeHaikuFallbackModels, input.ClaudeHaikuFallbackModels)
+	}
+}
+
+func TestSaveLoadSettingsExplicitEmptyClaudeHaikuFallbackModels(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	input := DefaultSettings()
+	input.ClaudeHaikuFallbackModels = []string{}
+	input.ClaudeHaikuFallbackModelsUI = []HaikuFallbackModel{}
+
+	if err := SaveSettings(&input); err != nil {
+		t.Fatalf("SaveSettings error: %v", err)
+	}
+
+	output, err := LoadSettings()
+	if err != nil {
+		t.Fatalf("LoadSettings error: %v", err)
+	}
+
+	if output.ClaudeHaikuFallbackModels == nil {
+		t.Fatalf("expected explicit empty haiku fallbacks to be preserved, got nil")
+	}
+	if len(output.ClaudeHaikuFallbackModels) != 0 {
+		t.Fatalf("expected explicit empty haiku fallbacks, got %#v", output.ClaudeHaikuFallbackModels)
 	}
 }
 

@@ -206,6 +206,7 @@ func (m *ConfigModal) Open(settings *config.Settings) error {
 			m.normalizeArrayRows(spec)
 		}
 	}
+	m.baseForm = m.form.Clone()
 	m.syncInputFocus()
 	return nil
 }
@@ -296,6 +297,12 @@ func (m *ConfigModal) HandleKey(msg tea.KeyMsg) ModalAction {
 		}
 		m.moveFocus(-1)
 		m.syncInputFocus()
+		return ModalActionNone
+	case keyMatches(msg, tea.KeyCtrlUp, "ctrl+up", "alt+up", "opt+up"):
+		m.handleCollectionRowMove(-1)
+		return ModalActionNone
+	case keyMatches(msg, tea.KeyCtrlDown, "ctrl+down", "alt+down", "opt+down"):
+		m.handleCollectionRowMove(1)
 		return ModalActionNone
 	case keyMatches(msg, tea.KeyUp, "up"):
 		m.handleVerticalMove(-1)
@@ -724,6 +731,47 @@ func (m *ConfigModal) handleCollectionColMove(step int) {
 	m.syncInputFocus()
 }
 
+func (m *ConfigModal) handleCollectionRowMove(step int) {
+	spec := m.currentSpec()
+	if spec == nil || spec.ReadOnly || spec.Widget != config.WidgetArray {
+		return
+	}
+
+	m.normalizeArrayRows(spec)
+	rows := m.form.ObjectArrayValues[spec.Key]
+	if len(rows) <= 1 {
+		return
+	}
+	inputRows := m.arrayInputs[spec.Key]
+	cursor := m.arrayCursors[spec.Key]
+	if cursor.row < 0 || cursor.row >= len(rows) {
+		return
+	}
+
+	lastMovable := len(rows) - 1
+	if m.isArrayRowEmpty(spec, rows[lastMovable]) {
+		lastMovable--
+	}
+	if lastMovable < 0 || cursor.row > lastMovable {
+		return
+	}
+
+	target := cursor.row + step
+	if target < 0 || target > lastMovable {
+		return
+	}
+
+	rows[cursor.row], rows[target] = rows[target], rows[cursor.row]
+	if cursor.row < len(inputRows) && target < len(inputRows) {
+		inputRows[cursor.row], inputRows[target] = inputRows[target], inputRows[cursor.row]
+	}
+	m.form.ObjectArrayValues[spec.Key] = rows
+	m.arrayInputs[spec.Key] = inputRows
+	cursor.row = target
+	m.arrayCursors[spec.Key] = cursor
+	m.syncInputFocus()
+}
+
 func (m *ConfigModal) handleInputKey(msg tea.KeyMsg) {
 	spec := m.currentSpec()
 	if spec == nil || spec.ReadOnly {
@@ -865,7 +913,7 @@ func (m *ConfigModal) View() string {
 		return configModalStyle.Render(sb.String())
 	}
 
-	sb.WriteString(DimStyle.Render("Ctrl+S=save  Esc=close  Tab/↑↓=navigate  Ctrl+N/Ctrl+D=row  Ctrl+←/→=column"))
+	sb.WriteString(DimStyle.Render("Ctrl+S=save  Esc=close  Tab/↑↓=navigate  Ctrl+N/Ctrl+D=row  Ctrl+←/→=column  Ctrl/Opt+↑/↓=move row"))
 	sb.WriteString("\n\n")
 	for i := range m.specs {
 		sb.WriteString(m.renderFieldBlock(i))
@@ -1000,6 +1048,7 @@ func (m *ConfigModal) renderObjectArrayFieldBlock(spec *config.FieldSpec, label 
 	for rowIndex, row := range rows {
 		sb.WriteString("\n")
 		sb.WriteString(kvFieldIndent)
+		sb.WriteString(fmt.Sprintf("%d. ", rowIndex+1))
 
 		cells := make([]string, 0, len(columns))
 		for colIndex, col := range columns {

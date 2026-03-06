@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -31,11 +32,18 @@ func (d Duration) IsSet() bool {
 	return d.set
 }
 
+func (d Duration) String() string {
+	if !d.set {
+		return ""
+	}
+	return formatCompactDuration(d.value)
+}
+
 func (d Duration) MarshalJSON() ([]byte, error) {
 	if !d.set {
 		return []byte("null"), nil
 	}
-	data, err := json.Marshal(d.value.String())
+	data, err := json.Marshal(d.String())
 	if err != nil {
 		return nil, fmt.Errorf("encode duration: %w", err)
 	}
@@ -83,4 +91,33 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 	}
 	d.value = time.Duration(seconds) * time.Second
 	return nil
+}
+
+func formatCompactDuration(value time.Duration) string {
+	if value == 0 {
+		return "0s"
+	}
+	if value < 0 || value%time.Second != 0 {
+		return value.String()
+	}
+
+	totalSeconds := int64(value / time.Second)
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	seconds := totalSeconds % 60
+
+	var builder strings.Builder
+	if hours > 0 {
+		builder.WriteString(fmt.Sprintf("%dh", hours))
+	}
+	if minutes > 0 {
+		builder.WriteString(fmt.Sprintf("%dm", minutes))
+	}
+	if seconds > 0 {
+		builder.WriteString(fmt.Sprintf("%ds", seconds))
+	}
+	if builder.Len() == 0 {
+		return "0s"
+	}
+	return builder.String()
 }
