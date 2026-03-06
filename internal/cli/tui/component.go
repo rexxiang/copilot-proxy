@@ -26,12 +26,13 @@ type ViewComponent interface {
 }
 
 type SharedState struct {
-	Snapshot   monitor.Snapshot
-	Models     []monitor.ModelInfo
-	UserInfo   *monitor.UserInfo
-	AuthConfig *config.AuthConfig
-	Width      int
-	Height     int
-	StatusMsg  string
-	StatusView ViewState
+	Snapshot    monitor.Snapshot
+	Models      []monitor.ModelInfo
+	UserInfo    *monitor.UserInfo
+	AuthConfig  *config.AuthConfig
+	LogsBlinkOn bool
+	Width       int
+	Height      int
+	StatusMsg   string
+	StatusView  ViewState
 }

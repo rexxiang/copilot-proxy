@@ -23,7 +23,7 @@ type LogsView struct {
 }
 
 const (
-	logsHeaderSeparatorWidth = 94
+	logsHeaderSeparatorWidth = 96
 	logsTimestampWidth       = 9
 	logsModelWidth           = 24
 	logsRequestWidth         = 24
@@ -35,6 +35,11 @@ const (
 )
 
 var logsPlainStyle = lipgloss.NewStyle()
+
+type logsRow struct {
+	record monitor.RequestRecord
+	active bool
+}
 
 func NewLogsView() *LogsView {
 	return &LogsView{}
@@ -51,7 +56,8 @@ func (v *LogsView) View() string {
 
 	// Table header (same style as Models view)
 	sb.WriteString(TableHeaderStyle.Render(fmt.Sprintf(
-		"%-9s %-24s %-24s %-5s %4s %8s %8s",
+		"%-1s %-9s %-24s %-24s %-5s %4s %8s %8s",
+		" ",
 		"Timestamp",
 		"Model",
 		"Request",
@@ -92,7 +98,8 @@ func (v *LogsView) View() string {
 		showing = end - start
 
 		for i := start; i < end; i++ {
-			record := &allRecords[i]
+			row := &allRecords[i]
+			record := &row.record
 			strikeRow := shouldStrikeRequestRow(record.StatusCode)
 			timestamp := record.Timestamp.Format("15:04:05")
 			model := Truncate(record.Model, logsModelWidth)
@@ -100,6 +107,11 @@ func (v *LogsView) View() string {
 				model = "-"
 			}
 			timeStyle, modelStyle := stylePrimaryColumns(record, premiumByModel)
+			indicatorRune := " "
+			if row.active && v.state != nil && v.state.LogsBlinkOn {
+				indicatorRune = "✦"
+			}
+			indicatorCol := renderCell(fmt.Sprintf("%-1s", indicatorRune), timeStyle, strikeRow)
 			timeCol := renderCell(fmt.Sprintf("%-*s", logsTimestampWidth, timestamp), timeStyle, strikeRow)
 			modelCol := renderCell(fmt.Sprintf("%-*s", logsModelWidth, model), modelStyle, strikeRow)
 
@@ -131,7 +143,8 @@ func (v *LogsView) View() string {
 
 			// Format row with fixed column widths
 			sb.WriteString(fmt.Sprintf(
-				"%s %s %s %s %s %s %s\n",
+				"%s %s %s %s %s %s %s %s\n",
+				indicatorCol,
 				timeCol,
 				modelCol,
 				requestInfo,
@@ -277,17 +290,27 @@ func renderCell(text string, baseStyle *lipgloss.Style, strike bool) string {
 }
 
 // mergeActiveAndCompleted merges active and completed requests, sorted by timestamp (newest first).
-func (v *LogsView) mergeActiveAndCompleted() []monitor.RequestRecord {
+func (v *LogsView) mergeActiveAndCompleted() []logsRow {
 	active := v.state.Snapshot.ActiveRequests
 	completed := v.state.Snapshot.RecentRequests
 
-	merged := make([]monitor.RequestRecord, 0, len(active)+len(completed))
-	merged = append(merged, active...)
-	merged = append(merged, completed...)
+	merged := make([]logsRow, 0, len(active)+len(completed))
+	for i := range active {
+		merged = append(merged, logsRow{
+			record: active[i],
+			active: true,
+		})
+	}
+	for i := range completed {
+		merged = append(merged, logsRow{
+			record: completed[i],
+			active: false,
+		})
+	}
 
 	// Sort by timestamp descending (newest first)
 	sort.Slice(merged, func(i, j int) bool {
-		return merged[i].Timestamp.After(merged[j].Timestamp)
+		return merged[i].record.Timestamp.After(merged[j].record.Timestamp)
 	})
 
 	return merged

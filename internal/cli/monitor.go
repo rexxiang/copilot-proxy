@@ -193,11 +193,12 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 	}
 
 	sharedState := &tui.SharedState{
-		Snapshot:   emptySnapshot(),
-		Models:     deps.Models,
-		UserInfo:   deps.UserInfo,
-		AuthConfig: deps.AuthConfig,
-		StatusView: tui.ViewStats,
+		Snapshot:    emptySnapshot(),
+		Models:      deps.Models,
+		UserInfo:    deps.UserInfo,
+		AuthConfig:  deps.AuthConfig,
+		LogsBlinkOn: true,
+		StatusView:  tui.ViewStats,
 	}
 
 	model := MonitorModel{
@@ -928,6 +929,9 @@ func (m *MonitorModel) handleWindowSize(msg tea.WindowSizeMsg) {
 
 func (m *MonitorModel) handleTick() (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{tickCmd()}
+	if m.sharedState != nil {
+		m.sharedState.LogsBlinkOn = !m.sharedState.LogsBlinkOn
+	}
 	if m.collector != nil {
 		m.snapshot = m.collector.Snapshot()
 		m.sharedState.Snapshot = m.snapshot
