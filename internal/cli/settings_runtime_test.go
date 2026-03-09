@@ -2,14 +2,16 @@ package cli
 
 import (
 	stderrors "errors"
+	"strings"
 	"testing"
 
 	"copilot-proxy/internal/config"
 )
 
 var (
-	errSwitchFailed  = stderrors.New("switch failed")
-	errPersistFailed = stderrors.New("persist failed")
+	errValidateFailed = stderrors.New("validate failed")
+	errPersistFailed  = stderrors.New("persist failed")
+	errPublishFailed  = stderrors.New("publish failed")
 )
 
 func TestSettingsRuntimeCoordinator_ApplySuccess(t *testing.T) {
@@ -17,26 +19,32 @@ func TestSettingsRuntimeCoordinator_ApplySuccess(t *testing.T) {
 	candidate := initial
 	candidate.MaxRetries = initial.MaxRetries + 2
 
-	switched := false
-	persisted := false
+	calls := make([]string, 0, 3)
 	coordinator := NewSettingsRuntimeCoordinator(&RuntimeCoordinatorConfig{
 		InitialSettings: initial,
-		SwitchRuntime: func(prev, next config.Settings) error {
-			switched = true
+		ValidateRuntime: func(next config.Settings) (RuntimeValidationResult, error) {
+			calls = append(calls, "validate")
 			if next.MaxRetries != candidate.MaxRetries {
-				t.Fatalf("unexpected candidate in switch: got %d want %d", next.MaxRetries, candidate.MaxRetries)
+				t.Fatalf("unexpected candidate in validate: got %d want %d", next.MaxRetries, candidate.MaxRetries)
 			}
-			return nil
+			return "snapshot-ok", nil
 		},
 		PersistSettings: func(settings config.Settings) error {
-			persisted = true
+			calls = append(calls, "persist")
 			if settings.MaxRetries != candidate.MaxRetries {
 				t.Fatalf("unexpected candidate in persist: got %d want %d", settings.MaxRetries, candidate.MaxRetries)
 			}
 			return nil
 		},
-		RollbackRuntime: func(settings config.Settings) error {
-			t.Fatalf("rollback should not be called on success")
+		PublishRuntime: func(next config.Settings, validated RuntimeValidationResult) error {
+			calls = append(calls, "publish")
+			if next.MaxRetries != candidate.MaxRetries {
+				t.Fatalf("unexpected candidate in publish: got %d want %d", next.MaxRetries, candidate.MaxRetries)
+			}
+			token, ok := validated.(string)
+			if !ok || token != "snapshot-ok" {
+				t.Fatalf("unexpected validated payload: %#v", validated)
+			}
 			return nil
 		},
 	})
@@ -45,11 +53,8 @@ func TestSettingsRuntimeCoordinator_ApplySuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
-	if !switched {
-		t.Fatalf("expected runtime switch to run")
-	}
-	if !persisted {
-		t.Fatalf("expected persist to run")
+	if got, want := strings.Join(calls, ","), "validate,persist,publish"; got != want {
+		t.Fatalf("unexpected call order: got %q want %q", got, want)
 	}
 	if applied.MaxRetries != candidate.MaxRetries {
 		t.Fatalf("unexpected applied max retries: got %d want %d", applied.MaxRetries, candidate.MaxRetries)
@@ -59,62 +64,59 @@ func TestSettingsRuntimeCoordinator_ApplySuccess(t *testing.T) {
 	}
 }
 
-func TestSettingsRuntimeCoordinator_ApplySwitchFailure(t *testing.T) {
+func TestSettingsRuntimeCoordinator_ApplyValidateFailure(t *testing.T) {
 	initial := config.DefaultSettings()
 	candidate := initial
 	candidate.MaxRetries = initial.MaxRetries + 1
 
 	persistCalled := false
-	rollbackCalled := false
+	publishCalled := false
 	coordinator := NewSettingsRuntimeCoordinator(&RuntimeCoordinatorConfig{
 		InitialSettings: initial,
-		SwitchRuntime: func(prev, next config.Settings) error {
-			return errSwitchFailed
+		ValidateRuntime: func(next config.Settings) (RuntimeValidationResult, error) {
+			return nil, errValidateFailed
 		},
 		PersistSettings: func(settings config.Settings) error {
 			persistCalled = true
 			return nil
 		},
-		RollbackRuntime: func(settings config.Settings) error {
-			rollbackCalled = true
+		PublishRuntime: func(next config.Settings, validated RuntimeValidationResult) error {
+			publishCalled = true
 			return nil
 		},
 	})
 
 	_, err := coordinator.Apply(&candidate)
 	if err == nil {
-		t.Fatalf("expected switch failure")
+		t.Fatalf("expected validate failure")
 	}
 	if persistCalled {
-		t.Fatalf("persist should not be called on switch failure")
+		t.Fatalf("persist should not be called on validate failure")
 	}
-	if rollbackCalled {
-		t.Fatalf("rollback should not be called when switch fails before apply")
+	if publishCalled {
+		t.Fatalf("publish should not be called on validate failure")
 	}
 	if coordinator.Current().MaxRetries != initial.MaxRetries {
 		t.Fatalf("coordinator current should remain unchanged")
 	}
 }
 
-func TestSettingsRuntimeCoordinator_ApplyPersistFailureRollsBack(t *testing.T) {
+func TestSettingsRuntimeCoordinator_ApplyPersistFailure(t *testing.T) {
 	initial := config.DefaultSettings()
 	candidate := initial
 	candidate.MaxRetries = initial.MaxRetries + 1
 
-	rollbackCalled := false
+	publishCalled := false
 	coordinator := NewSettingsRuntimeCoordinator(&RuntimeCoordinatorConfig{
 		InitialSettings: initial,
-		SwitchRuntime: func(prev, next config.Settings) error {
-			return nil
+		ValidateRuntime: func(next config.Settings) (RuntimeValidationResult, error) {
+			return "validated", nil
 		},
 		PersistSettings: func(settings config.Settings) error {
 			return errPersistFailed
 		},
-		RollbackRuntime: func(settings config.Settings) error {
-			rollbackCalled = true
-			if settings.MaxRetries != initial.MaxRetries {
-				t.Fatalf("rollback should target initial settings")
-			}
+		PublishRuntime: func(next config.Settings, validated RuntimeValidationResult) error {
+			publishCalled = true
 			return nil
 		},
 	})
@@ -123,10 +125,40 @@ func TestSettingsRuntimeCoordinator_ApplyPersistFailureRollsBack(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected persist failure")
 	}
-	if !rollbackCalled {
-		t.Fatalf("expected rollback on persist failure")
+	if publishCalled {
+		t.Fatalf("publish should not be called when persist fails")
 	}
 	if coordinator.Current().MaxRetries != initial.MaxRetries {
 		t.Fatalf("coordinator current should remain unchanged on persist failure")
+	}
+}
+
+func TestSettingsRuntimeCoordinator_ApplyPublishFailure(t *testing.T) {
+	initial := config.DefaultSettings()
+	candidate := initial
+	candidate.MaxRetries = initial.MaxRetries + 1
+
+	coordinator := NewSettingsRuntimeCoordinator(&RuntimeCoordinatorConfig{
+		InitialSettings: initial,
+		ValidateRuntime: func(next config.Settings) (RuntimeValidationResult, error) {
+			return "validated", nil
+		},
+		PersistSettings: func(settings config.Settings) error {
+			return nil
+		},
+		PublishRuntime: func(next config.Settings, validated RuntimeValidationResult) error {
+			return errPublishFailed
+		},
+	})
+
+	_, err := coordinator.Apply(&candidate)
+	if err == nil {
+		t.Fatalf("expected publish failure")
+	}
+	if !strings.Contains(err.Error(), "persisted settings may require manual rollback") {
+		t.Fatalf("expected persisted-settings warning in error, got %v", err)
+	}
+	if coordinator.Current().MaxRetries != initial.MaxRetries {
+		t.Fatalf("coordinator current should remain unchanged on publish failure")
 	}
 }

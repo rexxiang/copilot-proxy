@@ -29,7 +29,6 @@ const (
 
 // Timeouts and Durations.
 const (
-	DefaultUpstreamTimeout     = 5 * time.Minute
 	ShutdownTimeout            = 5 * time.Second
 	DefaultRetryBackoff        = 1 * time.Second
 	DefaultMaxRetries          = 3
@@ -40,7 +39,7 @@ const (
 
 // Default Headers.
 const (
-	DefaultUserAgent     = "copilot/0.0.400"
+	DefaultUserAgent     = "copilot/1.0.2"
 	DefaultIntegrationID = "copilot-developer-cli"
 )
 

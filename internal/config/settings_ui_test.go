@@ -27,13 +27,14 @@ func TestSettingsFieldSpecs_Matrix(t *testing.T) {
 	}{
 		{key: "listen_addr", widget: WidgetText, visible: false, readonly: true},
 		{key: "upstream_base", widget: WidgetURL, visible: true, readonly: true},
-		{key: "upstream_timeout", widget: WidgetDuration, visible: true, readonly: false},
 		{key: "max_retries", widget: WidgetInt, visible: true, readonly: false},
 		{key: "retry_backoff", widget: WidgetDuration, visible: true, readonly: false},
-		{key: "messages_init_seq_agent", widget: WidgetBool, visible: true, readonly: false},
+		{key: "rate_limit_seconds", widget: WidgetInt, visible: true, readonly: false},
+		{key: "messages_agent_detection_request_mode", widget: WidgetBool, visible: true, readonly: false},
 		{key: "required_headers", widget: WidgetKeyValue, visible: false, readonly: false},
 		{key: "reasoning_policies", widget: WidgetKeyValue, visible: false, readonly: false},
 		{key: "reasoning_policies_ui", widget: WidgetArray, visible: true, readonly: false},
+		{key: "claude_haiku_fallback_models_ui", widget: WidgetArray, visible: true, readonly: false},
 	}
 
 	for i := range cases {
@@ -51,6 +52,46 @@ func TestSettingsFieldSpecs_Matrix(t *testing.T) {
 		if spec.ReadOnly != tc.readonly {
 			t.Fatalf("unexpected readonly for %s: got %v want %v", tc.key, spec.ReadOnly, tc.readonly)
 		}
+	}
+	if _, exists := byKey["messages_init_seq_agent"]; exists {
+		t.Fatalf("messages_init_seq_agent should not appear in field specs")
+	}
+}
+
+func TestSettingsFieldSpecs_UsesReadableLabels(t *testing.T) {
+	specs, err := SettingsFieldSpecs()
+	if err != nil {
+		t.Fatalf("SettingsFieldSpecs error: %v", err)
+	}
+
+	byKey := make(map[string]FieldSpec, len(specs))
+	for i := range specs {
+		byKey[specs[i].Key] = specs[i]
+	}
+
+	if got := byKey["messages_agent_detection_request_mode"].Label; got != "Msg Agent Mode" {
+		t.Fatalf("unexpected messages_agent_detection_request_mode label: %q", got)
+	}
+	if got := byKey["messages_agent_detection_request_mode"].Description; got != "" {
+		t.Fatalf("expected messages_agent_detection_request_mode description empty, got %q", got)
+	}
+	if got := strings.TrimSpace(byKey["max_retries"].Description); got == "" {
+		t.Fatalf("expected short description for max_retries")
+	}
+	if got := strings.TrimSpace(byKey["retry_backoff"].Description); got == "" {
+		t.Fatalf("expected short description for retry_backoff")
+	}
+	if got := strings.TrimSpace(byKey["rate_limit_seconds"].Description); got == "" {
+		t.Fatalf("expected short description for rate_limit_seconds")
+	}
+	if got := strings.TrimSpace(byKey["reasoning_policies_ui"].Description); got == "" {
+		t.Fatalf("expected short description for reasoning_policies_ui")
+	}
+	if got := strings.TrimSpace(byKey["claude_haiku_fallback_models_ui"].Description); got == "" {
+		t.Fatalf("expected short description for claude_haiku_fallback_models_ui")
+	}
+	if got := byKey["reasoning_policies_ui"].Label; got != "Reasoning Policies" {
+		t.Fatalf("unexpected reasoning_policies_ui label: %q", got)
 	}
 }
 
@@ -149,32 +190,38 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	}
 
 	base := Settings{
-		ListenAddr:           "127.0.0.1:4999",
-		UpstreamBase:         "https://api.githubcopilot.com",
-		MessagesInitSeqAgent: false,
+		ListenAddr:                        "127.0.0.1:4999",
+		UpstreamBase:                      "https://api.githubcopilot.com",
+		MessagesAgentDetectionRequestMode: false,
 		RequiredHeaders: map[string]string{
 			"user-agent": "copilot/1.0",
 		},
-		UpstreamTimeout: NewDuration(40 * time.Second),
-		MaxRetries:      3,
-		RetryBackoff:    NewDuration(2 * time.Second),
+		MaxRetries:       3,
+		RetryBackoff:     NewDuration(2 * time.Second),
+		RateLimitSeconds: 0,
 		ReasoningPolicies: []ReasoningPolicy{
 			{Model: "gpt-5-mini", Target: "responses", Effort: "low"},
 		},
+		ClaudeHaikuFallbackModels: []string{"gpt-5-mini", "grok-code-fast-1"},
 	}
+	base.syncClaudeHaikuFallbackModelsFromStorage()
 
 	form, err := EncodeSettingsToForm(&base, specs)
 	if err != nil {
 		t.Fatalf("EncodeSettingsToForm error: %v", err)
 	}
 
-	form.ScalarValues["upstream_timeout"] = "1m0s"
 	form.ScalarValues["max_retries"] = "6"
 	form.ScalarValues["retry_backoff"] = "5s"
-	form.ScalarValues["messages_init_seq_agent"] = "true"
+	form.ScalarValues["rate_limit_seconds"] = ""
+	form.ScalarValues["messages_agent_detection_request_mode"] = "true"
 	form.ObjectArrayValues["reasoning_policies_ui"] = []map[string]string{
 		{"model": "gpt-5-mini", "target": "responses", "effort": "high"},
 		{"model": "grok-code-fast-1", "target": "chat", "effort": "none"},
+	}
+	form.ObjectArrayValues["claude_haiku_fallback_models_ui"] = []map[string]string{
+		{"model": "grok-code-fast-1"},
+		{"model": "gpt-5-mini"},
 	}
 
 	decoded, err := DecodeFormToSettings(&base, specs, form)
@@ -188,17 +235,17 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	if decoded.UpstreamBase != base.UpstreamBase {
 		t.Fatalf("readonly upstream_base should remain unchanged: got %q want %q", decoded.UpstreamBase, base.UpstreamBase)
 	}
-	if decoded.UpstreamTimeout.Duration() != time.Minute {
-		t.Fatalf("unexpected upstream_timeout: %s", decoded.UpstreamTimeout.Duration())
-	}
 	if decoded.MaxRetries != 6 {
 		t.Fatalf("unexpected max_retries: %d", decoded.MaxRetries)
 	}
 	if decoded.RetryBackoff.Duration() != 5*time.Second {
 		t.Fatalf("unexpected retry_backoff: %s", decoded.RetryBackoff.Duration())
 	}
-	if !decoded.MessagesInitSeqAgent {
-		t.Fatalf("expected messages_init_seq_agent=true")
+	if decoded.RateLimitSeconds != 0 {
+		t.Fatalf("expected empty rate_limit_seconds to decode as 0, got %d", decoded.RateLimitSeconds)
+	}
+	if !decoded.MessagesAgentDetectionRequestMode {
+		t.Fatalf("expected messages_agent_detection_request_mode=true")
 	}
 	if decoded.RequiredHeaders["user-agent"] != "copilot/1.0" {
 		t.Fatalf("hidden required_headers should remain unchanged")
@@ -208,6 +255,9 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	}
 	if decoded.ReasoningPolicies[0].Effort != "high" || decoded.ReasoningPolicies[1].Effort != "none" {
 		t.Fatalf("unexpected decoded reasoning policies: %#v", decoded.ReasoningPolicies)
+	}
+	if !reflect.DeepEqual(decoded.ClaudeHaikuFallbackModels, []string{"grok-code-fast-1", "gpt-5-mini"}) {
+		t.Fatalf("unexpected decoded haiku fallbacks: %#v", decoded.ClaudeHaikuFallbackModels)
 	}
 }
 
@@ -231,7 +281,7 @@ func TestDecodeFormToSettings_Validation(t *testing.T) {
 		{
 			name: "invalid duration",
 			mutate: func(form *SettingsForm) {
-				form.ScalarValues["upstream_timeout"] = "abc"
+				form.ScalarValues["retry_backoff"] = "abc"
 			},
 		},
 		{
@@ -243,7 +293,19 @@ func TestDecodeFormToSettings_Validation(t *testing.T) {
 		{
 			name: "invalid bool",
 			mutate: func(form *SettingsForm) {
-				form.ScalarValues["messages_init_seq_agent"] = "maybe"
+				form.ScalarValues["messages_agent_detection_request_mode"] = "maybe"
+			},
+		},
+		{
+			name: "invalid rate limit int",
+			mutate: func(form *SettingsForm) {
+				form.ScalarValues["rate_limit_seconds"] = "abc"
+			},
+		},
+		{
+			name: "negative rate limit int",
+			mutate: func(form *SettingsForm) {
+				form.ScalarValues["rate_limit_seconds"] = "-1"
 			},
 		},
 		{

@@ -35,17 +35,14 @@ This will automatically create and update `~/.config/copilot-proxy/auth.json`.
 | `listen_addr`      | `127.0.0.1:4000`                | Local proxy listen address           |
 | `upstream_base`    | `https://api.githubcopilot.com` | Copilot API base URL                 |
 | `required_headers` | (see defaults)                  | Headers to inject into requests      |
-| `upstream_timeout` | `5m`                            | Proxy-applied timeout for upstream requests (`0` disables) |
 | `max_retries`      | `3`                             | Max retry attempts on network errors |
 | `retry_backoff`    | `1s`                            | Backoff duration between retries     |
 
 Default upstream injected headers:
 
-- `user-agent: copilot/0.0.400`
+- `user-agent: copilot/1.0.2`
 - `copilot-integration-id: copilot-developer-cli`
 
 Notes:
 
-- `editor-version` is no longer injected by default.
 - GitHub OAuth access token (`gho_`) is used directly as upstream bearer token.
-- `upstream_timeout` is enforced by upstream middleware via request context deadline.

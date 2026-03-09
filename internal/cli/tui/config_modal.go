@@ -34,6 +34,12 @@ const (
 	inputEmptyGlyph       = " "
 	adaptiveInputWidthMin = 1
 	adaptiveInputWidthMax = 64
+
+	agentDetectionModeFieldKey     = "messages_agent_detection_request_mode"
+	agentDetectionModeLabelPremium = "premium request"
+	agentDetectionModeLabelSession = "session"
+	defaultBoolLabelOn             = " ON"
+	defaultBoolLabelOff            = "OFF"
 )
 
 type kvCursor struct {
@@ -206,6 +212,7 @@ func (m *ConfigModal) Open(settings *config.Settings) error {
 			m.normalizeArrayRows(spec)
 		}
 	}
+	m.baseForm = m.form.Clone()
 	m.syncInputFocus()
 	return nil
 }
@@ -297,6 +304,12 @@ func (m *ConfigModal) HandleKey(msg tea.KeyMsg) ModalAction {
 		m.moveFocus(-1)
 		m.syncInputFocus()
 		return ModalActionNone
+	case keyMatches(msg, tea.KeyCtrlUp, "ctrl+up", "alt+up", "opt+up"):
+		m.handleCollectionRowMove(-1)
+		return ModalActionNone
+	case keyMatches(msg, tea.KeyCtrlDown, "ctrl+down", "alt+down", "opt+down"):
+		m.handleCollectionRowMove(1)
+		return ModalActionNone
 	case keyMatches(msg, tea.KeyUp, "up"):
 		m.handleVerticalMove(-1)
 		return ModalActionNone
@@ -317,10 +330,10 @@ func (m *ConfigModal) HandleKey(msg tea.KeyMsg) ModalAction {
 	case keyMatches(msg, tea.KeyCtrlD, "ctrl+d"):
 		m.handleCollectionDelete()
 		return ModalActionNone
-	case keyMatches(msg, tea.KeyCtrlLeft, "ctrl+left"):
+	case keyMatches(msg, tea.KeyCtrlLeft, "ctrl+left", "alt+left", "opt+left"):
 		m.handleCollectionColMove(-1)
 		return ModalActionNone
-	case keyMatches(msg, tea.KeyCtrlRight, "ctrl+right"):
+	case keyMatches(msg, tea.KeyCtrlRight, "ctrl+right", "alt+right", "opt+right"):
 		m.handleCollectionColMove(1)
 		return ModalActionNone
 	}
@@ -724,6 +737,47 @@ func (m *ConfigModal) handleCollectionColMove(step int) {
 	m.syncInputFocus()
 }
 
+func (m *ConfigModal) handleCollectionRowMove(step int) {
+	spec := m.currentSpec()
+	if spec == nil || spec.ReadOnly || spec.Widget != config.WidgetArray {
+		return
+	}
+
+	m.normalizeArrayRows(spec)
+	rows := m.form.ObjectArrayValues[spec.Key]
+	if len(rows) <= 1 {
+		return
+	}
+	inputRows := m.arrayInputs[spec.Key]
+	cursor := m.arrayCursors[spec.Key]
+	if cursor.row < 0 || cursor.row >= len(rows) {
+		return
+	}
+
+	lastMovable := len(rows) - 1
+	if m.isArrayRowEmpty(spec, rows[lastMovable]) {
+		lastMovable--
+	}
+	if lastMovable < 0 || cursor.row > lastMovable {
+		return
+	}
+
+	target := cursor.row + step
+	if target < 0 || target > lastMovable {
+		return
+	}
+
+	rows[cursor.row], rows[target] = rows[target], rows[cursor.row]
+	if cursor.row < len(inputRows) && target < len(inputRows) {
+		inputRows[cursor.row], inputRows[target] = inputRows[target], inputRows[cursor.row]
+	}
+	m.form.ObjectArrayValues[spec.Key] = rows
+	m.arrayInputs[spec.Key] = inputRows
+	cursor.row = target
+	m.arrayCursors[spec.Key] = cursor
+	m.syncInputFocus()
+}
+
 func (m *ConfigModal) handleInputKey(msg tea.KeyMsg) {
 	spec := m.currentSpec()
 	if spec == nil || spec.ReadOnly {
@@ -743,6 +797,21 @@ func (m *ConfigModal) handleInputKey(msg tea.KeyMsg) {
 
 func (m *ConfigModal) updateScalarInput(msg tea.KeyMsg, spec *config.FieldSpec) {
 	if spec == nil {
+		return
+	}
+	if spec.Widget == config.WidgetBool {
+		if keyMatches(msg, tea.KeySpace, "space") || isSpaceRuneKey(msg) {
+			m.toggleBoolField(spec)
+		}
+		return
+	}
+	if step, ok := enumCycleStep(msg); ok && len(spec.EnumValues) > 0 {
+		nextValue := cycleEnumValue(m.form.ScalarValues[spec.Key], spec.EnumValues, step)
+		m.form.ScalarValues[spec.Key] = nextValue
+		if input, ok := m.scalarInputs[spec.Key]; ok && input != nil {
+			input.SetValue(nextValue)
+			syncTextInputWidth(input, input.Value(), input.Placeholder)
+		}
 		return
 	}
 	input, ok := m.scalarInputs[spec.Key]
@@ -830,6 +899,19 @@ func (m *ConfigModal) updateArrayInput(msg tea.KeyMsg, spec *config.FieldSpec) {
 	if !ok || input == nil {
 		return
 	}
+	if step, ok := enumCycleStep(msg); ok && len(col.EnumValues) > 0 {
+		nextValue := cycleEnumValue(rows[cursor.row][col.Key], col.EnumValues, step)
+		input.SetValue(nextValue)
+		syncTextInputWidth(input, input.Value(), input.Placeholder)
+		rows[cursor.row][col.Key] = nextValue
+		rowInputs.fields[col.Key] = input
+		inputRows[cursor.row] = rowInputs
+		m.arrayInputs[spec.Key] = inputRows
+		m.form.ObjectArrayValues[spec.Key] = rows
+		m.appendTrailingBlankIfNeeded(spec)
+		m.normalizeArrayRows(spec)
+		return
+	}
 
 	updatedInput, _ := input.Update(msg)
 	*input = updatedInput
@@ -865,7 +947,11 @@ func (m *ConfigModal) View() string {
 		return configModalStyle.Render(sb.String())
 	}
 
-	sb.WriteString(DimStyle.Render("Ctrl+S=save  Esc=close  Tab/↑↓=navigate  Ctrl+N/Ctrl+D=row  Ctrl+←/→=column"))
+	sb.WriteString(
+		DimStyle.Render(
+			"Ctrl+S=save  Esc=close  Tab/↑↓=navigate  Space=toggle/cycle  Alt+Space=enum back  Ctrl+N/Ctrl+D=row  Ctrl/Alt/Opt+←/→=column  Ctrl/Alt/Opt+↑/↓=move row",
+		),
+	)
 	sb.WriteString("\n\n")
 	for i := range m.specs {
 		sb.WriteString(m.renderFieldBlock(i))
@@ -911,6 +997,9 @@ func (m *ConfigModal) renderFieldBlock(index int) string {
 func (m *ConfigModal) renderScalarFieldValue(spec *config.FieldSpec, focused bool) string {
 	if spec == nil {
 		return ""
+	}
+	if spec.Widget == config.WidgetBool {
+		return renderBoolValue(spec.Key, parseBoolScalarValue(m.form.ScalarValues[spec.Key]), focused, spec.ReadOnly)
 	}
 	if spec.ReadOnly {
 		return configModalInputReadOnlyStyle.Render(wrapInputValue(m.form.ScalarValues[spec.Key]))
@@ -1000,6 +1089,7 @@ func (m *ConfigModal) renderObjectArrayFieldBlock(spec *config.FieldSpec, label 
 	for rowIndex, row := range rows {
 		sb.WriteString("\n")
 		sb.WriteString(kvFieldIndent)
+		sb.WriteString(fmt.Sprintf("%d. ", rowIndex+1))
 
 		cells := make([]string, 0, len(columns))
 		for colIndex, col := range columns {
@@ -1027,12 +1117,109 @@ func renderTextInputBox(input *textinput.Model, value string, focused, readOnly 
 	return configModalInputStyle.Render(wrapInputValue(value))
 }
 
+func renderBoolValue(fieldKey string, value bool, focused, readOnly bool) string {
+	label := defaultBoolLabelOff
+	if fieldKey == agentDetectionModeFieldKey {
+		if value {
+			label = agentDetectionModeLabelPremium
+		} else {
+			label = agentDetectionModeLabelSession
+		}
+	} else if value {
+		label = defaultBoolLabelOn
+	}
+	box := "[" + label + "]"
+	if readOnly {
+		return configModalInputReadOnlyStyle.Render(box)
+	}
+	if focused {
+		return configModalInputFocusStyle.Render(box)
+	}
+	return configModalInputStyle.Render(box)
+}
+
 func wrapInputValue(value string) string {
 	content := value
 	if content == "" {
 		content = inputEmptyGlyph
 	}
 	return "[" + content + "]"
+}
+
+func isSpaceRuneKey(msg tea.KeyMsg) bool {
+	return msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == ' '
+}
+
+func isSpaceKey(msg tea.KeyMsg) bool {
+	return msg.Type == tea.KeySpace || isSpaceRuneKey(msg)
+}
+
+func enumCycleStep(msg tea.KeyMsg) (int, bool) {
+	key := strings.ToLower(msg.String())
+	switch key {
+	case "alt+ ", "opt+ ", "alt+space", "opt+space":
+		return -1, true
+	}
+	if !isSpaceKey(msg) {
+		return 0, false
+	}
+	if msg.Alt {
+		return -1, true
+	}
+	return 1, true
+}
+
+func cycleEnumValue(current string, enumValues []string, step int) string {
+	if len(enumValues) == 0 || step == 0 {
+		return current
+	}
+	trimmed := strings.TrimSpace(current)
+	if trimmed == "" {
+		if step < 0 {
+			return enumValues[len(enumValues)-1]
+		}
+		return enumValues[0]
+	}
+
+	index := -1
+	for i := range enumValues {
+		if enumValues[i] == trimmed {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		if step < 0 {
+			return enumValues[len(enumValues)-1]
+		}
+		return enumValues[0]
+	}
+	if step < 0 {
+		index = (index - 1 + len(enumValues)) % len(enumValues)
+	} else {
+		index = (index + 1) % len(enumValues)
+	}
+	return enumValues[index]
+}
+
+func parseBoolScalarValue(raw string) bool {
+	return strings.EqualFold(strings.TrimSpace(raw), "true")
+}
+
+func (m *ConfigModal) toggleBoolField(spec *config.FieldSpec) {
+	if spec == nil || spec.Widget != config.WidgetBool || spec.ReadOnly {
+		return
+	}
+	next := !parseBoolScalarValue(m.form.ScalarValues[spec.Key])
+	newValue := "false"
+	if next {
+		newValue = "true"
+	}
+	m.form.ScalarValues[spec.Key] = newValue
+	if input, ok := m.scalarInputs[spec.Key]; ok && input != nil {
+		input.SetValue(newValue)
+		syncTextInputWidth(input, input.Value(), input.Placeholder)
+	}
 }
 
 func (m *ConfigModal) syncInputFocus() {

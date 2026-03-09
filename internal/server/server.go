@@ -33,7 +33,6 @@ func New(settings *config.Settings, handler http.Handler) *Server {
 			ListenAddr:      "",
 			UpstreamBase:    "",
 			RequiredHeaders: nil,
-			UpstreamTimeout: config.NewDuration(0),
 			MaxRetries:      0,
 			RetryBackoff:    config.NewDuration(0),
 		}

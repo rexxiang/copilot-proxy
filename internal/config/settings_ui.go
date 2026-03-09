@@ -36,6 +36,7 @@ const (
 	uiTagDescription = "description"
 	uiTagEnum        = "enum"
 	uiTagKey         = "key"
+	uiTagEmpty       = "empty"
 )
 
 const (
@@ -47,6 +48,7 @@ var (
 	errInvalidUIBool      = errors.New("invalid ui bool")
 	errInvalidUIOrder     = errors.New("invalid ui order")
 	errInvalidUIWidget    = errors.New("invalid ui widget")
+	errInvalidUIEmpty     = errors.New("invalid ui empty behavior")
 	errInvalidWidgetType  = errors.New("invalid widget type")
 	errFieldNotFound      = errors.New("settings field not found")
 	errInvalidURL         = errors.New("invalid url")
@@ -73,6 +75,7 @@ type FieldSpec struct {
 	Max         string
 	Description string
 	EnumValues  []string
+	EmptyZero   bool
 	ElementType reflect.Type
 	ElementSpec []FieldSpec
 }
@@ -188,6 +191,7 @@ func parseFieldSpec(field *reflect.StructField, jsonKey string, order int) (Fiel
 		Max:         "",
 		Description: "",
 		EnumValues:  nil,
+		EmptyZero:   false,
 		ElementType: nil,
 		ElementSpec: nil,
 	}
@@ -250,6 +254,15 @@ func parseFieldSpec(field *reflect.StructField, jsonKey string, order int) (Fiel
 		}
 		spec.EnumValues = enumValues
 	}
+	if rawEmpty, ok := uiOpts[uiTagEmpty]; ok {
+		switch strings.ToLower(strings.TrimSpace(rawEmpty)) {
+		case "":
+		case "zero":
+			spec.EmptyZero = true
+		default:
+			return FieldSpec{}, fmt.Errorf("%w: %s=%q", errInvalidUIEmpty, uiTagEmpty, rawEmpty)
+		}
+	}
 	if err := validateWidget(spec.Widget, field.Type); err != nil {
 		return FieldSpec{}, fmt.Errorf("field %s: %w", field.Name, err)
 	}
@@ -292,6 +305,7 @@ func parseUIOptions(raw string) (map[string]string, error) {
 		uiTagDescription: {},
 		uiTagEnum:        {},
 		uiTagKey:         {},
+		uiTagEmpty:       {},
 	}
 
 	opts := make(map[string]string)
@@ -402,7 +416,7 @@ func EncodeSettingsToForm(settings *Settings, specs []FieldSpec) (SettingsForm, 
 			if !ok {
 				return SettingsForm{}, fmt.Errorf("%w: %s", errInvalidWidgetType, spec.Widget)
 			}
-			form.ScalarValues[spec.Key] = durationValue.Duration().String()
+			form.ScalarValues[spec.Key] = durationValue.String()
 		case WidgetKeyValue:
 			rows, rowsErr := encodeMapRows(field)
 			if rowsErr != nil {
@@ -469,13 +483,9 @@ func DecodeFormToSettings(base *Settings, specs []FieldSpec, form SettingsForm) 
 			}
 			field.SetString(rawURL)
 		case WidgetInt:
-			rawInt := strings.TrimSpace(form.ScalarValues[spec.Key])
-			parsedInt, parseErr := strconv.Atoi(rawInt)
+			parsedInt, parseErr := parseIntValue(form.ScalarValues[spec.Key], spec.Min, spec.Max, spec.EmptyZero)
 			if parseErr != nil {
-				return Settings{}, fmt.Errorf("field %s: %w", spec.Key, errInvalidInt)
-			}
-			if err := validateMinMax(parsedInt, spec.Min, spec.Max); err != nil {
-				return Settings{}, fmt.Errorf("field %s: %w", spec.Key, err)
+				return Settings{}, fmt.Errorf("field %s: %w", spec.Key, parseErr)
 			}
 			field.SetInt(int64(parsedInt))
 		case WidgetBool:
@@ -511,6 +521,7 @@ func DecodeFormToSettings(base *Settings, specs []FieldSpec, form SettingsForm) 
 	if err := finalSettings.syncReasoningPoliciesToMap(); err != nil {
 		return Settings{}, fmt.Errorf("sync reasoning policies map: %w", err)
 	}
+	finalSettings.syncClaudeHaikuFallbackModelsToStorage()
 	return finalSettings, nil
 }
 
@@ -569,6 +580,24 @@ func validateMinMax(value int, minRaw, maxRaw string) error {
 		}
 	}
 	return nil
+}
+
+func parseIntValue(raw, minRaw, maxRaw string, emptyZero bool) (int, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		if emptyZero {
+			return 0, nil
+		}
+		return 0, errInvalidInt
+	}
+	parsedInt, parseErr := strconv.Atoi(trimmed)
+	if parseErr != nil {
+		return 0, errInvalidInt
+	}
+	if err := validateMinMax(parsedInt, minRaw, maxRaw); err != nil {
+		return 0, err
+	}
+	return parsedInt, nil
 }
 
 func parseDurationValue(raw string) (Duration, error) {
@@ -764,7 +793,7 @@ func encodeScalarFieldValue(field reflect.Value, spec *FieldSpec) (string, error
 		if !ok {
 			return "", fmt.Errorf("%w: %s", errInvalidWidgetType, spec.Widget)
 		}
-		return durationValue.Duration().String(), nil
+		return durationValue.String(), nil
 	default:
 		return "", fmt.Errorf("%w: %s", errInvalidUIWidget, spec.Widget)
 	}
@@ -790,12 +819,9 @@ func decodeScalarFieldValue(field reflect.Value, spec *FieldSpec, raw string) er
 		}
 		field.SetString(trimmed)
 	case WidgetInt:
-		parsedInt, parseErr := strconv.Atoi(strings.TrimSpace(raw))
+		parsedInt, parseErr := parseIntValue(raw, spec.Min, spec.Max, spec.EmptyZero)
 		if parseErr != nil {
-			return errInvalidInt
-		}
-		if err := validateMinMax(parsedInt, spec.Min, spec.Max); err != nil {
-			return err
+			return parseErr
 		}
 		field.SetInt(int64(parsedInt))
 	case WidgetBool:

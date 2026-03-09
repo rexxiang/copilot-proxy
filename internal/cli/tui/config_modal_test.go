@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -17,12 +18,11 @@ func TestConfigModal_OpenUsesVisibleFieldSpecs(t *testing.T) {
 	modal := NewConfigModal()
 
 	settings := config.Settings{
-		ListenAddr:           "127.0.0.1:4000",
-		UpstreamBase:         "https://api.githubcopilot.com",
-		MessagesInitSeqAgent: false,
-		UpstreamTimeout:      config.NewDuration(5 * time.Minute),
-		MaxRetries:           3,
-		RetryBackoff:         config.NewDuration(time.Second),
+		ListenAddr:                        "127.0.0.1:4000",
+		UpstreamBase:                      "https://api.githubcopilot.com",
+		MessagesAgentDetectionRequestMode: false,
+		MaxRetries:                        3,
+		RetryBackoff:                      config.NewDuration(time.Second),
 	}
 
 	if err := modal.Open(&settings); err != nil {
@@ -32,11 +32,12 @@ func TestConfigModal_OpenUsesVisibleFieldSpecs(t *testing.T) {
 	keys := modal.VisibleFieldKeys()
 	expected := []string{
 		"upstream_base",
-		"upstream_timeout",
 		"max_retries",
 		"retry_backoff",
-		"messages_init_seq_agent",
+		"rate_limit_seconds",
+		"messages_agent_detection_request_mode",
 		"reasoning_policies_ui",
+		"claude_haiku_fallback_models_ui",
 	}
 	if len(keys) != len(expected) {
 		t.Fatalf("unexpected visible key count: got %d want %d", len(keys), len(expected))
@@ -91,7 +92,6 @@ func TestConfigModal_EscWithDirtyRequiresConfirm(t *testing.T) {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyDown}) // move to upstream_timeout
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'0'}})
 	if !modal.IsDirty() {
 		t.Fatalf("expected modal to be dirty after edit")
@@ -133,7 +133,7 @@ func TestConfigModal_BuildCandidateFromEditedForm(t *testing.T) {
 func TestConfigModal_BuildCandidatePreservesBoolField(t *testing.T) {
 	modal := NewConfigModal()
 	base := config.DefaultSettings()
-	base.MessagesInitSeqAgent = true
+	base.MessagesAgentDetectionRequestMode = true
 	if err := modal.Open(&base); err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -142,8 +142,72 @@ func TestConfigModal_BuildCandidatePreservesBoolField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildCandidate error: %v", err)
 	}
-	if !candidate.MessagesInitSeqAgent {
-		t.Fatalf("expected messages_init_seq_agent=true")
+	if !candidate.MessagesAgentDetectionRequestMode {
+		t.Fatalf("expected messages_agent_detection_request_mode=true")
+	}
+}
+
+func TestConfigModal_SpaceTogglesBoolField(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "messages_agent_detection_request_mode")
+	if got := modal.FieldValue("messages_agent_detection_request_mode"); got != "true" {
+		t.Fatalf("expected initial bool value true, got %q", got)
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeySpace})
+	if got := modal.FieldValue("messages_agent_detection_request_mode"); got != "false" {
+		t.Fatalf("expected bool toggled to false, got %q", got)
+	}
+
+	candidate, err := modal.BuildCandidate(&base)
+	if err != nil {
+		t.Fatalf("BuildCandidate error: %v", err)
+	}
+	if candidate.MessagesAgentDetectionRequestMode {
+		t.Fatalf("expected messages_agent_detection_request_mode=false after one toggle")
+	}
+}
+
+func TestConfigModal_AgentModeRendersPremiumRequestAndSessionLabels(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "messages_agent_detection_request_mode")
+	view := stripANSI(modal.View())
+	if !strings.Contains(view, "[premium request]") {
+		t.Fatalf("expected premium request label in view, got:\n%s", view)
+	}
+	if strings.Contains(view, "tail message focused") {
+		t.Fatalf("expected no mode description text for Msg Agent Mode, got:\n%s", view)
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeySpace})
+	view = stripANSI(modal.View())
+	if !strings.Contains(view, "[session]") {
+		t.Fatalf("expected session label in view after toggle, got:\n%s", view)
+	}
+}
+
+func TestConfigModal_BoolFieldIgnoresTextInput(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "messages_agent_detection_request_mode")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+
+	if got := modal.FieldValue("messages_agent_detection_request_mode"); got != "true" {
+		t.Fatalf("expected bool field to ignore text input, got %q", got)
 	}
 }
 
@@ -293,7 +357,7 @@ func TestConfigModal_ArrayVerticalBoundaryMovesFieldFocus(t *testing.T) {
 	}
 
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
-	if modal.CurrentFieldKey() != "messages_init_seq_agent" {
+	if modal.CurrentFieldKey() != "messages_agent_detection_request_mode" {
 		t.Fatalf("expected focus to move to previous field, got %q", modal.CurrentFieldKey())
 	}
 
@@ -329,11 +393,11 @@ func TestConfigModal_ViewShowsCursorForEditableField(t *testing.T) {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	focusFieldByKey(t, modal, "upstream_timeout")
+	focusFieldByKey(t, modal, "retry_backoff")
 
 	view := stripANSI(modal.View())
-	if !strings.Contains(view, "Timeout") || !strings.Contains(view, "[5m0s") {
-		t.Fatalf("expected timeout input box in view, got:\n%s", view)
+	if !strings.Contains(view, "Backoff") || !strings.Contains(view, "[1s") {
+		t.Fatalf("expected backoff input box in view, got:\n%s", view)
 	}
 }
 
@@ -344,11 +408,11 @@ func TestConfigModal_RealCursorMovementOnScalarInput(t *testing.T) {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	focusFieldByKey(t, modal, "upstream_timeout")
+	focusFieldByKey(t, modal, "retry_backoff")
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyLeft})
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 
-	if got := modal.FieldValue("upstream_timeout"); got != "5m0xs" {
+	if got := modal.FieldValue("retry_backoff"); got != "1xs" {
 		t.Fatalf("expected cursor-aware insertion, got %q", got)
 	}
 }
@@ -382,6 +446,143 @@ func TestConfigModal_BuildCandidateFromReasoningPolicyArray(t *testing.T) {
 	}
 }
 
+func TestConfigModal_ReasoningPolicyEnumCyclesWithSpaceAndAltSpace(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "reasoning_policies_ui")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("gpt-5-mini")})
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlRight})                            // target
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})            // chat
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})            // responses
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}, Alt: true}) // back to chat
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlRight})                            // effort
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}, Alt: true}) // empty reverse -> high
+
+	candidate, err := modal.BuildCandidate(&base)
+	if err != nil {
+		t.Fatalf("BuildCandidate error: %v", err)
+	}
+	if len(candidate.ReasoningPolicies) != 1 {
+		t.Fatalf("expected one reasoning policy, got %#v", candidate.ReasoningPolicies)
+	}
+	got := candidate.ReasoningPolicies[0]
+	if got.Target != "chat" || got.Effort != "high" {
+		t.Fatalf("unexpected enum cycle result: %#v", got)
+	}
+}
+
+func TestConfigModal_ArrayColumnMoveSupportsCtrlAndAlt(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "reasoning_policies_ui")
+	cursor := modal.arrayCursors["reasoning_policies_ui"]
+	if cursor.col != 0 {
+		t.Fatalf("expected initial col=0, got %d", cursor.col)
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlRight})
+	cursor = modal.arrayCursors["reasoning_policies_ui"]
+	if cursor.col != 1 {
+		t.Fatalf("expected ctrl+right to move col=1, got %d", cursor.col)
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRight, Alt: true})
+	cursor = modal.arrayCursors["reasoning_policies_ui"]
+	if cursor.col != 2 {
+		t.Fatalf("expected alt+right to move col=2, got %d", cursor.col)
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyLeft, Alt: true})
+	cursor = modal.arrayCursors["reasoning_policies_ui"]
+	if cursor.col != 1 {
+		t.Fatalf("expected alt+left to move col=1, got %d", cursor.col)
+	}
+}
+
+func TestConfigModal_BuildCandidateTreatsEmptyRateLimitAsZero(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	base.RateLimitSeconds = 0
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "rate_limit_seconds")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyBackspace})
+
+	candidate, err := modal.BuildCandidate(&base)
+	if err != nil {
+		t.Fatalf("BuildCandidate error: %v", err)
+	}
+	if candidate.RateLimitSeconds != 0 {
+		t.Fatalf("expected empty rate limit to decode as 0, got %d", candidate.RateLimitSeconds)
+	}
+}
+
+func TestConfigModal_ArrayCtrlDownReordersRows(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	base.ClaudeHaikuFallbackModels = []string{"gpt-5-mini", "grok-code-fast-1"}
+	base.ClaudeHaikuFallbackModelsUI = []config.HaikuFallbackModel{
+		{Model: "gpt-5-mini"},
+		{Model: "grok-code-fast-1"},
+	}
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "claude_haiku_fallback_models_ui")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlDown})
+
+	rows := modal.form.ObjectArrayValues["claude_haiku_fallback_models_ui"]
+	if got := rows[0]["model"]; got != "grok-code-fast-1" {
+		t.Fatalf("expected first row to move down, got %#v", rows)
+	}
+	if got := rows[1]["model"]; got != "gpt-5-mini" {
+		t.Fatalf("expected second row to move up, got %#v", rows)
+	}
+
+	candidate, err := modal.BuildCandidate(&base)
+	if err != nil {
+		t.Fatalf("BuildCandidate error: %v", err)
+	}
+	if want := []string{"grok-code-fast-1", "gpt-5-mini"}; !reflect.DeepEqual(candidate.ClaudeHaikuFallbackModels, want) {
+		t.Fatalf("unexpected reordered fallbacks: got %#v want %#v", candidate.ClaudeHaikuFallbackModels, want)
+	}
+}
+
+func TestConfigModal_ArrayAltDownReordersRows(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	base.ClaudeHaikuFallbackModels = []string{"gpt-5-mini", "grok-code-fast-1"}
+	base.ClaudeHaikuFallbackModelsUI = []config.HaikuFallbackModel{
+		{Model: "gpt-5-mini"},
+		{Model: "grok-code-fast-1"},
+	}
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "claude_haiku_fallback_models_ui")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyDown, Alt: true})
+
+	rows := modal.form.ObjectArrayValues["claude_haiku_fallback_models_ui"]
+	if got := rows[0]["model"]; got != "grok-code-fast-1" {
+		t.Fatalf("expected alt+down to move first row down, got %#v", rows)
+	}
+	if got := rows[1]["model"]; got != "gpt-5-mini" {
+		t.Fatalf("expected alt+down to move second row up, got %#v", rows)
+	}
+}
+
 func TestConfigModal_InputWidthIsAdaptiveNotFixed(t *testing.T) {
 	short := newModalTextInput("a", "")
 	long := newModalTextInput(strings.Repeat("x", 256), "")
@@ -397,10 +598,10 @@ func TestConfigModal_InputWidthIsAdaptiveNotFixed(t *testing.T) {
 	if err := modal.Open(&settings); err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
-	focusFieldByKey(t, modal, "upstream_timeout")
-	before := modal.scalarInputs["upstream_timeout"].Width
+	focusFieldByKey(t, modal, "retry_backoff")
+	before := modal.scalarInputs["retry_backoff"].Width
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("x", 32))})
-	after := modal.scalarInputs["upstream_timeout"].Width
+	after := modal.scalarInputs["retry_backoff"].Width
 	if after <= before {
 		t.Fatalf("expected width to expand after typing: before=%d after=%d", before, after)
 	}

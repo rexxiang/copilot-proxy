@@ -33,37 +33,52 @@ func DefaultRetryConfig() RetryConfig {
 	}
 }
 
-// RetryTransport wraps an http.RoundTripper to add automatic retry on network errors.
-type RetryTransport struct {
-	Transport http.RoundTripper
-	Config    RetryConfig
+// DynamicRetryTransport resolves retry config per request.
+type DynamicRetryTransport struct {
+	Transport      http.RoundTripper
+	ConfigProvider func() RetryConfig
 }
 
-// NewRetryTransport creates a new RetryTransport with the given config.
-func NewRetryTransport(transport http.RoundTripper, cfg RetryConfig) *RetryTransport {
+// NewDynamicRetryTransport builds retry transport that can change behavior at runtime.
+func NewDynamicRetryTransport(transport http.RoundTripper, provider func() RetryConfig) *DynamicRetryTransport {
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	if cfg.MaxRetries <= 0 {
-		cfg.MaxRetries = config.DefaultMaxRetries
-	}
-	if cfg.InitialBackoff <= 0 {
-		cfg.InitialBackoff = config.DefaultRetryInitialBackoff
-	}
-	if cfg.MaxBackoff <= 0 {
-		cfg.MaxBackoff = config.DefaultRetryMaxBackoff
-	}
-	if cfg.BackoffFactor <= 1 {
-		cfg.BackoffFactor = config.DefaultRetryBackoffFactor
-	}
-	return &RetryTransport{
-		Transport: transport,
-		Config:    cfg,
+	return &DynamicRetryTransport{
+		Transport:      transport,
+		ConfigProvider: provider,
 	}
 }
 
-// RoundTrip implements http.RoundTripper with automatic retry on network errors.
-func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+// RoundTrip implements http.RoundTripper with runtime retry configuration.
+func (rt *DynamicRetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if rt == nil {
+		return nil, fmt.Errorf("round trip failed: nil transport")
+	}
+	transport := rt.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	cfg := RetryConfig{}
+	if rt.ConfigProvider != nil {
+		cfg = rt.ConfigProvider()
+	}
+	return roundTripWithRetryConfig(transport, cfg, req)
+}
+
+func roundTripWithRetryConfig(
+	transport http.RoundTripper,
+	cfg RetryConfig,
+	req *http.Request,
+) (*http.Response, error) {
+	if req == nil {
+		return nil, fmt.Errorf("round trip failed: nil request")
+	}
+	cfg = normalizeRetryConfig(cfg)
+	if cfg.MaxRetries <= 0 {
+		return transport.RoundTrip(req)
+	}
+
 	// For requests without body, we can always retry
 	// For requests with body, we need to buffer it for retries
 	var bodyBytes []byte
@@ -82,9 +97,9 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	var lastErr error
-	backoff := rt.Config.InitialBackoff
+	backoff := cfg.InitialBackoff
 
-	for attempt := 0; attempt <= rt.Config.MaxRetries; attempt++ {
+	for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
 		select {
 		case <-req.Context().Done():
 			return nil, fmt.Errorf("request canceled: %w", req.Context().Err())
@@ -98,7 +113,7 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			req.Body = originalBody
 		}
 
-		resp, err := rt.Transport.RoundTrip(req)
+		resp, err := transport.RoundTrip(req)
 
 		if err == nil {
 			return resp, nil
@@ -112,18 +127,34 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		lastErr = err
 
 		// Don't sleep after last attempt
-		if attempt < rt.Config.MaxRetries {
+		if attempt < cfg.MaxRetries {
 			if waitErr := waitBackoff(req.Context(), backoff); waitErr != nil {
 				return nil, fmt.Errorf("request canceled: %w", waitErr)
 			}
-			backoff = time.Duration(float64(backoff) * rt.Config.BackoffFactor)
-			if backoff > rt.Config.MaxBackoff {
-				backoff = rt.Config.MaxBackoff
+			backoff = time.Duration(float64(backoff) * cfg.BackoffFactor)
+			if backoff > cfg.MaxBackoff {
+				backoff = cfg.MaxBackoff
 			}
 		}
 	}
 
 	return nil, lastErr
+}
+
+func normalizeRetryConfig(cfg RetryConfig) RetryConfig {
+	if cfg.MaxRetries < 0 {
+		cfg.MaxRetries = 0
+	}
+	if cfg.InitialBackoff <= 0 {
+		cfg.InitialBackoff = config.DefaultRetryInitialBackoff
+	}
+	if cfg.MaxBackoff <= 0 {
+		cfg.MaxBackoff = config.DefaultRetryMaxBackoff
+	}
+	if cfg.BackoffFactor <= 1 {
+		cfg.BackoffFactor = config.DefaultRetryBackoffFactor
+	}
+	return cfg
 }
 
 func waitBackoff(ctx context.Context, delay time.Duration) error {

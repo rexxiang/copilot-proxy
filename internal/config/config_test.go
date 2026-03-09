@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -22,11 +24,14 @@ func TestLoadSettingsDefaultWhenMissing(t *testing.T) {
 	if settings.UpstreamBase != "https://api.githubcopilot.com" {
 		t.Fatalf("unexpected upstream base: %s", settings.UpstreamBase)
 	}
-	if settings.UpstreamTimeout.Duration() != 5*time.Minute {
-		t.Fatalf("unexpected upstream timeout: %s", settings.UpstreamTimeout.Duration())
+	if !settings.MessagesAgentDetectionRequestMode {
+		t.Fatalf("expected messages_agent_detection_request_mode default true")
 	}
-	if settings.MessagesInitSeqAgent {
-		t.Fatalf("expected messages_init_seq_agent default false")
+	if settings.RateLimitSeconds != 0 {
+		t.Fatalf("expected rate_limit_seconds default 0, got %d", settings.RateLimitSeconds)
+	}
+	if !reflect.DeepEqual(settings.ClaudeHaikuFallbackModels, []string{"gpt-5-mini", "grok-code-fast-1"}) {
+		t.Fatalf("unexpected default haiku fallbacks: %#v", settings.ClaudeHaikuFallbackModels)
 	}
 }
 
@@ -34,17 +39,18 @@ func TestSaveLoadSettings(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	input := Settings{
-		ListenAddr:           "127.0.0.1:1234",
-		UpstreamBase:         "https://example.com",
-		MessagesInitSeqAgent: true,
-		RequiredHeaders: map[string]string{
-			"X-Test": "1",
-		},
-		UpstreamTimeout: NewDuration(45 * time.Second),
-		MaxRetries:      5,
-		RetryBackoff:    NewDuration(2 * time.Second),
+	input := DefaultSettings()
+	input.ListenAddr = "127.0.0.1:1234"
+	input.UpstreamBase = "https://example.com"
+	input.MessagesAgentDetectionRequestMode = false
+	input.RequiredHeaders = map[string]string{
+		"X-Test": "1",
 	}
+	input.MaxRetries = 5
+	input.RetryBackoff = NewDuration(2 * time.Second)
+	input.RateLimitSeconds = 9
+	input.ClaudeHaikuFallbackModels = []string{"grok-code-fast-1", "gpt-5-mini"}
+	input.syncClaudeHaikuFallbackModelsFromStorage()
 
 	if err := SaveSettings(&input); err != nil {
 		t.Fatalf("SaveSettings error: %v", err)
@@ -55,8 +61,49 @@ func TestSaveLoadSettings(t *testing.T) {
 		t.Fatalf("LoadSettings error: %v", err)
 	}
 
-	if !reflect.DeepEqual(input, output) {
-		t.Fatalf("settings mismatch: %#v != %#v", input, output)
+	if output.ListenAddr != input.ListenAddr {
+		t.Fatalf("unexpected listen addr: got %q want %q", output.ListenAddr, input.ListenAddr)
+	}
+	if output.UpstreamBase != input.UpstreamBase {
+		t.Fatalf("unexpected upstream base: got %q want %q", output.UpstreamBase, input.UpstreamBase)
+	}
+	if output.RateLimitSeconds != input.RateLimitSeconds {
+		t.Fatalf("unexpected rate limit seconds: got %d want %d", output.RateLimitSeconds, input.RateLimitSeconds)
+	}
+	if output.MessagesAgentDetectionRequestMode != input.MessagesAgentDetectionRequestMode {
+		t.Fatalf(
+			"unexpected messages_agent_detection_request_mode: got %v want %v",
+			output.MessagesAgentDetectionRequestMode,
+			input.MessagesAgentDetectionRequestMode,
+		)
+	}
+	if !reflect.DeepEqual(output.ClaudeHaikuFallbackModels, input.ClaudeHaikuFallbackModels) {
+		t.Fatalf("unexpected haiku fallbacks: got %#v want %#v", output.ClaudeHaikuFallbackModels, input.ClaudeHaikuFallbackModels)
+	}
+}
+
+func TestSaveLoadSettingsExplicitEmptyClaudeHaikuFallbackModels(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	input := DefaultSettings()
+	input.ClaudeHaikuFallbackModels = []string{}
+	input.ClaudeHaikuFallbackModelsUI = []HaikuFallbackModel{}
+
+	if err := SaveSettings(&input); err != nil {
+		t.Fatalf("SaveSettings error: %v", err)
+	}
+
+	output, err := LoadSettings()
+	if err != nil {
+		t.Fatalf("LoadSettings error: %v", err)
+	}
+
+	if output.ClaudeHaikuFallbackModels == nil {
+		t.Fatalf("expected explicit empty haiku fallbacks to be preserved, got nil")
+	}
+	if len(output.ClaudeHaikuFallbackModels) != 0 {
+		t.Fatalf("expected explicit empty haiku fallbacks, got %#v", output.ClaudeHaikuFallbackModels)
 	}
 }
 
@@ -87,6 +134,35 @@ func TestSaveLoadSettingsReasoningPoliciesShadowSync(t *testing.T) {
 	}
 	if len(output.ReasoningPolicies) != 2 {
 		t.Fatalf("expected shadow reasoning policies loaded, got %#v", output.ReasoningPolicies)
+	}
+}
+
+func TestLoadSettings_MessagesAgentDetectionRequestModeDefaultsTrueWhenFieldMissing(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	path, err := SettingsPath()
+	if err != nil {
+		t.Fatalf("SettingsPath error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+
+	raw := []byte(`{
+  "listen_addr": "127.0.0.1:4000",
+  "upstream_base": "https://api.githubcopilot.com"
+}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+
+	settings, err := LoadSettings()
+	if err != nil {
+		t.Fatalf("LoadSettings error: %v", err)
+	}
+	if !settings.MessagesAgentDetectionRequestMode {
+		t.Fatalf("expected messages_agent_detection_request_mode default true when key missing")
 	}
 }
 
@@ -209,5 +285,8 @@ func TestSettingsJSONDoesNotContainTokenTimeout(t *testing.T) {
 	}
 	if _, exists := data["token_timeout"]; exists {
 		t.Fatalf("token_timeout should not exist in settings json")
+	}
+	if _, exists := data["upstream_timeout"]; exists {
+		t.Fatalf("upstream_timeout should not exist in settings json")
 	}
 }

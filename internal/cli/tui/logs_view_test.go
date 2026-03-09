@@ -775,3 +775,102 @@ func TestLogsView_DebugPathRenderedInSingleLine(t *testing.T) {
 		t.Fatalf("expected no extra status line for debug path, got %q", state.StatusMsg)
 	}
 }
+
+func TestLogsView_ActiveRequestBlinkIndicatorTogglesBySharedState(t *testing.T) {
+	now := time.Now()
+	view := NewLogsView()
+	view.SetSize(120, 20)
+	state := &SharedState{
+		LogsBlinkOn: true,
+		Snapshot: monitor.Snapshot{
+			ActiveRequests: []monitor.RequestRecord{
+				{
+					Timestamp:  now,
+					Method:     "POST",
+					Path:       "/v1/responses",
+					Model:      "active-model",
+					StatusCode: 200,
+				},
+			},
+			RecentRequests: []monitor.RequestRecord{
+				{
+					Timestamp:  now.Add(-time.Second),
+					Method:     "POST",
+					Path:       "/v1/responses",
+					Model:      "done-model",
+					StatusCode: 200,
+					Duration:   120 * time.Millisecond,
+				},
+			},
+		},
+	}
+	view.SetState(state)
+
+	renderedOn := view.View()
+	activeLineOn := findLineContaining(renderedOn, "active-model")
+	if activeLineOn == "" {
+		t.Fatalf("expected active row to be rendered")
+	}
+	if !strings.Contains(activeLineOn, "✦") {
+		t.Fatalf("expected active row to show blink indicator when LogsBlinkOn=true, line=%q", activeLineOn)
+	}
+
+	doneLine := findLineContaining(renderedOn, "done-model")
+	if doneLine == "" {
+		t.Fatalf("expected completed row to be rendered")
+	}
+	if strings.Contains(doneLine, "✦") {
+		t.Fatalf("expected completed row not to show blink indicator, line=%q", doneLine)
+	}
+
+	state.LogsBlinkOn = false
+	renderedOff := view.View()
+	activeLineOff := findLineContaining(renderedOff, "active-model")
+	if activeLineOff == "" {
+		t.Fatalf("expected active row to be rendered with blink off")
+	}
+	if strings.Contains(activeLineOff, "✦") {
+		t.Fatalf("expected active row not to show blink indicator when LogsBlinkOn=false, line=%q", activeLineOff)
+	}
+}
+
+func TestLogsView_ActiveSSERequestShowsBlinkIndicator(t *testing.T) {
+	view := NewLogsView()
+	view.SetSize(120, 20)
+	view.SetState(&SharedState{
+		LogsBlinkOn: true,
+		Snapshot: monitor.Snapshot{
+			ActiveRequests: []monitor.RequestRecord{
+				{
+					Timestamp:             time.Now().Add(-2 * time.Second),
+					Method:                "POST",
+					Path:                  "/v1/messages",
+					Model:                 "active-sse-model",
+					StatusCode:            200,
+					IsStream:              true,
+					Streaming:             true,
+					FirstResponseDuration: 150 * time.Millisecond,
+				},
+			},
+		},
+	})
+
+	rendered := view.View()
+	sseLine := findLineContaining(rendered, "active-sse-model")
+	if sseLine == "" {
+		t.Fatalf("expected active sse row to be rendered")
+	}
+	if !strings.Contains(sseLine, "✦") {
+		t.Fatalf("expected active sse row to show blink indicator, line=%q", sseLine)
+	}
+}
+
+func findLineContaining(rendered, needle string) string {
+	lines := strings.Split(rendered, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
+}

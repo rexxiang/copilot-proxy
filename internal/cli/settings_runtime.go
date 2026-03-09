@@ -10,25 +10,27 @@ import (
 )
 
 var (
-	errRuntimeSwitcherRequired = errors.New("runtime switcher is required")
-	errPersistSettingsRequired = errors.New("persist settings callback is required")
-	errRollbackRuntimeRequired = errors.New("rollback runtime callback is required")
-	errCandidateSettingsNil    = errors.New("candidate settings is nil")
+	errRuntimeValidatorRequired = errors.New("runtime validator is required")
+	errPersistSettingsRequired  = errors.New("persist settings callback is required")
+	errRuntimePublisherRequired = errors.New("runtime publisher is required")
+	errCandidateSettingsNil     = errors.New("candidate settings is nil")
 )
+
+type RuntimeValidationResult any
 
 type RuntimeCoordinatorConfig struct {
 	InitialSettings config.Settings
-	SwitchRuntime   func(prev, next config.Settings) error
+	ValidateRuntime func(next config.Settings) (RuntimeValidationResult, error)
 	PersistSettings func(settings config.Settings) error
-	RollbackRuntime func(settings config.Settings) error
+	PublishRuntime  func(next config.Settings, validated RuntimeValidationResult) error
 }
 
 type SettingsRuntimeCoordinator struct {
 	mu              sync.Mutex
 	current         config.Settings
-	switchRuntime   func(prev, next config.Settings) error
+	validateRuntime func(next config.Settings) (RuntimeValidationResult, error)
 	persistSettings func(settings config.Settings) error
-	rollbackRuntime func(settings config.Settings) error
+	publishRuntime  func(next config.Settings, validated RuntimeValidationResult) error
 }
 
 func NewSettingsRuntimeCoordinator(cfg *RuntimeCoordinatorConfig) *SettingsRuntimeCoordinator {
@@ -37,17 +39,17 @@ func NewSettingsRuntimeCoordinator(cfg *RuntimeCoordinatorConfig) *SettingsRunti
 		return &SettingsRuntimeCoordinator{
 			mu:              sync.Mutex{},
 			current:         defaultSettings,
-			switchRuntime:   nil,
+			validateRuntime: nil,
 			persistSettings: nil,
-			rollbackRuntime: nil,
+			publishRuntime:  nil,
 		}
 	}
 	return &SettingsRuntimeCoordinator{
 		mu:              sync.Mutex{},
 		current:         cfg.InitialSettings,
-		switchRuntime:   cfg.SwitchRuntime,
+		validateRuntime: cfg.ValidateRuntime,
 		persistSettings: cfg.PersistSettings,
-		rollbackRuntime: cfg.RollbackRuntime,
+		publishRuntime:  cfg.PublishRuntime,
 	}
 }
 
@@ -61,14 +63,14 @@ func (c *SettingsRuntimeCoordinator) Apply(candidate *config.Settings) (config.S
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.switchRuntime == nil {
-		return c.current, errRuntimeSwitcherRequired
+	if c.validateRuntime == nil {
+		return c.current, errRuntimeValidatorRequired
 	}
 	if c.persistSettings == nil {
 		return c.current, errPersistSettingsRequired
 	}
-	if c.rollbackRuntime == nil {
-		return c.current, errRollbackRuntimeRequired
+	if c.publishRuntime == nil {
+		return c.current, errRuntimePublisherRequired
 	}
 	if candidate == nil {
 		return c.current, errCandidateSettingsNil
@@ -79,19 +81,20 @@ func (c *SettingsRuntimeCoordinator) Apply(candidate *config.Settings) (config.S
 		return previous, nil
 	}
 
-	if err := c.switchRuntime(previous, *candidate); err != nil {
-		return previous, fmt.Errorf("switch runtime: %w", err)
+	validated, err := c.validateRuntime(*candidate)
+	if err != nil {
+		return previous, fmt.Errorf("validate runtime: %w", err)
 	}
 
 	if err := c.persistSettings(*candidate); err != nil {
-		rollbackErr := c.rollbackRuntime(previous)
-		if rollbackErr != nil {
-			return previous, errors.Join(
-				fmt.Errorf("persist settings: %w", err),
-				fmt.Errorf("rollback runtime: %w", rollbackErr),
-			)
-		}
 		return previous, fmt.Errorf("persist settings: %w", err)
+	}
+
+	if err := c.publishRuntime(*candidate, validated); err != nil {
+		return previous, errors.Join(
+			fmt.Errorf("publish runtime: %w", err),
+			fmt.Errorf("persisted settings may require manual rollback"),
+		)
 	}
 
 	c.current = *candidate

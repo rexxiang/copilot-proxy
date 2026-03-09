@@ -27,9 +27,29 @@ func (s *stubCatalog) GetModels() []models.ModelInfo {
 	return copied
 }
 
+func newMessagesTranslateForTest(
+	catalog models.Catalog,
+	mapping map[string]string,
+	reasoningPolicyMaps ...map[string]string,
+) *MessagesTranslateMiddleware {
+	policies, _ := reasoning.EffectivePoliciesFromMap(nil)
+	if len(reasoningPolicyMaps) > 0 {
+		if parsed, err := reasoning.EffectivePoliciesFromMap(reasoningPolicyMaps[0]); err == nil {
+			policies = parsed
+		}
+	}
+	mw := NewMessagesTranslateWithRuntimeOptions(catalog, mapping, func() MessagesTranslateRuntimeOptions {
+		return MessagesTranslateRuntimeOptions{
+			ReasoningPolicies: policies,
+		}
+	})
+	mw.reasoningPolicies = cloneReasoningPolicies(policies)
+	return mw
+}
+
 func TestEndpointPipelineKeepsResponsesOnSameEndpoint(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o"}}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping)
 
 	reqBody := `{"model":"gpt-4o","input":[{"role":"user","content":"hello"}]}`
 	req, err := http.NewRequestWithContext(
@@ -92,11 +112,152 @@ func TestEndpointPipelineKeepsResponsesOnSameEndpoint(t *testing.T) {
 	}
 }
 
+func TestEndpointPipelineRuntimeOptionsProviderUpdatesHaikuFallbackPerRequest(t *testing.T) {
+	catalog := &stubCatalog{models: []models.ModelInfo{
+		{ID: "gpt-5-mini", Endpoints: []string{config.UpstreamResponsesPath}},
+		{ID: "grok-code-fast-1", Endpoints: []string{config.UpstreamResponsesPath}},
+	}}
+	fallbackModels := []string{"gpt-5-mini"}
+	mw := NewMessagesTranslateWithRuntimeOptions(catalog, config.PathMapping, func() MessagesTranslateRuntimeOptions {
+		return MessagesTranslateRuntimeOptions{
+			ClaudeHaikuFallbackModels: fallbackModels,
+			ReasoningPolicies:         nil,
+		}
+	})
+
+	makeRequest := func() string {
+		reqBody := `{"model":"claude-haiku-latest","input":[{"role":"user","content":"hello"}]}`
+		req, err := http.NewRequestWithContext(
+			context.Background(),
+			http.MethodPost,
+			"http://localhost"+config.ResponsesPath,
+			strings.NewReader(reqBody),
+		)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+			SourceLocalPath: config.ResponsesPath,
+			LocalPath:       config.ResponsesPath,
+		}))
+		ctx := &middleware.Context{Request: req}
+
+		var mappedModel string
+		resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+			bodyBytes, readErr := io.ReadAll(ctx.Request.Body)
+			if readErr != nil {
+				t.Fatalf("read upstream body: %v", readErr)
+			}
+			var payload map[string]any
+			if unmarshalErr := json.Unmarshal(bodyBytes, &payload); unmarshalErr != nil {
+				t.Fatalf("unmarshal upstream body: %v", unmarshalErr)
+			}
+			modelValue, _ := payload["model"].(string)
+			mappedModel = modelValue
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+				Request:    ctx.Request,
+			}, nil
+		})
+		if err != nil {
+			t.Fatalf("handle: %v", err)
+		}
+		closeResponse(resp)
+		return mappedModel
+	}
+
+	if got := makeRequest(); got != "gpt-5-mini" {
+		t.Fatalf("expected first request mapped to gpt-5-mini, got %q", got)
+	}
+	fallbackModels = []string{"grok-code-fast-1"}
+	if got := makeRequest(); got != "grok-code-fast-1" {
+		t.Fatalf("expected second request mapped to grok-code-fast-1, got %q", got)
+	}
+}
+
+func TestEndpointPipelineRuntimeOptionsProviderUpdatesReasoningPoliciesPerRequest(t *testing.T) {
+	catalog := &stubCatalog{models: []models.ModelInfo{
+		{
+			ID:                       "gpt-5-mini",
+			Endpoints:                []string{config.UpstreamResponsesPath},
+			SupportedReasoningEffort: []string{"low", "medium", "high"},
+		},
+	}}
+	policies := []reasoning.Policy{
+		{Model: "gpt-5-mini", Target: reasoning.TargetResponses, Effort: reasoning.EffortNone},
+	}
+	mw := NewMessagesTranslateWithRuntimeOptions(catalog, config.PathMapping, func() MessagesTranslateRuntimeOptions {
+		return MessagesTranslateRuntimeOptions{
+			ClaudeHaikuFallbackModels: nil,
+			ReasoningPolicies:         policies,
+		}
+	})
+
+	makeRequest := func() map[string]any {
+		reqBody := `{"model":"gpt-5-mini","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`
+		req, err := http.NewRequestWithContext(
+			context.Background(),
+			http.MethodPost,
+			"http://localhost"+config.MessagesPath,
+			strings.NewReader(reqBody),
+		)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+			SourceLocalPath: config.MessagesPath,
+			LocalPath:       config.MessagesPath,
+		}))
+		ctx := &middleware.Context{Request: req}
+
+		var payload map[string]any
+		resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+			bodyBytes, readErr := io.ReadAll(ctx.Request.Body)
+			if readErr != nil {
+				t.Fatalf("read upstream body: %v", readErr)
+			}
+			if unmarshalErr := json.Unmarshal(bodyBytes, &payload); unmarshalErr != nil {
+				t.Fatalf("unmarshal upstream body: %v", unmarshalErr)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+				Request:    ctx.Request,
+			}, nil
+		})
+		if err != nil {
+			t.Fatalf("handle: %v", err)
+		}
+		closeResponse(resp)
+		return payload
+	}
+
+	first := makeRequest()
+	if _, exists := first["reasoning"]; exists {
+		t.Fatalf("expected no reasoning field when policy effort is none, got %#v", first["reasoning"])
+	}
+
+	policies = []reasoning.Policy{
+		{Model: "gpt-5-mini", Target: reasoning.TargetResponses, Effort: reasoning.EffortHigh},
+	}
+	second := makeRequest()
+	reasoningField, ok := second["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected reasoning field after policy update, got %#v", second["reasoning"])
+	}
+	if got := reasoningField["effort"]; got != "high" {
+		t.Fatalf("expected reasoning effort high, got %#v", got)
+	}
+}
+
 func TestEndpointPipelineTransformsMessagesToChatJSONResponse(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o", Endpoints: []string{
 		config.UpstreamChatCompletionsPath,
 	}}}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping)
 
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"max_tokens":5}`
 	req, err := http.NewRequestWithContext(
@@ -173,7 +334,7 @@ func TestEndpointPipelineTransformsMessagesToChatSSEResponse(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o", Endpoints: []string{
 		config.UpstreamChatCompletionsPath,
 	}}}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping)
 
 	reqBody := messagesStreamBody
 	req, err := http.NewRequestWithContext(
@@ -238,7 +399,7 @@ func TestEndpointPipelineKeepsMessagesBodyWhenModelSupportsMessagesEndpoint(t *t
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "claude-3", Endpoints: []string{
 		config.UpstreamMessagesPath,
 	}}}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping)
 
 	reqBody := `{"model":"claude-3","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
 	req, err := http.NewRequestWithContext(
@@ -290,7 +451,7 @@ func TestEndpointPipelineRewritesModelForMessagesPassthrough(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{
 		{ID: "gpt-5-mini", Endpoints: []string{config.UpstreamMessagesPath}},
 	}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping)
 
 	reqBody := `{"model":"claude-haiku-3.5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
 	req, err := http.NewRequestWithContext(
@@ -339,7 +500,7 @@ func TestEndpointPipelineAppliesReasoningPolicyWithModelSupport(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o", Endpoints: []string{
 		config.UpstreamResponsesPath,
 	}, SupportedReasoningEffort: []string{"low"}}}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping, map[string]string{
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping, map[string]string{
 		"gpt-4o@responses": "high",
 	})
 
@@ -391,7 +552,7 @@ func TestEndpointPipelineSkipsReasoningWhenModelSupportMissing(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o", Endpoints: []string{
 		config.UpstreamChatCompletionsPath,
 	}}}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping)
 
 	reqBody := `{"model":"gpt-4o","output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`
 	req, err := http.NewRequestWithContext(
@@ -434,7 +595,7 @@ func TestEndpointPipelineSkipsReasoningWhenModelSupportMissing(t *testing.T) {
 }
 
 func TestMessagesTranslate_UsesBuiltinReasoningPoliciesWhenNoConfig(t *testing.T) {
-	mw := NewMessagesTranslate(&stubCatalog{}, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(&stubCatalog{}, config.PathMapping)
 
 	got, ok := reasoning.MatchPolicy(mw.reasoningPolicies, "gpt-5-mini", reasoning.TargetResponses)
 	if !ok || got != reasoning.EffortNone {
@@ -448,7 +609,7 @@ func TestMessagesTranslate_UsesBuiltinReasoningPoliciesWhenNoConfig(t *testing.T
 }
 
 func TestMessagesTranslate_ConfigPolicyOverridesBuiltin(t *testing.T) {
-	mw := NewMessagesTranslate(&stubCatalog{}, nil, config.PathMapping, map[string]string{
+	mw := newMessagesTranslateForTest(&stubCatalog{}, config.PathMapping, map[string]string{
 		"gpt-5-mini@responses": "high",
 	})
 

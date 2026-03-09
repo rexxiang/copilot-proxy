@@ -200,6 +200,39 @@ func TestMonitorModel_TickUpdatesSnapshotInLogs(t *testing.T) {
 	}
 }
 
+func TestMonitorModel_TickTogglesLogsBlinkAndKeepsSnapshotRefresh(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	collector.RecordLocal(&monitor.RequestRecord{
+		Timestamp:  time.Now(),
+		Model:      "gpt-4o",
+		StatusCode: 200,
+	})
+
+	deps := MonitorDeps{Collector: collector}
+	model := NewMonitorModel(&deps, "")
+	if !model.sharedState.LogsBlinkOn {
+		t.Fatalf("expected LogsBlinkOn default to true")
+	}
+
+	updated, _ := model.Update(tickMsg(time.Now()))
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if model.sharedState.LogsBlinkOn {
+		t.Fatalf("expected first tick to toggle LogsBlinkOn to false")
+	}
+	if model.snapshot.TotalRequests != 1 {
+		t.Fatalf("expected snapshot refresh to remain intact after first tick, got %d", model.snapshot.TotalRequests)
+	}
+
+	updated, _ = model.Update(tickMsg(time.Now().Add(time.Second)))
+	model = *mustMonitorModelFromUpdate(t, updated)
+	if !model.sharedState.LogsBlinkOn {
+		t.Fatalf("expected second tick to toggle LogsBlinkOn back to true")
+	}
+	if model.snapshot.TotalRequests != 1 {
+		t.Fatalf("expected snapshot refresh to remain intact after second tick, got %d", model.snapshot.TotalRequests)
+	}
+}
+
 func TestMonitorModel_ClearLogsResetsOffset(t *testing.T) {
 	collector := monitor.NewCollector(100)
 	for range 50 {
@@ -1140,8 +1173,8 @@ func TestMonitorModel_ConfigModalSaveAppliesSettings(t *testing.T) {
 	if !applied {
 		t.Fatalf("expected apply settings callback to be called")
 	}
-	if model.serverAddr != "127.0.0.1:5111" {
-		t.Fatalf("expected serverAddr to update, got %q", model.serverAddr)
+	if model.serverAddr != "127.0.0.1:4000" {
+		t.Fatalf("expected serverAddr to remain runtime listen addr, got %q", model.serverAddr)
 	}
 	if model.configModal != nil && model.configModal.IsOpen() {
 		t.Fatalf("expected modal to close after successful save")
