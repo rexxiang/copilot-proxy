@@ -26,6 +26,12 @@ var (
 	errUnexpectedEOF         = errors.New("unexpected EOF")
 )
 
+func newStaticRetryTransport(transport http.RoundTripper, cfg RetryConfig) *DynamicRetryTransport {
+	return NewDynamicRetryTransport(transport, func() RetryConfig {
+		return cfg
+	})
+}
+
 func TestRetryTransport_NoRetryOnSuccess(t *testing.T) {
 	callCount := int32(0)
 	transport := &mockTransport{
@@ -35,7 +41,7 @@ func TestRetryTransport_NoRetryOnSuccess(t *testing.T) {
 		},
 	}
 
-	rt := NewRetryTransport(transport, DefaultRetryConfig())
+	rt := newStaticRetryTransport(transport, DefaultRetryConfig())
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.com", http.NoBody)
 
 	resp, err := rt.RoundTrip(req)
@@ -71,7 +77,7 @@ func TestRetryTransport_RetryOnConnectionReset(t *testing.T) {
 		MaxBackoff:     10 * time.Millisecond,
 		BackoffFactor:  2.0,
 	}
-	rt := NewRetryTransport(transport, cfg)
+	rt := newStaticRetryTransport(transport, cfg)
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.com", strings.NewReader("body"))
 
 	resp, err := rt.RoundTrip(req)
@@ -104,7 +110,7 @@ func TestRetryTransport_MaxRetriesExhausted(t *testing.T) {
 		MaxBackoff:     10 * time.Millisecond,
 		BackoffFactor:  2.0,
 	}
-	rt := NewRetryTransport(transport, cfg)
+	rt := newStaticRetryTransport(transport, cfg)
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.com", http.NoBody)
 
 	resp, err := rt.RoundTrip(req)
@@ -135,7 +141,7 @@ func TestRetryTransport_NoRetryOnNonRetryableError(t *testing.T) {
 		MaxBackoff:     10 * time.Millisecond,
 		BackoffFactor:  2.0,
 	}
-	rt := NewRetryTransport(transport, cfg)
+	rt := newStaticRetryTransport(transport, cfg)
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.com", http.NoBody)
 
 	resp, err := rt.RoundTrip(req)
@@ -165,7 +171,7 @@ func TestRetryTransport_ContextCancellation(t *testing.T) {
 		MaxBackoff:     100 * time.Millisecond,
 		BackoffFactor:  2.0,
 	}
-	rt := NewRetryTransport(transport, cfg)
+	rt := newStaticRetryTransport(transport, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.com", http.NoBody)
@@ -204,7 +210,7 @@ func TestRetryTransport_CancelDuringBackoffStopsWithoutExtraAttempt(t *testing.T
 		MaxBackoff:     500 * time.Millisecond,
 		BackoffFactor:  2.0,
 	}
-	rt := NewRetryTransport(transport, cfg)
+	rt := newStaticRetryTransport(transport, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -267,7 +273,7 @@ func TestRetryTransport_BodyPreservedOnRetry(t *testing.T) {
 		MaxBackoff:     10 * time.Millisecond,
 		BackoffFactor:  2.0,
 	}
-	rt := NewRetryTransport(transport, cfg)
+	rt := newStaticRetryTransport(transport, cfg)
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.com", bytes.NewReader([]byte("test body")))
 
 	resp, err := rt.RoundTrip(req)

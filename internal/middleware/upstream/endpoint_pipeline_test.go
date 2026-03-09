@@ -27,9 +27,29 @@ func (s *stubCatalog) GetModels() []models.ModelInfo {
 	return copied
 }
 
+func newMessagesTranslateForTest(
+	catalog models.Catalog,
+	mapping map[string]string,
+	reasoningPolicyMaps ...map[string]string,
+) *MessagesTranslateMiddleware {
+	policies, _ := reasoning.EffectivePoliciesFromMap(nil)
+	if len(reasoningPolicyMaps) > 0 {
+		if parsed, err := reasoning.EffectivePoliciesFromMap(reasoningPolicyMaps[0]); err == nil {
+			policies = parsed
+		}
+	}
+	mw := NewMessagesTranslateWithRuntimeOptions(catalog, mapping, func() MessagesTranslateRuntimeOptions {
+		return MessagesTranslateRuntimeOptions{
+			ReasoningPolicies: policies,
+		}
+	})
+	mw.reasoningPolicies = cloneReasoningPolicies(policies)
+	return mw
+}
+
 func TestEndpointPipelineKeepsResponsesOnSameEndpoint(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o"}}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping)
 
 	reqBody := `{"model":"gpt-4o","input":[{"role":"user","content":"hello"}]}`
 	req, err := http.NewRequestWithContext(
@@ -237,7 +257,7 @@ func TestEndpointPipelineTransformsMessagesToChatJSONResponse(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o", Endpoints: []string{
 		config.UpstreamChatCompletionsPath,
 	}}}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping)
 
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"max_tokens":5}`
 	req, err := http.NewRequestWithContext(
@@ -314,7 +334,7 @@ func TestEndpointPipelineTransformsMessagesToChatSSEResponse(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o", Endpoints: []string{
 		config.UpstreamChatCompletionsPath,
 	}}}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping)
 
 	reqBody := messagesStreamBody
 	req, err := http.NewRequestWithContext(
@@ -379,7 +399,7 @@ func TestEndpointPipelineKeepsMessagesBodyWhenModelSupportsMessagesEndpoint(t *t
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "claude-3", Endpoints: []string{
 		config.UpstreamMessagesPath,
 	}}}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping)
 
 	reqBody := `{"model":"claude-3","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
 	req, err := http.NewRequestWithContext(
@@ -431,7 +451,7 @@ func TestEndpointPipelineRewritesModelForMessagesPassthrough(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{
 		{ID: "gpt-5-mini", Endpoints: []string{config.UpstreamMessagesPath}},
 	}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping)
 
 	reqBody := `{"model":"claude-haiku-3.5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
 	req, err := http.NewRequestWithContext(
@@ -480,7 +500,7 @@ func TestEndpointPipelineAppliesReasoningPolicyWithModelSupport(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o", Endpoints: []string{
 		config.UpstreamResponsesPath,
 	}, SupportedReasoningEffort: []string{"low"}}}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping, map[string]string{
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping, map[string]string{
 		"gpt-4o@responses": "high",
 	})
 
@@ -532,7 +552,7 @@ func TestEndpointPipelineSkipsReasoningWhenModelSupportMissing(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o", Endpoints: []string{
 		config.UpstreamChatCompletionsPath,
 	}}}}
-	mw := NewMessagesTranslate(catalog, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(catalog, config.PathMapping)
 
 	reqBody := `{"model":"gpt-4o","output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`
 	req, err := http.NewRequestWithContext(
@@ -575,7 +595,7 @@ func TestEndpointPipelineSkipsReasoningWhenModelSupportMissing(t *testing.T) {
 }
 
 func TestMessagesTranslate_UsesBuiltinReasoningPoliciesWhenNoConfig(t *testing.T) {
-	mw := NewMessagesTranslate(&stubCatalog{}, nil, config.PathMapping)
+	mw := newMessagesTranslateForTest(&stubCatalog{}, config.PathMapping)
 
 	got, ok := reasoning.MatchPolicy(mw.reasoningPolicies, "gpt-5-mini", reasoning.TargetResponses)
 	if !ok || got != reasoning.EffortNone {
@@ -589,7 +609,7 @@ func TestMessagesTranslate_UsesBuiltinReasoningPoliciesWhenNoConfig(t *testing.T
 }
 
 func TestMessagesTranslate_ConfigPolicyOverridesBuiltin(t *testing.T) {
-	mw := NewMessagesTranslate(&stubCatalog{}, nil, config.PathMapping, map[string]string{
+	mw := newMessagesTranslateForTest(&stubCatalog{}, config.PathMapping, map[string]string{
 		"gpt-5-mini@responses": "high",
 	})
 

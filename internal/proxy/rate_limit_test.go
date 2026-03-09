@@ -10,11 +10,17 @@ import (
 	"time"
 )
 
+func newFixedRateLimitedHandler(next http.Handler, cooldown time.Duration) *RateLimitedHandler {
+	return NewRateLimitedHandlerWithProvider(next, func() time.Duration {
+		return cooldown
+	})
+}
+
 func TestRateLimitedHandlerBypassesWhenCooldownDisabled(t *testing.T) {
 	entered := make(chan struct{}, 2)
 	release := make(chan struct{})
 
-	handler := NewRateLimitedHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := newFixedRateLimitedHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		entered <- struct{}{}
 		<-release
 		w.WriteHeader(http.StatusNoContent)
@@ -64,7 +70,7 @@ func TestRateLimitedHandlerWaitsForCompletionAndCooldownBeforeNextRequest(t *tes
 	secondStarted := make(chan struct{})
 	firstDoneAt := make(chan time.Time, 1)
 
-	handler := NewRateLimitedHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := newFixedRateLimitedHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := atomic.AddInt32(&callCount, 1)
 		startsMu.Lock()
 		starts = append(starts, time.Now())
@@ -123,7 +129,7 @@ func TestRateLimitedHandlerStopsWaitingWhenRequestContextIsCanceled(t *testing.T
 	firstStarted := make(chan struct{})
 	firstRelease := make(chan struct{})
 
-	handler := NewRateLimitedHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := newFixedRateLimitedHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := atomic.AddInt32(&callCount, 1)
 		if call == 1 {
 			close(firstStarted)
@@ -168,7 +174,7 @@ func TestRateLimitedHandlerCloseUnblocksWaitingRequestsWith503(t *testing.T) {
 	firstStarted := make(chan struct{})
 	firstRelease := make(chan struct{})
 
-	handler := NewRateLimitedHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := newFixedRateLimitedHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := atomic.AddInt32(&callCount, 1)
 		if call == 1 {
 			close(firstStarted)

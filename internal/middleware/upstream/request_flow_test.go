@@ -197,7 +197,11 @@ func TestParseRequestBodyStoresInfoAndPreservesBody(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", bytes.NewBufferString(body))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
 	ctx := &middleware.Context{Request: req}
-	mw := NewParseRequestBody()
+	mw := NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
+		return middleware.ParseOptions{
+			MessagesAgentDetectionRequestMode: true,
+		}
+	})
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
 		rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
@@ -232,7 +236,11 @@ func TestParseRequestBodyMessagesInitSequenceDefaultsToAgent(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", bytes.NewBufferString(body))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
 	ctx := &middleware.Context{Request: req}
-	mw := NewParseRequestBody()
+	mw := NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
+		return middleware.ParseOptions{
+			MessagesAgentDetectionRequestMode: true,
+		}
+	})
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
 		rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
@@ -260,8 +268,10 @@ func TestParseRequestBodyMessagesSessionModeUsesHistoricalNonUserRole(t *testing
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", bytes.NewBufferString(body))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
 	ctx := &middleware.Context{Request: req}
-	mw := NewParseRequestBodyWithOptions(middleware.ParseOptions{
-		MessagesAgentDetectionRequestMode: false,
+	mw := NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
+		return middleware.ParseOptions{
+			MessagesAgentDetectionRequestMode: false,
+		}
 	})
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {

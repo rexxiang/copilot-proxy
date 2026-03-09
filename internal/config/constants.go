@@ -39,7 +39,7 @@ const (
 
 // Default Headers.
 const (
-	DefaultUserAgent     = "copilot/0.0.400"
+	DefaultUserAgent     = "copilot/1.0.2"
 	DefaultIntegrationID = "copilot-developer-cli"
 )
 

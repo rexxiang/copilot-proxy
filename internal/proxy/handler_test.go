@@ -120,10 +120,16 @@ func buildTestUpstreamMiddlewares(
 		upstream.NewRequestID(),
 		upstream.NewResolveAccount(store),
 		upstream.NewToken(upstream.TokenConfig{Provider: tokens}),
-		upstream.NewParseRequestBody(),
+		upstream.NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
+			return middleware.ParseOptions{
+				MessagesAgentDetectionRequestMode: true,
+			}
+		}),
 		upstream.NewCaptureDebug(),
 		upstream.NewRequestTimeout(0),
-		upstream.NewMessagesTranslate(catalog, nil, config.PathMapping),
+		upstream.NewMessagesTranslateWithRuntimeOptions(catalog, config.PathMapping, func() upstream.MessagesTranslateRuntimeOptions {
+			return upstream.MessagesTranslateRuntimeOptions{}
+		}),
 		upstream.NewTokenInjection(),
 		upstream.NewStaticHeaders(headers),
 		upstream.NewDynamicHeaders(),
@@ -773,8 +779,10 @@ func TestProxyHandlerDynamicHeadersMessagesSessionDetectionMode(t *testing.T) {
 		upstreamServer.Client().Transport,
 		func(cfg *HandlerConfig) {
 			middlewares := buildTestUpstreamMiddlewares(store, stubToken{token: "cp"}, nil, nil, nil)
-			middlewares[4] = upstream.NewParseRequestBodyWithOptions(middleware.ParseOptions{
-				MessagesAgentDetectionRequestMode: false,
+			middlewares[4] = upstream.NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
+				return middleware.ParseOptions{
+					MessagesAgentDetectionRequestMode: false,
+				}
 			})
 			cfg.UpstreamMiddlewares = middlewares
 		},

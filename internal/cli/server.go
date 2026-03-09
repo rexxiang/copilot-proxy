@@ -48,7 +48,6 @@ type ServerDeps struct {
 
 type serverRuntime struct {
 	server        *server.Server
-	proxyHandler  http.Handler
 	authStore     upstream.AuthStore
 	requestCloser interface{ Close() error }
 	settingsStore *runtimeSettingsStore
@@ -179,7 +178,6 @@ func buildServerWithDepsWithContext(ctx context.Context, deps *ServerDeps) (*ser
 	var requestCloser interface{ Close() error } = rateLimited
 	return &serverRuntime{
 		server:        server.New(&settings, proxyHandler),
-		proxyHandler:  proxyHandler,
 		authStore:     store,
 		requestCloser: requestCloser,
 		settingsStore: settingsStore,

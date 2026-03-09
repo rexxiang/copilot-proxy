@@ -33,28 +33,10 @@ func DefaultRetryConfig() RetryConfig {
 	}
 }
 
-// RetryTransport wraps an http.RoundTripper to add automatic retry on network errors.
-type RetryTransport struct {
-	Transport http.RoundTripper
-	Config    RetryConfig
-}
-
 // DynamicRetryTransport resolves retry config per request.
 type DynamicRetryTransport struct {
 	Transport      http.RoundTripper
 	ConfigProvider func() RetryConfig
-}
-
-// NewRetryTransport creates a new RetryTransport with the given config.
-func NewRetryTransport(transport http.RoundTripper, cfg RetryConfig) *RetryTransport {
-	if transport == nil {
-		transport = http.DefaultTransport
-	}
-	cfg = normalizeRetryConfig(cfg, false)
-	return &RetryTransport{
-		Transport: transport,
-		Config:    cfg,
-	}
 }
 
 // NewDynamicRetryTransport builds retry transport that can change behavior at runtime.
@@ -66,11 +48,6 @@ func NewDynamicRetryTransport(transport http.RoundTripper, provider func() Retry
 		Transport:      transport,
 		ConfigProvider: provider,
 	}
-}
-
-// RoundTrip implements http.RoundTripper with automatic retry on network errors.
-func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	return roundTripWithRetryConfig(rt.Transport, rt.Config, req, false)
 }
 
 // RoundTrip implements http.RoundTripper with runtime retry configuration.
@@ -86,20 +63,19 @@ func (rt *DynamicRetryTransport) RoundTrip(req *http.Request) (*http.Response, e
 	if rt.ConfigProvider != nil {
 		cfg = rt.ConfigProvider()
 	}
-	return roundTripWithRetryConfig(transport, cfg, req, true)
+	return roundTripWithRetryConfig(transport, cfg, req)
 }
 
 func roundTripWithRetryConfig(
 	transport http.RoundTripper,
 	cfg RetryConfig,
 	req *http.Request,
-	allowDisable bool,
 ) (*http.Response, error) {
 	if req == nil {
 		return nil, fmt.Errorf("round trip failed: nil request")
 	}
-	cfg = normalizeRetryConfig(cfg, allowDisable)
-	if allowDisable && cfg.MaxRetries <= 0 {
+	cfg = normalizeRetryConfig(cfg)
+	if cfg.MaxRetries <= 0 {
 		return transport.RoundTrip(req)
 	}
 
@@ -165,10 +141,7 @@ func roundTripWithRetryConfig(
 	return nil, lastErr
 }
 
-func normalizeRetryConfig(cfg RetryConfig, allowDisable bool) RetryConfig {
-	if !allowDisable && cfg.MaxRetries <= 0 {
-		cfg.MaxRetries = config.DefaultMaxRetries
-	}
+func normalizeRetryConfig(cfg RetryConfig) RetryConfig {
 	if cfg.MaxRetries < 0 {
 		cfg.MaxRetries = 0
 	}

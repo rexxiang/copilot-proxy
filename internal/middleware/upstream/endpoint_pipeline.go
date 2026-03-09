@@ -26,41 +26,6 @@ type MessagesTranslateRuntimeOptions struct {
 	ReasoningPolicies         []reasoning.Policy
 }
 
-// NewMessagesTranslate builds a single middleware for:
-// model rewrite -> endpoint select -> endpoint transform -> path rewrite.
-func NewMessagesTranslate(
-	catalog models.Catalog,
-	selector *models.Selector,
-	mapping map[string]string,
-	reasoningPolicyMaps ...map[string]string,
-) *MessagesTranslateMiddleware {
-	if selector == nil {
-		selector = models.NewSelector()
-	}
-
-	parsedPolicies, _ := reasoning.EffectivePoliciesFromMap(nil)
-	if len(reasoningPolicyMaps) > 0 {
-		if policies, err := reasoning.EffectivePoliciesFromMap(reasoningPolicyMaps[0]); err == nil {
-			parsedPolicies = policies
-		}
-	}
-
-	return &MessagesTranslateMiddleware{
-		catalog:           catalog,
-		selector:          selector,
-		pathMapping:       mapping,
-		reasoningPolicies: parsedPolicies,
-		codec: transform.EndpointCodec{
-			MessagesToChatRequest:       transform.MessagesToChatRequest,
-			ChatToMessagesResponse:      transform.ChatToMessagesResponse,
-			ChatSSEToMessages:           transform.TranslateChatSSEToMessages,
-			MessagesToResponsesRequest:  transform.MessagesToResponsesRequest,
-			ResponsesToMessagesResponse: transform.ResponsesToMessagesResponse,
-			ResponsesSSEToMessages:      transform.TranslateResponsesSSEToMessages,
-		},
-	}
-}
-
 // NewMessagesTranslateWithRuntimeOptions builds endpoint middleware with per-request runtime options.
 func NewMessagesTranslateWithRuntimeOptions(
 	catalog models.Catalog,

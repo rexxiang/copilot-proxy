@@ -14,7 +14,6 @@ var errRateLimitedHandlerClosed = errors.New("rate limited handler closed")
 
 type RateLimitedHandler struct {
 	next             http.Handler
-	cooldown         time.Duration
 	cooldownProvider func() time.Duration
 
 	mu           sync.Mutex
@@ -24,24 +23,12 @@ type RateLimitedHandler struct {
 	closed       bool
 }
 
-func NewRateLimitedHandler(next http.Handler, cooldown time.Duration) *RateLimitedHandler {
-	if next == nil {
-		next = http.NotFoundHandler()
-	}
-	return &RateLimitedHandler{
-		next:     next,
-		cooldown: cooldown,
-		notify:   make(chan struct{}),
-	}
-}
-
 func NewRateLimitedHandlerWithProvider(next http.Handler, provider func() time.Duration) *RateLimitedHandler {
 	if next == nil {
 		next = http.NotFoundHandler()
 	}
 	return &RateLimitedHandler{
 		next:             next,
-		cooldown:         0,
 		cooldownProvider: provider,
 		notify:           make(chan struct{}),
 	}
@@ -154,7 +141,7 @@ func (h *RateLimitedHandler) currentCooldown() time.Duration {
 	if h == nil {
 		return 0
 	}
-	cooldown := h.cooldown
+	cooldown := time.Duration(0)
 	if h.cooldownProvider != nil {
 		cooldown = h.cooldownProvider()
 	}

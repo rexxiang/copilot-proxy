@@ -421,20 +421,6 @@ func formatStatusLine(statusCode int) string {
 	return fmt.Sprintf("%d %s", statusCode, text)
 }
 
-// Enable starts debug logging (backward compatibility).
-//
-// Deprecated: Use EnableDebug instead.
-func (l *DebugLogger) Enable(logDir string) error {
-	return l.EnableDebug(logDir)
-}
-
-// Disable stops debug logging (backward compatibility).
-//
-// Deprecated: Use DisableDebug instead.
-func (l *DebugLogger) Disable() error {
-	return l.DisableDebug()
-}
-
 // Close closes the logger, stopping all logging.
 func (l *DebugLogger) Close() error {
 	l.mu.Lock()
