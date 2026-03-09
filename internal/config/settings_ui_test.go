@@ -31,7 +31,7 @@ func TestSettingsFieldSpecs_Matrix(t *testing.T) {
 		{key: "max_retries", widget: WidgetInt, visible: true, readonly: false},
 		{key: "retry_backoff", widget: WidgetDuration, visible: true, readonly: false},
 		{key: "rate_limit_seconds", widget: WidgetInt, visible: true, readonly: false},
-		{key: "messages_init_seq_agent", widget: WidgetBool, visible: true, readonly: false},
+		{key: "messages_agent_detection_request_mode", widget: WidgetBool, visible: true, readonly: false},
 		{key: "required_headers", widget: WidgetKeyValue, visible: false, readonly: false},
 		{key: "reasoning_policies", widget: WidgetKeyValue, visible: false, readonly: false},
 		{key: "reasoning_policies_ui", widget: WidgetArray, visible: true, readonly: false},
@@ -54,6 +54,9 @@ func TestSettingsFieldSpecs_Matrix(t *testing.T) {
 			t.Fatalf("unexpected readonly for %s: got %v want %v", tc.key, spec.ReadOnly, tc.readonly)
 		}
 	}
+	if _, exists := byKey["messages_init_seq_agent"]; exists {
+		t.Fatalf("messages_init_seq_agent should not appear in field specs")
+	}
 }
 
 func TestSettingsFieldSpecs_UsesReadableLabels(t *testing.T) {
@@ -67,8 +70,11 @@ func TestSettingsFieldSpecs_UsesReadableLabels(t *testing.T) {
 		byKey[specs[i].Key] = specs[i]
 	}
 
-	if got := byKey["messages_init_seq_agent"].Label; got != "Msg Init Seq Agent" {
-		t.Fatalf("unexpected messages_init_seq_agent label: %q", got)
+	if got := byKey["messages_agent_detection_request_mode"].Label; got != "Msg Agent Mode" {
+		t.Fatalf("unexpected messages_agent_detection_request_mode label: %q", got)
+	}
+	if got := byKey["messages_agent_detection_request_mode"].Description; got != "" {
+		t.Fatalf("expected messages_agent_detection_request_mode description empty, got %q", got)
 	}
 	if got := byKey["reasoning_policies_ui"].Label; got != "Reasoning Policies" {
 		t.Fatalf("unexpected reasoning_policies_ui label: %q", got)
@@ -170,9 +176,9 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	}
 
 	base := Settings{
-		ListenAddr:           "127.0.0.1:4999",
-		UpstreamBase:         "https://api.githubcopilot.com",
-		MessagesInitSeqAgent: false,
+		ListenAddr:                        "127.0.0.1:4999",
+		UpstreamBase:                      "https://api.githubcopilot.com",
+		MessagesAgentDetectionRequestMode: false,
 		RequiredHeaders: map[string]string{
 			"user-agent": "copilot/1.0",
 		},
@@ -196,7 +202,7 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	form.ScalarValues["max_retries"] = "6"
 	form.ScalarValues["retry_backoff"] = "5s"
 	form.ScalarValues["rate_limit_seconds"] = ""
-	form.ScalarValues["messages_init_seq_agent"] = "true"
+	form.ScalarValues["messages_agent_detection_request_mode"] = "true"
 	form.ObjectArrayValues["reasoning_policies_ui"] = []map[string]string{
 		{"model": "gpt-5-mini", "target": "responses", "effort": "high"},
 		{"model": "grok-code-fast-1", "target": "chat", "effort": "none"},
@@ -229,8 +235,8 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	if decoded.RateLimitSeconds != 0 {
 		t.Fatalf("expected empty rate_limit_seconds to decode as 0, got %d", decoded.RateLimitSeconds)
 	}
-	if !decoded.MessagesInitSeqAgent {
-		t.Fatalf("expected messages_init_seq_agent=true")
+	if !decoded.MessagesAgentDetectionRequestMode {
+		t.Fatalf("expected messages_agent_detection_request_mode=true")
 	}
 	if decoded.RequiredHeaders["user-agent"] != "copilot/1.0" {
 		t.Fatalf("hidden required_headers should remain unchanged")
@@ -278,7 +284,7 @@ func TestDecodeFormToSettings_Validation(t *testing.T) {
 		{
 			name: "invalid bool",
 			mutate: func(form *SettingsForm) {
-				form.ScalarValues["messages_init_seq_agent"] = "maybe"
+				form.ScalarValues["messages_agent_detection_request_mode"] = "maybe"
 			},
 		},
 		{

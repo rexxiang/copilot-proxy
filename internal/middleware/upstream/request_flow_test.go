@@ -227,7 +227,7 @@ func TestParseRequestBodyStoresInfoAndPreservesBody(t *testing.T) {
 	closeResponse(resp)
 }
 
-func TestParseRequestBodyMessagesInitSequenceDefaultsToUser(t *testing.T) {
+func TestParseRequestBodyMessagesInitSequenceDefaultsToAgent(t *testing.T) {
 	body := `{"model":"claude-3","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"question"}]}`
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", bytes.NewBufferString(body))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
@@ -239,8 +239,8 @@ func TestParseRequestBodyMessagesInitSequenceDefaultsToUser(t *testing.T) {
 		if !ok || rc == nil {
 			t.Fatalf("missing request context")
 		}
-		if rc.Info.IsAgent {
-			t.Fatalf("expected IsAgent=false by default for messages init sequence")
+		if !rc.Info.IsAgent {
+			t.Fatalf("expected IsAgent=true by default for messages init sequence")
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -255,13 +255,13 @@ func TestParseRequestBodyMessagesInitSequenceDefaultsToUser(t *testing.T) {
 	closeResponse(resp)
 }
 
-func TestParseRequestBodyMessagesInitSequenceCanBeEnabled(t *testing.T) {
-	body := `{"model":"claude-3","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"question"}]}`
+func TestParseRequestBodyMessagesSessionModeUsesHistoricalNonUserRole(t *testing.T) {
+	body := `{"model":"claude-3","messages":[{"role":"user","content":"first"},{"role":"assistant","content":"second"},{"role":"user","content":"last"}]}`
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", bytes.NewBufferString(body))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
 	ctx := &middleware.Context{Request: req}
 	mw := NewParseRequestBodyWithOptions(middleware.ParseOptions{
-		MessagesInitSeqAgent: true,
+		MessagesAgentDetectionRequestMode: false,
 	})
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
@@ -270,7 +270,7 @@ func TestParseRequestBodyMessagesInitSequenceCanBeEnabled(t *testing.T) {
 			t.Fatalf("missing request context")
 		}
 		if !rc.Info.IsAgent {
-			t.Fatalf("expected IsAgent=true when messages init sequence option is enabled")
+			t.Fatalf("expected IsAgent=true in session mode when historical assistant message exists")
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,

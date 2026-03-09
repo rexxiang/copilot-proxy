@@ -18,12 +18,12 @@ func TestConfigModal_OpenUsesVisibleFieldSpecs(t *testing.T) {
 	modal := NewConfigModal()
 
 	settings := config.Settings{
-		ListenAddr:           "127.0.0.1:4000",
-		UpstreamBase:         "https://api.githubcopilot.com",
-		MessagesInitSeqAgent: false,
-		UpstreamTimeout:      config.NewDuration(5 * time.Minute),
-		MaxRetries:           3,
-		RetryBackoff:         config.NewDuration(time.Second),
+		ListenAddr:                        "127.0.0.1:4000",
+		UpstreamBase:                      "https://api.githubcopilot.com",
+		MessagesAgentDetectionRequestMode: false,
+		UpstreamTimeout:                   config.NewDuration(5 * time.Minute),
+		MaxRetries:                        3,
+		RetryBackoff:                      config.NewDuration(time.Second),
 	}
 
 	if err := modal.Open(&settings); err != nil {
@@ -37,7 +37,7 @@ func TestConfigModal_OpenUsesVisibleFieldSpecs(t *testing.T) {
 		"max_retries",
 		"retry_backoff",
 		"rate_limit_seconds",
-		"messages_init_seq_agent",
+		"messages_agent_detection_request_mode",
 		"reasoning_policies_ui",
 		"claude_haiku_fallback_models_ui",
 	}
@@ -136,7 +136,7 @@ func TestConfigModal_BuildCandidateFromEditedForm(t *testing.T) {
 func TestConfigModal_BuildCandidatePreservesBoolField(t *testing.T) {
 	modal := NewConfigModal()
 	base := config.DefaultSettings()
-	base.MessagesInitSeqAgent = true
+	base.MessagesAgentDetectionRequestMode = true
 	if err := modal.Open(&base); err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -145,8 +145,72 @@ func TestConfigModal_BuildCandidatePreservesBoolField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildCandidate error: %v", err)
 	}
-	if !candidate.MessagesInitSeqAgent {
-		t.Fatalf("expected messages_init_seq_agent=true")
+	if !candidate.MessagesAgentDetectionRequestMode {
+		t.Fatalf("expected messages_agent_detection_request_mode=true")
+	}
+}
+
+func TestConfigModal_SpaceTogglesBoolField(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "messages_agent_detection_request_mode")
+	if got := modal.FieldValue("messages_agent_detection_request_mode"); got != "true" {
+		t.Fatalf("expected initial bool value true, got %q", got)
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeySpace})
+	if got := modal.FieldValue("messages_agent_detection_request_mode"); got != "false" {
+		t.Fatalf("expected bool toggled to false, got %q", got)
+	}
+
+	candidate, err := modal.BuildCandidate(&base)
+	if err != nil {
+		t.Fatalf("BuildCandidate error: %v", err)
+	}
+	if candidate.MessagesAgentDetectionRequestMode {
+		t.Fatalf("expected messages_agent_detection_request_mode=false after one toggle")
+	}
+}
+
+func TestConfigModal_AgentModeRendersPremiumRequestAndSessionLabels(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "messages_agent_detection_request_mode")
+	view := stripANSI(modal.View())
+	if !strings.Contains(view, "[premium request]") {
+		t.Fatalf("expected premium request label in view, got:\n%s", view)
+	}
+	if strings.Contains(view, "tail message focused") {
+		t.Fatalf("expected no mode description text for Msg Agent Mode, got:\n%s", view)
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeySpace})
+	view = stripANSI(modal.View())
+	if !strings.Contains(view, "[session]") {
+		t.Fatalf("expected session label in view after toggle, got:\n%s", view)
+	}
+}
+
+func TestConfigModal_BoolFieldIgnoresTextInput(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "messages_agent_detection_request_mode")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+
+	if got := modal.FieldValue("messages_agent_detection_request_mode"); got != "true" {
+		t.Fatalf("expected bool field to ignore text input, got %q", got)
 	}
 }
 
@@ -296,7 +360,7 @@ func TestConfigModal_ArrayVerticalBoundaryMovesFieldFocus(t *testing.T) {
 	}
 
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
-	if modal.CurrentFieldKey() != "messages_init_seq_agent" {
+	if modal.CurrentFieldKey() != "messages_agent_detection_request_mode" {
 		t.Fatalf("expected focus to move to previous field, got %q", modal.CurrentFieldKey())
 	}
 

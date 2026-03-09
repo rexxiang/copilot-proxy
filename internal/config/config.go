@@ -15,16 +15,16 @@ type Settings struct {
 	ListenAddr   string `json:"listen_addr" ui:"label=Listen;widget=text;visible=false;readonly=true;order=10"`
 	UpstreamBase string `json:"upstream_base" ui:"label=Upstream;widget=url;visible=true;readonly=true;order=20"`
 	// Map fields are storage-only in settings.json; TUI editing should use shadow array fields with ui tags.
-	RequiredHeaders             map[string]string    `json:"required_headers,omitempty" ui:"label=Headers;widget=kv;visible=false;readonly=false;order=60"`
-	UpstreamTimeout             Duration             `json:"upstream_timeout" ui:"label=Timeout;widget=duration;visible=true;readonly=false;order=30"`
-	MaxRetries                  int                  `json:"max_retries" ui:"label=Retries;widget=int;visible=true;readonly=false;order=40;min=1"`
-	RetryBackoff                Duration             `json:"retry_backoff" ui:"label=Backoff;widget=duration;visible=true;readonly=false;order=50"`
-	RateLimitSeconds            int                  `json:"rate_limit_seconds" ui:"label=Rate Limit (sec);widget=int;visible=true;readonly=false;order=52;min=0;placeholder=0;empty=zero;description=Minimum whole seconds between one request finishing and the next starting. 0 or empty disables rate limiting."`
-	MessagesInitSeqAgent        bool                 `json:"messages_init_seq_agent" ui:"label=Msg Init Seq Agent;widget=bool;visible=true;readonly=false;order=55;placeholder=true|false"`
-	ReasoningPoliciesMap        map[string]string    `json:"reasoning_policies,omitempty" ui:"label=ReasoningPoliciesMap;widget=kv;visible=false;readonly=false;order=65"`
-	ReasoningPolicies           []ReasoningPolicy    `json:"-" ui:"key=reasoning_policies_ui;label=Reasoning Policies;widget=array;visible=true;readonly=false;order=66;description=UI shadow list for reasoning_policies map. Use model@target rules with effort none|low|medium|high."`
-	ClaudeHaikuFallbackModels   []string             `json:"-"`
-	ClaudeHaikuFallbackModelsUI []HaikuFallbackModel `json:"-" ui:"key=claude_haiku_fallback_models_ui;label=Haiku Fallbacks;widget=array;visible=true;readonly=false;order=67;description=Try these replacement models in order for claude-haiku-* requests. If none are available, the proxy automatically falls back to the highest available Haiku model."`
+	RequiredHeaders                   map[string]string    `json:"required_headers,omitempty" ui:"label=Headers;widget=kv;visible=false;readonly=false;order=60"`
+	UpstreamTimeout                   Duration             `json:"upstream_timeout" ui:"label=Timeout;widget=duration;visible=true;readonly=false;order=30"`
+	MaxRetries                        int                  `json:"max_retries" ui:"label=Retries;widget=int;visible=true;readonly=false;order=40;min=1"`
+	RetryBackoff                      Duration             `json:"retry_backoff" ui:"label=Backoff;widget=duration;visible=true;readonly=false;order=50"`
+	RateLimitSeconds                  int                  `json:"rate_limit_seconds" ui:"label=Rate Limit (sec);widget=int;visible=true;readonly=false;order=52;min=0;placeholder=0;empty=zero;description=Minimum whole seconds between one request finishing and the next starting. 0 or empty disables rate limiting."`
+	MessagesAgentDetectionRequestMode bool                 `json:"messages_agent_detection_request_mode" ui:"label=Msg Agent Mode;widget=bool;visible=true;readonly=false;order=55"`
+	ReasoningPoliciesMap              map[string]string    `json:"reasoning_policies,omitempty" ui:"label=ReasoningPoliciesMap;widget=kv;visible=false;readonly=false;order=65"`
+	ReasoningPolicies                 []ReasoningPolicy    `json:"-" ui:"key=reasoning_policies_ui;label=Reasoning Policies;widget=array;visible=true;readonly=false;order=66;description=UI shadow list for reasoning_policies map. Use model@target rules with effort none|low|medium|high."`
+	ClaudeHaikuFallbackModels         []string             `json:"-"`
+	ClaudeHaikuFallbackModelsUI       []HaikuFallbackModel `json:"-" ui:"key=claude_haiku_fallback_models_ui;label=Haiku Fallbacks;widget=array;visible=true;readonly=false;order=67;description=Try these replacement models in order for claude-haiku-* requests. If none are available, the proxy automatically falls back to the highest available Haiku model."`
 }
 
 type ReasoningPolicy struct {
@@ -125,7 +125,7 @@ func saveJSON[T any](pathFunc func() (string, error), value T) error {
 }
 
 func LoadSettings() (Settings, error) {
-	settings, err := loadJSON(SettingsPath, Settings{})
+	settings, err := loadJSON(SettingsPath, DefaultSettings())
 	if err != nil {
 		return Settings{}, err
 	}
@@ -151,18 +151,18 @@ func SaveSettings(settings *Settings) error {
 
 func DefaultSettings() Settings {
 	settings := Settings{
-		ListenAddr:                  DefaultListenAddr,
-		UpstreamBase:                CopilotAPIURL,
-		RequiredHeaders:             nil,
-		UpstreamTimeout:             NewDuration(DefaultUpstreamTimeout),
-		MaxRetries:                  DefaultMaxRetries,
-		RetryBackoff:                NewDuration(DefaultRetryBackoff),
-		RateLimitSeconds:            0,
-		MessagesInitSeqAgent:        false,
-		ReasoningPoliciesMap:        nil,
-		ReasoningPolicies:           nil,
-		ClaudeHaikuFallbackModels:   cloneStringSlice(defaultClaudeHaikuFallbackModels),
-		ClaudeHaikuFallbackModelsUI: nil,
+		ListenAddr:                        DefaultListenAddr,
+		UpstreamBase:                      CopilotAPIURL,
+		RequiredHeaders:                   nil,
+		UpstreamTimeout:                   NewDuration(DefaultUpstreamTimeout),
+		MaxRetries:                        DefaultMaxRetries,
+		RetryBackoff:                      NewDuration(DefaultRetryBackoff),
+		RateLimitSeconds:                  0,
+		MessagesAgentDetectionRequestMode: true,
+		ReasoningPoliciesMap:              nil,
+		ReasoningPolicies:                 nil,
+		ClaudeHaikuFallbackModels:         cloneStringSlice(defaultClaudeHaikuFallbackModels),
+		ClaudeHaikuFallbackModelsUI:       nil,
 	}
 	settings.syncClaudeHaikuFallbackModelsFromStorage()
 	return settings
@@ -237,45 +237,46 @@ func applyDefaults(settings *Settings) Settings {
 
 func (settings Settings) MarshalJSON() ([]byte, error) {
 	type settingsJSON struct {
-		ListenAddr                string            `json:"listen_addr"`
-		UpstreamBase              string            `json:"upstream_base"`
-		RequiredHeaders           map[string]string `json:"required_headers,omitempty"`
-		UpstreamTimeout           Duration          `json:"upstream_timeout"`
-		MaxRetries                int               `json:"max_retries"`
-		RetryBackoff              Duration          `json:"retry_backoff"`
-		RateLimitSeconds          int               `json:"rate_limit_seconds"`
-		MessagesInitSeqAgent      bool              `json:"messages_init_seq_agent"`
-		ReasoningPoliciesMap      map[string]string `json:"reasoning_policies,omitempty"`
-		ClaudeHaikuFallbackModels []string          `json:"claude_haiku_fallback_models"`
+		ListenAddr                        string            `json:"listen_addr"`
+		UpstreamBase                      string            `json:"upstream_base"`
+		RequiredHeaders                   map[string]string `json:"required_headers,omitempty"`
+		UpstreamTimeout                   Duration          `json:"upstream_timeout"`
+		MaxRetries                        int               `json:"max_retries"`
+		RetryBackoff                      Duration          `json:"retry_backoff"`
+		RateLimitSeconds                  int               `json:"rate_limit_seconds"`
+		MessagesAgentDetectionRequestMode *bool             `json:"messages_agent_detection_request_mode"`
+		ReasoningPoliciesMap              map[string]string `json:"reasoning_policies,omitempty"`
+		ClaudeHaikuFallbackModels         []string          `json:"claude_haiku_fallback_models"`
 	}
 
+	messagesAgentDetectionRequestMode := settings.MessagesAgentDetectionRequestMode
 	payload := settingsJSON{
-		ListenAddr:                settings.ListenAddr,
-		UpstreamBase:              settings.UpstreamBase,
-		RequiredHeaders:           settings.RequiredHeaders,
-		UpstreamTimeout:           settings.UpstreamTimeout,
-		MaxRetries:                settings.MaxRetries,
-		RetryBackoff:              settings.RetryBackoff,
-		RateLimitSeconds:          settings.RateLimitSeconds,
-		MessagesInitSeqAgent:      settings.MessagesInitSeqAgent,
-		ReasoningPoliciesMap:      settings.ReasoningPoliciesMap,
-		ClaudeHaikuFallbackModels: settings.ClaudeHaikuFallbackModels,
+		ListenAddr:                        settings.ListenAddr,
+		UpstreamBase:                      settings.UpstreamBase,
+		RequiredHeaders:                   settings.RequiredHeaders,
+		UpstreamTimeout:                   settings.UpstreamTimeout,
+		MaxRetries:                        settings.MaxRetries,
+		RetryBackoff:                      settings.RetryBackoff,
+		RateLimitSeconds:                  settings.RateLimitSeconds,
+		MessagesAgentDetectionRequestMode: &messagesAgentDetectionRequestMode,
+		ReasoningPoliciesMap:              settings.ReasoningPoliciesMap,
+		ClaudeHaikuFallbackModels:         settings.ClaudeHaikuFallbackModels,
 	}
 	return json.Marshal(payload)
 }
 
 func (settings *Settings) UnmarshalJSON(data []byte) error {
 	type settingsJSON struct {
-		ListenAddr                string            `json:"listen_addr"`
-		UpstreamBase              string            `json:"upstream_base"`
-		RequiredHeaders           map[string]string `json:"required_headers,omitempty"`
-		UpstreamTimeout           Duration          `json:"upstream_timeout"`
-		MaxRetries                int               `json:"max_retries"`
-		RetryBackoff              Duration          `json:"retry_backoff"`
-		RateLimitSeconds          int               `json:"rate_limit_seconds"`
-		MessagesInitSeqAgent      bool              `json:"messages_init_seq_agent"`
-		ReasoningPoliciesMap      map[string]string `json:"reasoning_policies,omitempty"`
-		ClaudeHaikuFallbackModels []string          `json:"claude_haiku_fallback_models"`
+		ListenAddr                        string            `json:"listen_addr"`
+		UpstreamBase                      string            `json:"upstream_base"`
+		RequiredHeaders                   map[string]string `json:"required_headers,omitempty"`
+		UpstreamTimeout                   Duration          `json:"upstream_timeout"`
+		MaxRetries                        int               `json:"max_retries"`
+		RetryBackoff                      Duration          `json:"retry_backoff"`
+		RateLimitSeconds                  int               `json:"rate_limit_seconds"`
+		MessagesAgentDetectionRequestMode *bool             `json:"messages_agent_detection_request_mode"`
+		ReasoningPoliciesMap              map[string]string `json:"reasoning_policies,omitempty"`
+		ClaudeHaikuFallbackModels         []string          `json:"claude_haiku_fallback_models"`
 	}
 
 	var payload settingsJSON
@@ -284,16 +285,19 @@ func (settings *Settings) UnmarshalJSON(data []byte) error {
 	}
 
 	*settings = Settings{
-		ListenAddr:                payload.ListenAddr,
-		UpstreamBase:              payload.UpstreamBase,
-		RequiredHeaders:           payload.RequiredHeaders,
-		UpstreamTimeout:           payload.UpstreamTimeout,
-		MaxRetries:                payload.MaxRetries,
-		RetryBackoff:              payload.RetryBackoff,
-		RateLimitSeconds:          payload.RateLimitSeconds,
-		MessagesInitSeqAgent:      payload.MessagesInitSeqAgent,
-		ReasoningPoliciesMap:      payload.ReasoningPoliciesMap,
-		ClaudeHaikuFallbackModels: payload.ClaudeHaikuFallbackModels,
+		ListenAddr:                        payload.ListenAddr,
+		UpstreamBase:                      payload.UpstreamBase,
+		RequiredHeaders:                   payload.RequiredHeaders,
+		UpstreamTimeout:                   payload.UpstreamTimeout,
+		MaxRetries:                        payload.MaxRetries,
+		RetryBackoff:                      payload.RetryBackoff,
+		RateLimitSeconds:                  payload.RateLimitSeconds,
+		MessagesAgentDetectionRequestMode: true,
+		ReasoningPoliciesMap:              payload.ReasoningPoliciesMap,
+		ClaudeHaikuFallbackModels:         payload.ClaudeHaikuFallbackModels,
+	}
+	if payload.MessagesAgentDetectionRequestMode != nil {
+		settings.MessagesAgentDetectionRequestMode = *payload.MessagesAgentDetectionRequestMode
 	}
 	return nil
 }

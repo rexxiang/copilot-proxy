@@ -696,10 +696,10 @@ func TestProxyHandlerDynamicHeaders(t *testing.T) {
 			expectVision:    false,
 		},
 		{
-			name:            "anthropic messages init sequence defaults to user",
+			name:            "anthropic messages init sequence defaults to agent",
 			path:            "/v1/messages",
 			body:            `{"model":"claude-3-opus","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"actual question"}]}`,
-			expectInitiator: "user",
+			expectInitiator: "agent",
 			expectVision:    false,
 		},
 		{
@@ -752,7 +752,7 @@ func TestProxyHandlerDynamicHeaders(t *testing.T) {
 	}
 }
 
-func TestProxyHandlerDynamicHeadersMessagesInitSeqAgentEnabled(t *testing.T) {
+func TestProxyHandlerDynamicHeadersMessagesSessionDetectionMode(t *testing.T) {
 	capture := make(chan *http.Request, 1)
 
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -774,13 +774,13 @@ func TestProxyHandlerDynamicHeadersMessagesInitSeqAgentEnabled(t *testing.T) {
 		func(cfg *HandlerConfig) {
 			middlewares := buildTestUpstreamMiddlewares(store, stubToken{token: "cp"}, nil, nil, nil)
 			middlewares[4] = upstream.NewParseRequestBodyWithOptions(middleware.ParseOptions{
-				MessagesInitSeqAgent: true,
+				MessagesAgentDetectionRequestMode: false,
 			})
 			cfg.UpstreamMiddlewares = middlewares
 		},
 	)
 
-	body := `{"model":"claude-3-opus","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"actual question"}]}`
+	body := `{"model":"claude-3-opus","messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"last"}]}`
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", bytes.NewBufferString(body))
 	resp := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(resp, req)

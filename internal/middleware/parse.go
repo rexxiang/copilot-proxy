@@ -14,7 +14,7 @@ type RequestParser interface {
 
 // ParseOptions controls request parsing behavior toggles.
 type ParseOptions struct {
-	MessagesInitSeqAgent bool
+	MessagesAgentDetectionRequestMode bool
 }
 
 // ChatCompletionsParser parses OpenAI Chat Completions API format.
@@ -62,13 +62,9 @@ func (p *ResponsesParser) Parse(body []byte) RequestInfo {
 // AnthropicMessagesParser parses Anthropic Messages API format.
 // Format: {"model": "...", "messages": [{"role": "...", "content": ...}], "system": "..."}
 // Image type: "image" in content array
-// Agent detection: any message with role != "user", OR user message contains "tool_result" content.
+// Agent detection supports request/session modes.
 type AnthropicMessagesParser struct {
-	// DisableInitSequenceDetection skips initialization sequence detection.
-	// Default (false): if all messages have role="user" and count > 1,
-	// this is treated as an initialization sequence (IsAgent=true).
-	// Set to true to disable this behavior.
-	DisableInitSequenceDetection bool
+	RequestModeAgentDetection bool
 }
 
 func (p *AnthropicMessagesParser) Parse(body []byte) RequestInfo {
@@ -79,14 +75,16 @@ func (p *AnthropicMessagesParser) Parse(body []byte) RequestInfo {
 
 	return RequestInfo{
 		IsVision: checkAnthropicVision(req.Messages),
-		IsAgent:  isAnthropicAgent(req.Messages, p.DisableInitSequenceDetection),
+		IsAgent:  isAnthropicAgent(req.Messages, p.RequestModeAgentDetection),
 		Model:    req.Model,
 	}
 }
 
 // ParseRequestByPath selects the appropriate parser based on request path.
 func ParseRequestByPath(path string, body []byte) RequestInfo {
-	return ParseRequestByPathWithOptions(path, body, ParseOptions{})
+	return ParseRequestByPathWithOptions(path, body, ParseOptions{
+		MessagesAgentDetectionRequestMode: true,
+	})
 }
 
 // ParseRequestByPathWithOptions selects the appropriate parser based on request path and options.
@@ -112,7 +110,7 @@ func parserByPath(path string, options ParseOptions) (RequestParser, bool) {
 	case config.ResponsesPath:
 		return &ResponsesParser{}, true
 	case config.MessagesPath:
-		return &AnthropicMessagesParser{DisableInitSequenceDetection: !options.MessagesInitSeqAgent}, true
+		return &AnthropicMessagesParser{RequestModeAgentDetection: options.MessagesAgentDetectionRequestMode}, true
 	default:
 		return nil, false
 	}
@@ -216,26 +214,35 @@ func checkAnthropicVision(messages []anthropicMessage) bool {
 
 // isAnthropicAgent determines if the request is from an agent.
 // Rules:
-// 1. Any message with role != "user" -> agent
-// 2. Any message with content containing type ending with "tool_result" -> agent
-// 3. All messages are "user" and count >= 2 -> agent (init sequence).
-func isAnthropicAgent(messages []anthropicMessage, disableInitSequence bool) bool {
+// 1. All messages are "user" and count >= 2 -> agent (init sequence)
+// 2. Request mode (mode=true):
+//   - Last message role != "user" -> agent
+//   - Last message content has type suffix tool_use/tool_result -> agent
+//
+// 3. Session mode (mode=false):
+//   - Any message role != "user" -> agent
+//   - Any message content has type suffix tool_result -> agent
+func isAnthropicAgent(messages []anthropicMessage, requestMode bool) bool {
+	if len(messages) >= minMessagesForInitSequence && allAnthropicRolesUser(messages) {
+		return true
+	}
+
+	if requestMode {
+		last := messages[len(messages)-1]
+		if last.Role != roleUser {
+			return true
+		}
+		return hasToolUseOrToolResultContent(last.Content)
+	}
+
 	for _, msg := range messages {
-		// Rule 1: any non-user role
 		if msg.Role != roleUser {
 			return true
 		}
-		// Rule 2: content with tool_result type suffix
 		if hasToolResultContent(msg.Content) {
 			return true
 		}
 	}
-
-	// Rule 3: init sequence (all user, count >= 2)
-	if !disableInitSequence && len(messages) >= minMessagesForInitSequence {
-		return true
-	}
-
 	return false
 }
 
@@ -248,6 +255,25 @@ func hasToolResultContent(content any) bool {
 		}
 		return false
 	})
+}
+
+func hasToolUseOrToolResultContent(content any) bool {
+	return forEachContentPart(content, func(part map[string]any) bool {
+		typ, ok := part["type"].(string)
+		if !ok {
+			return false
+		}
+		return strings.HasSuffix(typ, contentTypeToolUse) || strings.HasSuffix(typ, contentTypeToolResult)
+	})
+}
+
+func allAnthropicRolesUser(messages []anthropicMessage) bool {
+	for _, msg := range messages {
+		if msg.Role != roleUser {
+			return false
+		}
+	}
+	return true
 }
 
 // hasAnthropicImage checks for image type in Anthropic format, including nested in tool_result.
@@ -289,6 +315,7 @@ const (
 	contentTypeInputImage = "input_image"
 	// Anthropic Messages format.
 	contentTypeImage      = "image"
+	contentTypeToolUse    = "tool_use"
 	contentTypeToolResult = "tool_result"
 	// Role identifiers.
 	roleUser = "user"

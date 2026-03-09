@@ -34,6 +34,12 @@ const (
 	inputEmptyGlyph       = " "
 	adaptiveInputWidthMin = 1
 	adaptiveInputWidthMax = 64
+
+	agentDetectionModeFieldKey     = "messages_agent_detection_request_mode"
+	agentDetectionModeLabelPremium = "premium request"
+	agentDetectionModeLabelSession = "session"
+	defaultBoolLabelOn             = " ON"
+	defaultBoolLabelOff            = "OFF"
 )
 
 type kvCursor struct {
@@ -793,6 +799,12 @@ func (m *ConfigModal) updateScalarInput(msg tea.KeyMsg, spec *config.FieldSpec) 
 	if spec == nil {
 		return
 	}
+	if spec.Widget == config.WidgetBool {
+		if keyMatches(msg, tea.KeySpace, "space") || isSpaceRuneKey(msg) {
+			m.toggleBoolField(spec)
+		}
+		return
+	}
 	input, ok := m.scalarInputs[spec.Key]
 	if !ok || input == nil {
 		return
@@ -913,7 +925,11 @@ func (m *ConfigModal) View() string {
 		return configModalStyle.Render(sb.String())
 	}
 
-	sb.WriteString(DimStyle.Render("Ctrl+S=save  Esc=close  Tab/↑↓=navigate  Ctrl+N/Ctrl+D=row  Ctrl+←/→=column  Ctrl/Opt+↑/↓=move row"))
+	sb.WriteString(
+		DimStyle.Render(
+			"Ctrl+S=save  Esc=close  Tab/↑↓=navigate  Space=toggle bool  Ctrl+N/Ctrl+D=row  Ctrl+←/→=column  Ctrl/Opt+↑/↓=move row",
+		),
+	)
 	sb.WriteString("\n\n")
 	for i := range m.specs {
 		sb.WriteString(m.renderFieldBlock(i))
@@ -959,6 +975,9 @@ func (m *ConfigModal) renderFieldBlock(index int) string {
 func (m *ConfigModal) renderScalarFieldValue(spec *config.FieldSpec, focused bool) string {
 	if spec == nil {
 		return ""
+	}
+	if spec.Widget == config.WidgetBool {
+		return renderBoolValue(spec.Key, parseBoolScalarValue(m.form.ScalarValues[spec.Key]), focused, spec.ReadOnly)
 	}
 	if spec.ReadOnly {
 		return configModalInputReadOnlyStyle.Render(wrapInputValue(m.form.ScalarValues[spec.Key]))
@@ -1076,12 +1095,57 @@ func renderTextInputBox(input *textinput.Model, value string, focused, readOnly 
 	return configModalInputStyle.Render(wrapInputValue(value))
 }
 
+func renderBoolValue(fieldKey string, value bool, focused, readOnly bool) string {
+	label := defaultBoolLabelOff
+	if fieldKey == agentDetectionModeFieldKey {
+		if value {
+			label = agentDetectionModeLabelPremium
+		} else {
+			label = agentDetectionModeLabelSession
+		}
+	} else if value {
+		label = defaultBoolLabelOn
+	}
+	box := "[" + label + "]"
+	if readOnly {
+		return configModalInputReadOnlyStyle.Render(box)
+	}
+	if focused {
+		return configModalInputFocusStyle.Render(box)
+	}
+	return configModalInputStyle.Render(box)
+}
+
 func wrapInputValue(value string) string {
 	content := value
 	if content == "" {
 		content = inputEmptyGlyph
 	}
 	return "[" + content + "]"
+}
+
+func isSpaceRuneKey(msg tea.KeyMsg) bool {
+	return msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == ' '
+}
+
+func parseBoolScalarValue(raw string) bool {
+	return strings.EqualFold(strings.TrimSpace(raw), "true")
+}
+
+func (m *ConfigModal) toggleBoolField(spec *config.FieldSpec) {
+	if spec == nil || spec.Widget != config.WidgetBool || spec.ReadOnly {
+		return
+	}
+	next := !parseBoolScalarValue(m.form.ScalarValues[spec.Key])
+	newValue := "false"
+	if next {
+		newValue = "true"
+	}
+	m.form.ScalarValues[spec.Key] = newValue
+	if input, ok := m.scalarInputs[spec.Key]; ok && input != nil {
+		input.SetValue(newValue)
+		syncTextInputWidth(input, input.Value(), input.Placeholder)
+	}
 }
 
 func (m *ConfigModal) syncInputFocus() {

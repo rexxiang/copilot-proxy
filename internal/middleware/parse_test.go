@@ -139,7 +139,7 @@ func TestResponsesParser(t *testing.T) {
 }
 
 func TestAnthropicMessagesParser(t *testing.T) {
-	parser := &AnthropicMessagesParser{}
+	parser := &AnthropicMessagesParser{RequestModeAgentDetection: true}
 
 	tests := []struct {
 		name     string
@@ -231,10 +231,17 @@ func TestAnthropicMessagesParser(t *testing.T) {
 			isVision: false,
 		},
 		{
-			name:     "tool_use in user message - not agent",
+			name:     "tool_use in user message",
 			body:     `{"model":"claude-3-opus","messages":[{"role":"user","content":[{"type":"tool_use","id":"123","name":"test"}]}]}`,
 			model:    "claude-3-opus",
-			isAgent:  false, // tool_use does not end with tool_result
+			isAgent:  true, // request mode treats *_tool_use as agent
+			isVision: false,
+		},
+		{
+			name:     "mcp_tool_use in user message",
+			body:     `{"model":"claude-3-opus","messages":[{"role":"user","content":[{"type":"mcp_tool_use","id":"123","name":"test"}]}]}`,
+			model:    "claude-3-opus",
+			isAgent:  true, // request mode treats *_tool_use as agent
 			isVision: false,
 		},
 		{
@@ -244,7 +251,7 @@ func TestAnthropicMessagesParser(t *testing.T) {
 				`{"role":"assistant","content":"hi"},` +
 				`{"role":"user","content":"bye"}]}`,
 			model:    "claude-3-opus",
-			isAgent:  true, // any non-user role = agent
+			isAgent:  false, // request mode only inspects last message role/content
 			isVision: false,
 		},
 		{
@@ -272,14 +279,28 @@ func TestAnthropicMessagesParser(t *testing.T) {
 	}
 }
 
-func TestAnthropicMessagesParser_DisableInitSequence(t *testing.T) {
-	parser := &AnthropicMessagesParser{DisableInitSequenceDetection: true}
-	body := []byte(`{"model":"claude-3","messages":[{"role":"user","content":"msg1"},{"role":"user","content":"msg2"}]}`)
+func TestAnthropicMessagesParser_SessionModeUsesHistoricalSignals(t *testing.T) {
+	parser := &AnthropicMessagesParser{RequestModeAgentDetection: false}
 
-	info := parser.Parse(body)
+	info := parser.Parse(
+		[]byte(`{"model":"claude-3","messages":[{"role":"user","content":"a"},{"role":"assistant","content":"b"},{"role":"user","content":"c"}]}`),
+	)
+	if !info.IsAgent {
+		t.Fatalf("expected IsAgent=true in session mode when historical assistant role exists")
+	}
 
+	info = parser.Parse(
+		[]byte(`{"model":"claude-3","messages":[{"role":"user","content":[{"type":"mcp_tool_use"}]}]}`),
+	)
 	if info.IsAgent {
-		t.Error("expected IsAgent=false when DisableInitSequenceDetection=true")
+		t.Fatalf("expected IsAgent=false in session mode for tool_use-only content")
+	}
+
+	info = parser.Parse(
+		[]byte(`{"model":"claude-3","messages":[{"role":"user","content":[{"type":"server_tool_result"}]}]}`),
+	)
+	if !info.IsAgent {
+		t.Fatalf("expected IsAgent=true in session mode for *_tool_result content")
 	}
 }
 
@@ -397,11 +418,11 @@ func TestParseRequestByPath(t *testing.T) {
 			isVision: false, // AnthropicMessagesParser only looks for image
 		},
 		{
-			name:     "messages init sequence defaults to user",
+			name:     "messages init sequence defaults to agent",
 			path:     "/v1/messages",
 			body:     `{"model":"claude-3","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"question"}]}`,
 			model:    "claude-3",
-			isAgent:  false,
+			isAgent:  true,
 			isVision: false,
 		},
 		{
@@ -430,14 +451,26 @@ func TestParseRequestByPath(t *testing.T) {
 	}
 }
 
-func TestParseRequestByPathWithOptions_EnableMessagesInitSeqAgent(t *testing.T) {
-	body := []byte(`{"model":"claude-3","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"question"}]}`)
+func TestParseRequestByPathWithOptions_RequestModeIgnoresHistoricalAssistant(t *testing.T) {
+	body := []byte(`{"model":"claude-3","messages":[{"role":"user","content":"first"},{"role":"assistant","content":"second"},{"role":"user","content":"last"}]}`)
 
 	info := ParseRequestByPathWithOptions("/v1/messages", body, ParseOptions{
-		MessagesInitSeqAgent: true,
+		MessagesAgentDetectionRequestMode: true,
+	})
+
+	if info.IsAgent {
+		t.Fatalf("expected IsAgent=false in request mode when only historical assistant role exists")
+	}
+}
+
+func TestParseRequestByPathWithOptions_SessionModeUsesHistoricalAssistant(t *testing.T) {
+	body := []byte(`{"model":"claude-3","messages":[{"role":"user","content":"first"},{"role":"assistant","content":"second"},{"role":"user","content":"last"}]}`)
+
+	info := ParseRequestByPathWithOptions("/v1/messages", body, ParseOptions{
+		MessagesAgentDetectionRequestMode: false,
 	})
 
 	if !info.IsAgent {
-		t.Fatalf("expected IsAgent=true when messages_init_seq_agent enabled")
+		t.Fatalf("expected IsAgent=true in session mode when historical assistant role exists")
 	}
 }

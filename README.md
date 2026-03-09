@@ -73,16 +73,22 @@ Point Claude Code to the local proxy by setting:
 export ANTHROPIC_BASE_URL='http://127.0.0.1:4000'
 ```
 
-### 4) Configure messages init-sequence agent detection (optional)
+### 4) Configure messages agent detection and rate limiting (optional)
 
-By default, `messages_init_seq_agent` is `false`.  
-When enabled, `/v1/messages` requests where all message roles are `user` and message count is `>= 2` are treated as `isAgent=true` (affects `X-Initiator` and monitor classification).
+`messages_agent_detection_request_mode` defaults to `true` for `/v1/messages`.
+- `premium request=true`:
+  - all `user` and `len(messages)>=2` -> `isAgent=true`
+  - otherwise only the **last** message is checked (`role!="user"` or last content type suffix is `tool_use` / `tool_result`)
+- `session=false`:
+  - all `user` and `len(messages)>=2` -> `isAgent=true`
+  - any historical `role!="user"` -> `isAgent=true`
+  - any historical content type suffix `tool_result` -> `isAgent=true`
 
 `~/.config/copilot-proxy/settings.json`:
 
 ```json
 {
-  "messages_init_seq_agent": false,
+  "messages_agent_detection_request_mode": true,
   "rate_limit_seconds": 0,
   "claude_haiku_fallback_models": [
     "gpt-5-mini",

@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -25,8 +27,8 @@ func TestLoadSettingsDefaultWhenMissing(t *testing.T) {
 	if settings.UpstreamTimeout.Duration() != 5*time.Minute {
 		t.Fatalf("unexpected upstream timeout: %s", settings.UpstreamTimeout.Duration())
 	}
-	if settings.MessagesInitSeqAgent {
-		t.Fatalf("expected messages_init_seq_agent default false")
+	if !settings.MessagesAgentDetectionRequestMode {
+		t.Fatalf("expected messages_agent_detection_request_mode default true")
 	}
 	if settings.RateLimitSeconds != 0 {
 		t.Fatalf("expected rate_limit_seconds default 0, got %d", settings.RateLimitSeconds)
@@ -43,7 +45,7 @@ func TestSaveLoadSettings(t *testing.T) {
 	input := DefaultSettings()
 	input.ListenAddr = "127.0.0.1:1234"
 	input.UpstreamBase = "https://example.com"
-	input.MessagesInitSeqAgent = true
+	input.MessagesAgentDetectionRequestMode = false
 	input.RequiredHeaders = map[string]string{
 		"X-Test": "1",
 	}
@@ -71,6 +73,13 @@ func TestSaveLoadSettings(t *testing.T) {
 	}
 	if output.RateLimitSeconds != input.RateLimitSeconds {
 		t.Fatalf("unexpected rate limit seconds: got %d want %d", output.RateLimitSeconds, input.RateLimitSeconds)
+	}
+	if output.MessagesAgentDetectionRequestMode != input.MessagesAgentDetectionRequestMode {
+		t.Fatalf(
+			"unexpected messages_agent_detection_request_mode: got %v want %v",
+			output.MessagesAgentDetectionRequestMode,
+			input.MessagesAgentDetectionRequestMode,
+		)
 	}
 	if !reflect.DeepEqual(output.ClaudeHaikuFallbackModels, input.ClaudeHaikuFallbackModels) {
 		t.Fatalf("unexpected haiku fallbacks: got %#v want %#v", output.ClaudeHaikuFallbackModels, input.ClaudeHaikuFallbackModels)
@@ -129,6 +138,35 @@ func TestSaveLoadSettingsReasoningPoliciesShadowSync(t *testing.T) {
 	}
 	if len(output.ReasoningPolicies) != 2 {
 		t.Fatalf("expected shadow reasoning policies loaded, got %#v", output.ReasoningPolicies)
+	}
+}
+
+func TestLoadSettings_MessagesAgentDetectionRequestModeDefaultsTrueWhenFieldMissing(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	path, err := SettingsPath()
+	if err != nil {
+		t.Fatalf("SettingsPath error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+
+	raw := []byte(`{
+  "listen_addr": "127.0.0.1:4000",
+  "upstream_base": "https://api.githubcopilot.com"
+}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+
+	settings, err := LoadSettings()
+	if err != nil {
+		t.Fatalf("LoadSettings error: %v", err)
+	}
+	if !settings.MessagesAgentDetectionRequestMode {
+		t.Fatalf("expected messages_agent_detection_request_mode default true when key missing")
 	}
 }
 

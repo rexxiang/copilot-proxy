@@ -15,7 +15,11 @@ type ParseRequestBodyMiddleware struct {
 
 // NewParseRequestBody builds request parsing middleware.
 func NewParseRequestBody() ParseRequestBodyMiddleware {
-	return ParseRequestBodyMiddleware{}
+	return ParseRequestBodyMiddleware{
+		parseOptions: middleware.ParseOptions{
+			MessagesAgentDetectionRequestMode: true,
+		},
+	}
 }
 
 // NewParseRequestBodyWithOptions builds request parsing middleware with custom parse options.
