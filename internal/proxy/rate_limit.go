@@ -13,8 +13,9 @@ import (
 var errRateLimitedHandlerClosed = errors.New("rate limited handler closed")
 
 type RateLimitedHandler struct {
-	next     http.Handler
-	cooldown time.Duration
+	next             http.Handler
+	cooldown         time.Duration
+	cooldownProvider func() time.Duration
 
 	mu           sync.Mutex
 	notify       chan struct{}
@@ -34,18 +35,31 @@ func NewRateLimitedHandler(next http.Handler, cooldown time.Duration) *RateLimit
 	}
 }
 
+func NewRateLimitedHandlerWithProvider(next http.Handler, provider func() time.Duration) *RateLimitedHandler {
+	if next == nil {
+		next = http.NotFoundHandler()
+	}
+	return &RateLimitedHandler{
+		next:             next,
+		cooldown:         0,
+		cooldownProvider: provider,
+		notify:           make(chan struct{}),
+	}
+}
+
 func (h *RateLimitedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h == nil || h.next == nil {
 		return
 	}
 
 	req := attachRequestStart(r)
-	if h.cooldown <= 0 {
+	cooldown := h.currentCooldown()
+	if cooldown <= 0 {
 		h.next.ServeHTTP(w, req)
 		return
 	}
 
-	if err := h.waitTurn(req.Context()); err != nil {
+	if err := h.waitTurn(req.Context(), cooldown); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
@@ -71,7 +85,7 @@ func (h *RateLimitedHandler) Close() error {
 	return nil
 }
 
-func (h *RateLimitedHandler) waitTurn(ctx context.Context) error {
+func (h *RateLimitedHandler) waitTurn(ctx context.Context, cooldown time.Duration) error {
 	for {
 		h.mu.Lock()
 		if h.closed {
@@ -79,7 +93,7 @@ func (h *RateLimitedHandler) waitTurn(ctx context.Context) error {
 			return errRateLimitedHandlerClosed
 		}
 		if !h.inFlight {
-			wait := h.cooldownRemainingLocked(time.Now())
+			wait := h.cooldownRemainingLocked(time.Now(), cooldown)
 			if wait <= 0 {
 				h.inFlight = true
 				h.mu.Unlock()
@@ -125,15 +139,29 @@ func (h *RateLimitedHandler) finishTurn() {
 	h.broadcastLocked()
 }
 
-func (h *RateLimitedHandler) cooldownRemainingLocked(now time.Time) time.Duration {
+func (h *RateLimitedHandler) cooldownRemainingLocked(now time.Time, cooldown time.Duration) time.Duration {
 	if h.lastComplete.IsZero() {
 		return 0
 	}
-	nextAllowed := h.lastComplete.Add(h.cooldown)
+	nextAllowed := h.lastComplete.Add(cooldown)
 	if !now.Before(nextAllowed) {
 		return 0
 	}
 	return nextAllowed.Sub(now)
+}
+
+func (h *RateLimitedHandler) currentCooldown() time.Duration {
+	if h == nil {
+		return 0
+	}
+	cooldown := h.cooldown
+	if h.cooldownProvider != nil {
+		cooldown = h.cooldownProvider()
+	}
+	if cooldown < 0 {
+		return 0
+	}
+	return cooldown
 }
 
 func (h *RateLimitedHandler) broadcastLocked() {

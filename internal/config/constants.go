@@ -29,7 +29,6 @@ const (
 
 // Timeouts and Durations.
 const (
-	DefaultUpstreamTimeout     = 5 * time.Minute
 	ShutdownTimeout            = 5 * time.Second
 	DefaultRetryBackoff        = 1 * time.Second
 	DefaultMaxRetries          = 3

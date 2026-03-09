@@ -27,7 +27,6 @@ func TestSettingsFieldSpecs_Matrix(t *testing.T) {
 	}{
 		{key: "listen_addr", widget: WidgetText, visible: false, readonly: true},
 		{key: "upstream_base", widget: WidgetURL, visible: true, readonly: true},
-		{key: "upstream_timeout", widget: WidgetDuration, visible: true, readonly: false},
 		{key: "max_retries", widget: WidgetInt, visible: true, readonly: false},
 		{key: "retry_backoff", widget: WidgetDuration, visible: true, readonly: false},
 		{key: "rate_limit_seconds", widget: WidgetInt, visible: true, readonly: false},
@@ -75,6 +74,21 @@ func TestSettingsFieldSpecs_UsesReadableLabels(t *testing.T) {
 	}
 	if got := byKey["messages_agent_detection_request_mode"].Description; got != "" {
 		t.Fatalf("expected messages_agent_detection_request_mode description empty, got %q", got)
+	}
+	if got := strings.TrimSpace(byKey["max_retries"].Description); got == "" {
+		t.Fatalf("expected short description for max_retries")
+	}
+	if got := strings.TrimSpace(byKey["retry_backoff"].Description); got == "" {
+		t.Fatalf("expected short description for retry_backoff")
+	}
+	if got := strings.TrimSpace(byKey["rate_limit_seconds"].Description); got == "" {
+		t.Fatalf("expected short description for rate_limit_seconds")
+	}
+	if got := strings.TrimSpace(byKey["reasoning_policies_ui"].Description); got == "" {
+		t.Fatalf("expected short description for reasoning_policies_ui")
+	}
+	if got := strings.TrimSpace(byKey["claude_haiku_fallback_models_ui"].Description); got == "" {
+		t.Fatalf("expected short description for claude_haiku_fallback_models_ui")
 	}
 	if got := byKey["reasoning_policies_ui"].Label; got != "Reasoning Policies" {
 		t.Fatalf("unexpected reasoning_policies_ui label: %q", got)
@@ -182,7 +196,6 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 		RequiredHeaders: map[string]string{
 			"user-agent": "copilot/1.0",
 		},
-		UpstreamTimeout:  NewDuration(40 * time.Second),
 		MaxRetries:       3,
 		RetryBackoff:     NewDuration(2 * time.Second),
 		RateLimitSeconds: 0,
@@ -198,7 +211,6 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 		t.Fatalf("EncodeSettingsToForm error: %v", err)
 	}
 
-	form.ScalarValues["upstream_timeout"] = "1m0s"
 	form.ScalarValues["max_retries"] = "6"
 	form.ScalarValues["retry_backoff"] = "5s"
 	form.ScalarValues["rate_limit_seconds"] = ""
@@ -222,9 +234,6 @@ func TestEncodeDecodeSettingsForm(t *testing.T) {
 	}
 	if decoded.UpstreamBase != base.UpstreamBase {
 		t.Fatalf("readonly upstream_base should remain unchanged: got %q want %q", decoded.UpstreamBase, base.UpstreamBase)
-	}
-	if decoded.UpstreamTimeout.Duration() != time.Minute {
-		t.Fatalf("unexpected upstream_timeout: %s", decoded.UpstreamTimeout.Duration())
 	}
 	if decoded.MaxRetries != 6 {
 		t.Fatalf("unexpected max_retries: %d", decoded.MaxRetries)
@@ -272,7 +281,7 @@ func TestDecodeFormToSettings_Validation(t *testing.T) {
 		{
 			name: "invalid duration",
 			mutate: func(form *SettingsForm) {
-				form.ScalarValues["upstream_timeout"] = "abc"
+				form.ScalarValues["retry_backoff"] = "abc"
 			},
 		},
 		{

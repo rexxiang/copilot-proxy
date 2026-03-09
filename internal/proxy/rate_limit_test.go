@@ -214,6 +214,39 @@ func TestRateLimitedHandlerCloseUnblocksWaitingRequestsWith503(t *testing.T) {
 	}
 }
 
+func TestRateLimitedHandlerWithProviderAppliesUpdatedCooldown(t *testing.T) {
+	var cooldownNanos atomic.Int64
+	cooldownNanos.Store(int64(90 * time.Millisecond))
+
+	handler := NewRateLimitedHandlerWithProvider(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), func() time.Duration {
+		return time.Duration(cooldownNanos.Load())
+	})
+	t.Cleanup(func() {
+		_ = handler.Close()
+	})
+
+	resp1 := httptest.NewRecorder()
+	handler.ServeHTTP(resp1, httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", nil))
+	if resp1.Code != http.StatusNoContent {
+		t.Fatalf("expected first response status 204, got %d", resp1.Code)
+	}
+
+	cooldownNanos.Store(0)
+	start := time.Now()
+	resp2 := httptest.NewRecorder()
+	handler.ServeHTTP(resp2, httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", nil))
+	elapsed := time.Since(start)
+
+	if resp2.Code != http.StatusNoContent {
+		t.Fatalf("expected second response status 204, got %d", resp2.Code)
+	}
+	if elapsed > 40*time.Millisecond {
+		t.Fatalf("expected second request to bypass old cooldown after provider update, elapsed=%v", elapsed)
+	}
+}
+
 func waitForSignal(t *testing.T, ch <-chan struct{}, timeout time.Duration, label string) {
 	t.Helper()
 	select {

@@ -285,6 +285,49 @@ func TestParseRequestBodyMessagesSessionModeUsesHistoricalNonUserRole(t *testing
 	closeResponse(resp)
 }
 
+func TestParseRequestBodyOptionsProviderUsesLatestModePerRequest(t *testing.T) {
+	body := `{"model":"claude-3","messages":[{"role":"user","content":"first"},{"role":"assistant","content":"second"},{"role":"user","content":"last"}]}`
+	requestMode := true
+	mw := NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
+		return middleware.ParseOptions{
+			MessagesAgentDetectionRequestMode: requestMode,
+		}
+	})
+
+	makeRequest := func() bool {
+		req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", bytes.NewBufferString(body))
+		req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
+		ctx := &middleware.Context{Request: req}
+
+		resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+			rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+			if !ok || rc == nil {
+				t.Fatalf("missing request context")
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(bytes.NewReader(nil)),
+				Request:    ctx.Request,
+			}, nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer closeResponse(resp)
+		rc, _ := middleware.RequestContextFrom(ctx.Request.Context())
+		return rc.Info.IsAgent
+	}
+
+	if got := makeRequest(); got {
+		t.Fatalf("expected request mode to classify as non-agent")
+	}
+	requestMode = false
+	if got := makeRequest(); !got {
+		t.Fatalf("expected session mode to classify as agent")
+	}
+}
+
 func TestCaptureDebugStoresHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req.Header.Set("X-Test", "one")

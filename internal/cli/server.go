@@ -30,6 +30,7 @@ var (
 	errModelCatalogSetModels    = errors.New("model catalog does not support SetModels")
 	errRuntimeServerRequired    = errors.New("runtime server is required")
 	errRuntimeAuthStoreRequired = errors.New("runtime auth store is required")
+	errRuntimeSettingsRequired  = errors.New("runtime settings store is required")
 )
 
 // ServerDeps contains injectable dependencies for server construction.
@@ -50,6 +51,7 @@ type serverRuntime struct {
 	proxyHandler  http.Handler
 	authStore     upstream.AuthStore
 	requestCloser interface{ Close() error }
+	settingsStore *runtimeSettingsStore
 }
 
 const (
@@ -112,15 +114,19 @@ func buildServerWithDepsWithContext(ctx context.Context, deps *ServerDeps) (*ser
 		transport = http.DefaultTransport
 	}
 
-	// Wrap transport with retry capability if retries are configured
-	if settings.MaxRetries > 0 {
-		transport = proxy.NewRetryTransport(transport, proxy.RetryConfig{
-			MaxRetries:     settings.MaxRetries,
-			InitialBackoff: settings.RetryBackoff.Duration(),
+	settingsStore, err := newRuntimeSettingsStore(settings)
+	if err != nil {
+		return nil, fmt.Errorf("compile runtime settings snapshot: %w", err)
+	}
+	transport = proxy.NewDynamicRetryTransport(transport, func() proxy.RetryConfig {
+		snapshot := settingsStore.Snapshot()
+		return proxy.RetryConfig{
+			MaxRetries:     snapshot.MaxRetries,
+			InitialBackoff: snapshot.RetryBackoff,
 			MaxBackoff:     defaultMaxBackoff,
 			BackoffFactor:  defaultBackoffFactor,
-		})
-	}
+		}
+	})
 
 	store := newAuthStore(auth)
 	requiredHeaders := (&settings).RequiredHeadersWithDefaults()
@@ -137,13 +143,20 @@ func buildServerWithDepsWithContext(ctx context.Context, deps *ServerDeps) (*ser
 		upstream.NewRequestID(),
 		upstream.NewResolveAccount(store),
 		upstream.NewToken(upstream.TokenConfig{Provider: tokens}),
-		upstream.NewParseRequestBodyWithOptions(middleware.ParseOptions{
-			MessagesAgentDetectionRequestMode: settings.MessagesAgentDetectionRequestMode,
+		upstream.NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
+			snapshot := settingsStore.Snapshot()
+			return middleware.ParseOptions{
+				MessagesAgentDetectionRequestMode: snapshot.MessagesAgentDetectionRequestMode,
+			}
 		}),
 		upstream.NewCaptureDebug(),
-		upstream.NewMessagesTranslate(modelCatalog, models.NewSelectorWithConfig(models.SelectorConfig{
-			ClaudeHaikuFallbackModels: settings.ClaudeHaikuFallbackModels,
-		}), config.PathMapping, settings.ReasoningPoliciesMap),
+		upstream.NewMessagesTranslateWithRuntimeOptions(modelCatalog, config.PathMapping, func() upstream.MessagesTranslateRuntimeOptions {
+			snapshot := settingsStore.Snapshot()
+			return upstream.MessagesTranslateRuntimeOptions{
+				ClaudeHaikuFallbackModels: snapshot.ClaudeHaikuFallbackModels,
+				ReasoningPolicies:         snapshot.ReasoningPolicies,
+			}
+		}),
 		upstream.NewTokenInjection(),
 		upstream.NewStaticHeaders(requiredHeaders),
 		upstream.NewDynamicHeaders(),
@@ -158,18 +171,18 @@ func buildServerWithDepsWithContext(ctx context.Context, deps *ServerDeps) (*ser
 	if err != nil {
 		return nil, fmt.Errorf("build proxy handler: %w", err)
 	}
-	var proxyHandler http.Handler = baseProxyHandler
-	var requestCloser interface{ Close() error }
-	if settings.RateLimitSeconds > 0 {
-		rateLimited := proxy.NewRateLimitedHandler(proxyHandler, time.Duration(settings.RateLimitSeconds)*time.Second)
-		proxyHandler = rateLimited
-		requestCloser = rateLimited
-	}
+	rateLimited := proxy.NewRateLimitedHandlerWithProvider(baseProxyHandler, func() time.Duration {
+		snapshot := settingsStore.Snapshot()
+		return snapshot.RateLimitCooldown
+	})
+	var proxyHandler http.Handler = rateLimited
+	var requestCloser interface{ Close() error } = rateLimited
 	return &serverRuntime{
 		server:        server.New(&settings, proxyHandler),
 		proxyHandler:  proxyHandler,
 		authStore:     store,
 		requestCloser: requestCloser,
+		settingsStore: settingsStore,
 	}, nil
 }
 
@@ -269,6 +282,9 @@ func runServerWithTUI(enableTUI bool) error {
 	srv := runtime.server
 	// Ensure server resources are released in non-TUI mode.
 	defer func() {
+		if runtime.requestCloser != nil {
+			_ = runtime.requestCloser.Close()
+		}
 		_ = srv.Close()
 	}()
 
@@ -348,7 +364,7 @@ func preloadModels(
 	}
 	modelClient := httpClient
 	if modelClient == nil {
-		modelClient = newTimeoutHTTPClient(settings.UpstreamTimeout.Duration())
+		modelClient = newTimeoutHTTPClient(defaultModelTimeout)
 	}
 	loaded, err := models.FetchModels(ctx, modelClient, settings.UpstreamBase, tokenValue, baseHeaders)
 	if err != nil {
@@ -414,47 +430,35 @@ func runWithTUI(
 	if runtime == nil || runtime.server == nil {
 		return errRuntimeServerRequired
 	}
+	if runtime.settingsStore == nil {
+		return errRuntimeSettingsRequired
+	}
 	// Ensure debug logger is closed on exit
 	defer func() {
 		_ = debugLogger.Close()
 	}()
 
-	serverErr := make(chan error, 1)
-	startRuntime := func(rt *serverRuntime) context.CancelFunc {
-		runCtx, cancel := context.WithCancel(ctx)
-		go func(localRuntime *serverRuntime, localCtx context.Context) {
-			err := localRuntime.server.Start(localCtx)
-			if isExpectedShutdownError(err) || localCtx.Err() != nil {
-				return
-			}
-			serverErr <- err
-		}(rt, runCtx)
-		return cancel
-	}
-	stopRuntime := func(rt *serverRuntime, cancel context.CancelFunc) error {
-		if rt != nil && rt.requestCloser != nil {
-			if err := rt.requestCloser.Close(); err != nil {
-				return fmt.Errorf("close request gate: %w", err)
-			}
-		}
-		if cancel != nil {
-			cancel()
-		}
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), config.ShutdownTimeout)
-		defer shutdownCancel()
-		if err := rt.server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("shutdown runtime: %w", err)
-		}
-		return nil
-	}
-
 	runtimeMu := sync.Mutex{}
 	activeRuntime := runtime
-	activeCancel := startRuntime(activeRuntime)
+	serverErr := make(chan error, 1)
+	runCtx, activeCancel := context.WithCancel(ctx)
+	go func(localRuntime *serverRuntime, localCtx context.Context) {
+		err := localRuntime.server.Start(localCtx)
+		if isExpectedShutdownError(err) || localCtx.Err() != nil {
+			return
+		}
+		serverErr <- err
+	}(activeRuntime, runCtx)
 	defer func() {
 		runtimeMu.Lock()
 		defer runtimeMu.Unlock()
-		_ = stopRuntime(activeRuntime, activeCancel)
+		if activeRuntime != nil && activeRuntime.requestCloser != nil {
+			_ = activeRuntime.requestCloser.Close()
+		}
+		activeCancel()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), config.ShutdownTimeout)
+		defer shutdownCancel()
+		_ = activeRuntime.server.Shutdown(shutdownCtx)
 		_ = activeRuntime.server.Close()
 	}()
 
@@ -466,45 +470,17 @@ func runWithTUI(
 		_ = collector.Save()
 	}()
 
-	currentSettings, err := config.LoadSettings()
-	if err != nil {
-		currentSettings = config.DefaultSettings()
-		currentSettings.ListenAddr = activeRuntime.server.Addr
-	}
-
-	buildRuntimeWithSettings := func(settings config.Settings) (*serverRuntime, error) {
-		deps := DefaultServerDeps()
-		deps.Metrics = collector
-		deps.DebugLogger = debugLogger
-		deps.SettingsFunc = func() (config.Settings, error) {
-			return settings, nil
-		}
-		deps.AuthFunc = func() (config.AuthConfig, error) {
-			if auth == nil {
-				return config.AuthConfig{Default: "", Accounts: nil}, nil
-			}
-			return *auth, nil
-		}
-		return buildServerWithDepsWithContext(ctx, &deps)
-	}
+	currentSettings := activeRuntime.settingsStore.Current()
+	currentSettings.ListenAddr = activeRuntime.server.Addr
 
 	coordinator := NewSettingsRuntimeCoordinator(&RuntimeCoordinatorConfig{
 		InitialSettings: currentSettings,
-		SwitchRuntime: func(prev, next config.Settings) error {
-			runtimeMu.Lock()
-			defer runtimeMu.Unlock()
-
-			candidateRuntime, buildErr := buildRuntimeWithSettings(next)
-			if buildErr != nil {
-				return fmt.Errorf("build candidate runtime: %w", buildErr)
+		ValidateRuntime: func(next config.Settings) (RuntimeValidationResult, error) {
+			snapshot, err := activeRuntime.settingsStore.Validate(next)
+			if err != nil {
+				return nil, err
 			}
-
-			if err := stopRuntime(activeRuntime, activeCancel); err != nil {
-				return err
-			}
-			activeRuntime = candidateRuntime
-			activeCancel = startRuntime(candidateRuntime)
-			return nil
+			return snapshot, nil
 		},
 		PersistSettings: func(settings config.Settings) error {
 			if err := config.SaveSettings(&settings); err != nil {
@@ -512,19 +488,12 @@ func runWithTUI(
 			}
 			return nil
 		},
-		RollbackRuntime: func(previous config.Settings) error {
-			runtimeMu.Lock()
-			defer runtimeMu.Unlock()
-
-			rollbackRuntime, buildErr := buildRuntimeWithSettings(previous)
-			if buildErr != nil {
-				return fmt.Errorf("build rollback runtime: %w", buildErr)
+		PublishRuntime: func(next config.Settings, validated RuntimeValidationResult) error {
+			snapshot, ok := validated.(runtimeSettingsSnapshot)
+			if !ok {
+				return fmt.Errorf("unexpected runtime snapshot type %T", validated)
 			}
-			if err := stopRuntime(activeRuntime, activeCancel); err != nil {
-				return err
-			}
-			activeRuntime = rollbackRuntime
-			activeCancel = startRuntime(rollbackRuntime)
+			activeRuntime.settingsStore.Publish(next, snapshot)
 			return nil
 		},
 	})

@@ -16,15 +16,14 @@ type Settings struct {
 	UpstreamBase string `json:"upstream_base" ui:"label=Upstream;widget=url;visible=true;readonly=true;order=20"`
 	// Map fields are storage-only in settings.json; TUI editing should use shadow array fields with ui tags.
 	RequiredHeaders                   map[string]string    `json:"required_headers,omitempty" ui:"label=Headers;widget=kv;visible=false;readonly=false;order=60"`
-	UpstreamTimeout                   Duration             `json:"upstream_timeout" ui:"label=Timeout;widget=duration;visible=true;readonly=false;order=30"`
-	MaxRetries                        int                  `json:"max_retries" ui:"label=Retries;widget=int;visible=true;readonly=false;order=40;min=1"`
-	RetryBackoff                      Duration             `json:"retry_backoff" ui:"label=Backoff;widget=duration;visible=true;readonly=false;order=50"`
-	RateLimitSeconds                  int                  `json:"rate_limit_seconds" ui:"label=Rate Limit (sec);widget=int;visible=true;readonly=false;order=52;min=0;placeholder=0;empty=zero;description=Minimum whole seconds between one request finishing and the next starting. 0 or empty disables rate limiting."`
+	MaxRetries                        int                  `json:"max_retries" ui:"label=Retries;widget=int;visible=true;readonly=false;order=40;min=1;description=Max upstream retry attempts."`
+	RetryBackoff                      Duration             `json:"retry_backoff" ui:"label=Backoff;widget=duration;visible=true;readonly=false;order=50;description=Initial retry delay."`
+	RateLimitSeconds                  int                  `json:"rate_limit_seconds" ui:"label=Rate Limit (sec);widget=int;visible=true;readonly=false;order=52;min=0;placeholder=0;empty=zero;description=Cooldown seconds between completed requests. 0 or empty disables it."`
 	MessagesAgentDetectionRequestMode bool                 `json:"messages_agent_detection_request_mode" ui:"label=Msg Agent Mode;widget=bool;visible=true;readonly=false;order=55"`
 	ReasoningPoliciesMap              map[string]string    `json:"reasoning_policies,omitempty" ui:"label=ReasoningPoliciesMap;widget=kv;visible=false;readonly=false;order=65"`
-	ReasoningPolicies                 []ReasoningPolicy    `json:"-" ui:"key=reasoning_policies_ui;label=Reasoning Policies;widget=array;visible=true;readonly=false;order=66;description=UI shadow list for reasoning_policies map. Use model@target rules with effort none|low|medium|high."`
+	ReasoningPolicies                 []ReasoningPolicy    `json:"-" ui:"key=reasoning_policies_ui;label=Reasoning Policies;widget=array;visible=true;readonly=false;order=66;description=Per-model reasoning policies."`
 	ClaudeHaikuFallbackModels         []string             `json:"-"`
-	ClaudeHaikuFallbackModelsUI       []HaikuFallbackModel `json:"-" ui:"key=claude_haiku_fallback_models_ui;label=Haiku Fallbacks;widget=array;visible=true;readonly=false;order=67;description=Try these replacement models in order for claude-haiku-* requests. If none are available, the proxy automatically falls back to the highest available Haiku model."`
+	ClaudeHaikuFallbackModelsUI       []HaikuFallbackModel `json:"-" ui:"key=claude_haiku_fallback_models_ui;label=Haiku Fallbacks;widget=array;visible=true;readonly=false;order=67;description=Ordered replacements for claude-haiku-*."`
 }
 
 type ReasoningPolicy struct {
@@ -154,7 +153,6 @@ func DefaultSettings() Settings {
 		ListenAddr:                        DefaultListenAddr,
 		UpstreamBase:                      CopilotAPIURL,
 		RequiredHeaders:                   nil,
-		UpstreamTimeout:                   NewDuration(DefaultUpstreamTimeout),
 		MaxRetries:                        DefaultMaxRetries,
 		RetryBackoff:                      NewDuration(DefaultRetryBackoff),
 		RateLimitSeconds:                  0,
@@ -217,9 +215,6 @@ func applyDefaults(settings *Settings) Settings {
 	if s.UpstreamBase == "" {
 		s.UpstreamBase = CopilotAPIURL
 	}
-	if !s.UpstreamTimeout.IsSet() {
-		s.UpstreamTimeout = NewDuration(DefaultUpstreamTimeout)
-	}
 	if s.MaxRetries <= 0 {
 		s.MaxRetries = DefaultMaxRetries
 	}
@@ -240,7 +235,6 @@ func (settings Settings) MarshalJSON() ([]byte, error) {
 		ListenAddr                        string            `json:"listen_addr"`
 		UpstreamBase                      string            `json:"upstream_base"`
 		RequiredHeaders                   map[string]string `json:"required_headers,omitempty"`
-		UpstreamTimeout                   Duration          `json:"upstream_timeout"`
 		MaxRetries                        int               `json:"max_retries"`
 		RetryBackoff                      Duration          `json:"retry_backoff"`
 		RateLimitSeconds                  int               `json:"rate_limit_seconds"`
@@ -254,7 +248,6 @@ func (settings Settings) MarshalJSON() ([]byte, error) {
 		ListenAddr:                        settings.ListenAddr,
 		UpstreamBase:                      settings.UpstreamBase,
 		RequiredHeaders:                   settings.RequiredHeaders,
-		UpstreamTimeout:                   settings.UpstreamTimeout,
 		MaxRetries:                        settings.MaxRetries,
 		RetryBackoff:                      settings.RetryBackoff,
 		RateLimitSeconds:                  settings.RateLimitSeconds,
@@ -270,7 +263,6 @@ func (settings *Settings) UnmarshalJSON(data []byte) error {
 		ListenAddr                        string            `json:"listen_addr"`
 		UpstreamBase                      string            `json:"upstream_base"`
 		RequiredHeaders                   map[string]string `json:"required_headers,omitempty"`
-		UpstreamTimeout                   Duration          `json:"upstream_timeout"`
 		MaxRetries                        int               `json:"max_retries"`
 		RetryBackoff                      Duration          `json:"retry_backoff"`
 		RateLimitSeconds                  int               `json:"rate_limit_seconds"`
@@ -288,7 +280,6 @@ func (settings *Settings) UnmarshalJSON(data []byte) error {
 		ListenAddr:                        payload.ListenAddr,
 		UpstreamBase:                      payload.UpstreamBase,
 		RequiredHeaders:                   payload.RequiredHeaders,
-		UpstreamTimeout:                   payload.UpstreamTimeout,
 		MaxRetries:                        payload.MaxRetries,
 		RetryBackoff:                      payload.RetryBackoff,
 		RateLimitSeconds:                  payload.RateLimitSeconds,

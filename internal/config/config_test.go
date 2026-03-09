@@ -24,9 +24,6 @@ func TestLoadSettingsDefaultWhenMissing(t *testing.T) {
 	if settings.UpstreamBase != "https://api.githubcopilot.com" {
 		t.Fatalf("unexpected upstream base: %s", settings.UpstreamBase)
 	}
-	if settings.UpstreamTimeout.Duration() != 5*time.Minute {
-		t.Fatalf("unexpected upstream timeout: %s", settings.UpstreamTimeout.Duration())
-	}
 	if !settings.MessagesAgentDetectionRequestMode {
 		t.Fatalf("expected messages_agent_detection_request_mode default true")
 	}
@@ -49,7 +46,6 @@ func TestSaveLoadSettings(t *testing.T) {
 	input.RequiredHeaders = map[string]string{
 		"X-Test": "1",
 	}
-	input.UpstreamTimeout = NewDuration(45 * time.Second)
 	input.MaxRetries = 5
 	input.RetryBackoff = NewDuration(2 * time.Second)
 	input.RateLimitSeconds = 9
@@ -289,5 +285,8 @@ func TestSettingsJSONDoesNotContainTokenTimeout(t *testing.T) {
 	}
 	if _, exists := data["token_timeout"]; exists {
 		t.Fatalf("token_timeout should not exist in settings json")
+	}
+	if _, exists := data["upstream_timeout"]; exists {
+		t.Fatalf("upstream_timeout should not exist in settings json")
 	}
 }

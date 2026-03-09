@@ -5,7 +5,6 @@
     "user-agent": "copilot/0.0.400",
     "copilot-integration-id": "copilot-developer-cli"
   },
-  "upstream_timeout": "5m",
   "max_retries": 3,
   "retry_backoff": "1s",
   "rate_limit_seconds": 0,

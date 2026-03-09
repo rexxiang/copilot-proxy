@@ -10,7 +10,8 @@ import (
 
 // ParseRequestBodyMiddleware reads request body and stores info for downstream middleware.
 type ParseRequestBodyMiddleware struct {
-	parseOptions middleware.ParseOptions
+	parseOptions         middleware.ParseOptions
+	parseOptionsProvider func() middleware.ParseOptions
 }
 
 // NewParseRequestBody builds request parsing middleware.
@@ -25,6 +26,16 @@ func NewParseRequestBody() ParseRequestBodyMiddleware {
 // NewParseRequestBodyWithOptions builds request parsing middleware with custom parse options.
 func NewParseRequestBodyWithOptions(options middleware.ParseOptions) ParseRequestBodyMiddleware {
 	return ParseRequestBodyMiddleware{parseOptions: options}
+}
+
+// NewParseRequestBodyWithOptionsProvider builds request parsing middleware with options fetched per request.
+func NewParseRequestBodyWithOptionsProvider(provider func() middleware.ParseOptions) ParseRequestBodyMiddleware {
+	return ParseRequestBodyMiddleware{
+		parseOptions: middleware.ParseOptions{
+			MessagesAgentDetectionRequestMode: true,
+		},
+		parseOptionsProvider: provider,
+	}
 }
 
 func (m ParseRequestBodyMiddleware) Handle(ctx *middleware.Context, next middleware.Next) (*http.Response, error) {
@@ -50,7 +61,11 @@ func (m ParseRequestBodyMiddleware) Handle(ctx *middleware.Context, next middlew
 		return next()
 	}
 
-	info := middleware.ParseRequestByPathWithOptions(req.URL.Path, bodyBytes, m.parseOptions)
+	parseOptions := m.parseOptions
+	if m.parseOptionsProvider != nil {
+		parseOptions = m.parseOptionsProvider()
+	}
+	info := middleware.ParseRequestByPathWithOptions(req.URL.Path, bodyBytes, parseOptions)
 	rc.Body = bodyBytes
 	rc.Info = info
 

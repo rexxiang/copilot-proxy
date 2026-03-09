@@ -1173,8 +1173,8 @@ func TestMonitorModel_ConfigModalSaveAppliesSettings(t *testing.T) {
 	if !applied {
 		t.Fatalf("expected apply settings callback to be called")
 	}
-	if model.serverAddr != "127.0.0.1:5111" {
-		t.Fatalf("expected serverAddr to update, got %q", model.serverAddr)
+	if model.serverAddr != "127.0.0.1:4000" {
+		t.Fatalf("expected serverAddr to remain runtime listen addr, got %q", model.serverAddr)
 	}
 	if model.configModal != nil && model.configModal.IsOpen() {
 		t.Fatalf("expected modal to close after successful save")

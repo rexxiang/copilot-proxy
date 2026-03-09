@@ -997,9 +997,6 @@ func (m *MonitorModel) handleSettingsApplied(msg *settingsAppliedMsg) {
 		return
 	}
 	m.currentSettings = *msg.settings
-	if msg.settings.ListenAddr != "" {
-		m.serverAddr = msg.settings.ListenAddr
-	}
 	if m.configModal != nil {
 		m.configModal.Close()
 	}

@@ -21,7 +21,6 @@ func TestConfigModal_OpenUsesVisibleFieldSpecs(t *testing.T) {
 		ListenAddr:                        "127.0.0.1:4000",
 		UpstreamBase:                      "https://api.githubcopilot.com",
 		MessagesAgentDetectionRequestMode: false,
-		UpstreamTimeout:                   config.NewDuration(5 * time.Minute),
 		MaxRetries:                        3,
 		RetryBackoff:                      config.NewDuration(time.Second),
 	}
@@ -33,7 +32,6 @@ func TestConfigModal_OpenUsesVisibleFieldSpecs(t *testing.T) {
 	keys := modal.VisibleFieldKeys()
 	expected := []string{
 		"upstream_base",
-		"upstream_timeout",
 		"max_retries",
 		"retry_backoff",
 		"rate_limit_seconds",
@@ -94,7 +92,6 @@ func TestConfigModal_EscWithDirtyRequiresConfirm(t *testing.T) {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyDown}) // move to upstream_timeout
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'0'}})
 	if !modal.IsDirty() {
 		t.Fatalf("expected modal to be dirty after edit")
@@ -396,11 +393,11 @@ func TestConfigModal_ViewShowsCursorForEditableField(t *testing.T) {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	focusFieldByKey(t, modal, "upstream_timeout")
+	focusFieldByKey(t, modal, "retry_backoff")
 
 	view := stripANSI(modal.View())
-	if !strings.Contains(view, "Timeout") || !strings.Contains(view, "[5m") {
-		t.Fatalf("expected timeout input box in view, got:\n%s", view)
+	if !strings.Contains(view, "Backoff") || !strings.Contains(view, "[1s") {
+		t.Fatalf("expected backoff input box in view, got:\n%s", view)
 	}
 }
 
@@ -411,11 +408,11 @@ func TestConfigModal_RealCursorMovementOnScalarInput(t *testing.T) {
 		t.Fatalf("Open error: %v", err)
 	}
 
-	focusFieldByKey(t, modal, "upstream_timeout")
+	focusFieldByKey(t, modal, "retry_backoff")
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyLeft})
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 
-	if got := modal.FieldValue("upstream_timeout"); got != "5xm" {
+	if got := modal.FieldValue("retry_backoff"); got != "1xs" {
 		t.Fatalf("expected cursor-aware insertion, got %q", got)
 	}
 }
@@ -446,6 +443,67 @@ func TestConfigModal_BuildCandidateFromReasoningPolicyArray(t *testing.T) {
 	}
 	if candidate.ReasoningPolicies[0].Target != "responses" || candidate.ReasoningPolicies[0].Effort != "high" {
 		t.Fatalf("unexpected policy values: %#v", candidate.ReasoningPolicies[0])
+	}
+}
+
+func TestConfigModal_ReasoningPolicyEnumCyclesWithSpaceAndAltSpace(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "reasoning_policies_ui")
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("gpt-5-mini")})
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlRight})                            // target
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})            // chat
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})            // responses
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}, Alt: true}) // back to chat
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlRight})                            // effort
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}, Alt: true}) // empty reverse -> high
+
+	candidate, err := modal.BuildCandidate(&base)
+	if err != nil {
+		t.Fatalf("BuildCandidate error: %v", err)
+	}
+	if len(candidate.ReasoningPolicies) != 1 {
+		t.Fatalf("expected one reasoning policy, got %#v", candidate.ReasoningPolicies)
+	}
+	got := candidate.ReasoningPolicies[0]
+	if got.Target != "chat" || got.Effort != "high" {
+		t.Fatalf("unexpected enum cycle result: %#v", got)
+	}
+}
+
+func TestConfigModal_ArrayColumnMoveSupportsCtrlAndAlt(t *testing.T) {
+	modal := NewConfigModal()
+	base := config.DefaultSettings()
+	if err := modal.Open(&base); err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	focusFieldByKey(t, modal, "reasoning_policies_ui")
+	cursor := modal.arrayCursors["reasoning_policies_ui"]
+	if cursor.col != 0 {
+		t.Fatalf("expected initial col=0, got %d", cursor.col)
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlRight})
+	cursor = modal.arrayCursors["reasoning_policies_ui"]
+	if cursor.col != 1 {
+		t.Fatalf("expected ctrl+right to move col=1, got %d", cursor.col)
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRight, Alt: true})
+	cursor = modal.arrayCursors["reasoning_policies_ui"]
+	if cursor.col != 2 {
+		t.Fatalf("expected alt+right to move col=2, got %d", cursor.col)
+	}
+
+	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyLeft, Alt: true})
+	cursor = modal.arrayCursors["reasoning_policies_ui"]
+	if cursor.col != 1 {
+		t.Fatalf("expected alt+left to move col=1, got %d", cursor.col)
 	}
 }
 
@@ -540,10 +598,10 @@ func TestConfigModal_InputWidthIsAdaptiveNotFixed(t *testing.T) {
 	if err := modal.Open(&settings); err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
-	focusFieldByKey(t, modal, "upstream_timeout")
-	before := modal.scalarInputs["upstream_timeout"].Width
+	focusFieldByKey(t, modal, "retry_backoff")
+	before := modal.scalarInputs["retry_backoff"].Width
 	_ = modal.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("x", 32))})
-	after := modal.scalarInputs["upstream_timeout"].Width
+	after := modal.scalarInputs["retry_backoff"].Width
 	if after <= before {
 		t.Fatalf("expected width to expand after typing: before=%d after=%d", before, after)
 	}

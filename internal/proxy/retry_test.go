@@ -317,6 +317,58 @@ func TestIsRetryableError(t *testing.T) {
 	}
 }
 
+func TestDynamicRetryTransportUsesLatestConfigPerRequest(t *testing.T) {
+	var maxRetries atomic.Int32
+	var remainingFailures atomic.Int32
+	var calls atomic.Int32
+	transport := &mockTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			calls.Add(1)
+			if remainingFailures.Load() > 0 {
+				remainingFailures.Add(-1)
+				return nil, &net.OpError{Op: "dial", Err: syscall.ECONNRESET}
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok"))}, nil
+		},
+	}
+	retryTransport := NewDynamicRetryTransport(transport, func() RetryConfig {
+		return RetryConfig{
+			MaxRetries:     int(maxRetries.Load()),
+			InitialBackoff: 1 * time.Millisecond,
+			MaxBackoff:     5 * time.Millisecond,
+			BackoffFactor:  2,
+		}
+	})
+
+	maxRetries.Store(0)
+	remainingFailures.Store(1)
+	req1, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.com", http.NoBody)
+	resp, err := retryTransport.RoundTrip(req1)
+	if err == nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		t.Fatalf("expected first request to fail without retries")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected one attempt with retries disabled, got %d", got)
+	}
+
+	maxRetries.Store(2)
+	remainingFailures.Store(2)
+	req2, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.com", http.NoBody)
+	resp, err = retryTransport.RoundTrip(req2)
+	if err != nil {
+		t.Fatalf("expected second request to succeed with retries, got %v", err)
+	}
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if got := calls.Load(); got != 4 {
+		t.Fatalf("expected total 4 attempts (1 + 3), got %d", got)
+	}
+}
+
 type mockTransport struct {
 	roundTrip func(*http.Request) (*http.Response, error)
 }

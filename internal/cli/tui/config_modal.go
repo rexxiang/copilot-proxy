@@ -330,10 +330,10 @@ func (m *ConfigModal) HandleKey(msg tea.KeyMsg) ModalAction {
 	case keyMatches(msg, tea.KeyCtrlD, "ctrl+d"):
 		m.handleCollectionDelete()
 		return ModalActionNone
-	case keyMatches(msg, tea.KeyCtrlLeft, "ctrl+left"):
+	case keyMatches(msg, tea.KeyCtrlLeft, "ctrl+left", "alt+left", "opt+left"):
 		m.handleCollectionColMove(-1)
 		return ModalActionNone
-	case keyMatches(msg, tea.KeyCtrlRight, "ctrl+right"):
+	case keyMatches(msg, tea.KeyCtrlRight, "ctrl+right", "alt+right", "opt+right"):
 		m.handleCollectionColMove(1)
 		return ModalActionNone
 	}
@@ -805,6 +805,15 @@ func (m *ConfigModal) updateScalarInput(msg tea.KeyMsg, spec *config.FieldSpec) 
 		}
 		return
 	}
+	if step, ok := enumCycleStep(msg); ok && len(spec.EnumValues) > 0 {
+		nextValue := cycleEnumValue(m.form.ScalarValues[spec.Key], spec.EnumValues, step)
+		m.form.ScalarValues[spec.Key] = nextValue
+		if input, ok := m.scalarInputs[spec.Key]; ok && input != nil {
+			input.SetValue(nextValue)
+			syncTextInputWidth(input, input.Value(), input.Placeholder)
+		}
+		return
+	}
 	input, ok := m.scalarInputs[spec.Key]
 	if !ok || input == nil {
 		return
@@ -890,6 +899,19 @@ func (m *ConfigModal) updateArrayInput(msg tea.KeyMsg, spec *config.FieldSpec) {
 	if !ok || input == nil {
 		return
 	}
+	if step, ok := enumCycleStep(msg); ok && len(col.EnumValues) > 0 {
+		nextValue := cycleEnumValue(rows[cursor.row][col.Key], col.EnumValues, step)
+		input.SetValue(nextValue)
+		syncTextInputWidth(input, input.Value(), input.Placeholder)
+		rows[cursor.row][col.Key] = nextValue
+		rowInputs.fields[col.Key] = input
+		inputRows[cursor.row] = rowInputs
+		m.arrayInputs[spec.Key] = inputRows
+		m.form.ObjectArrayValues[spec.Key] = rows
+		m.appendTrailingBlankIfNeeded(spec)
+		m.normalizeArrayRows(spec)
+		return
+	}
 
 	updatedInput, _ := input.Update(msg)
 	*input = updatedInput
@@ -927,7 +949,7 @@ func (m *ConfigModal) View() string {
 
 	sb.WriteString(
 		DimStyle.Render(
-			"Ctrl+S=save  Esc=close  Tab/↑↓=navigate  Space=toggle bool  Ctrl+N/Ctrl+D=row  Ctrl+←/→=column  Ctrl/Opt+↑/↓=move row",
+			"Ctrl+S=save  Esc=close  Tab/↑↓=navigate  Space=toggle/cycle  Alt+Space=enum back  Ctrl+N/Ctrl+D=row  Ctrl/Alt/Opt+←/→=column  Ctrl/Alt/Opt+↑/↓=move row",
 		),
 	)
 	sb.WriteString("\n\n")
@@ -1126,6 +1148,58 @@ func wrapInputValue(value string) string {
 
 func isSpaceRuneKey(msg tea.KeyMsg) bool {
 	return msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == ' '
+}
+
+func isSpaceKey(msg tea.KeyMsg) bool {
+	return msg.Type == tea.KeySpace || isSpaceRuneKey(msg)
+}
+
+func enumCycleStep(msg tea.KeyMsg) (int, bool) {
+	key := strings.ToLower(msg.String())
+	switch key {
+	case "alt+ ", "opt+ ", "alt+space", "opt+space":
+		return -1, true
+	}
+	if !isSpaceKey(msg) {
+		return 0, false
+	}
+	if msg.Alt {
+		return -1, true
+	}
+	return 1, true
+}
+
+func cycleEnumValue(current string, enumValues []string, step int) string {
+	if len(enumValues) == 0 || step == 0 {
+		return current
+	}
+	trimmed := strings.TrimSpace(current)
+	if trimmed == "" {
+		if step < 0 {
+			return enumValues[len(enumValues)-1]
+		}
+		return enumValues[0]
+	}
+
+	index := -1
+	for i := range enumValues {
+		if enumValues[i] == trimmed {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		if step < 0 {
+			return enumValues[len(enumValues)-1]
+		}
+		return enumValues[0]
+	}
+	if step < 0 {
+		index = (index - 1 + len(enumValues)) % len(enumValues)
+	} else {
+		index = (index + 1) % len(enumValues)
+	}
+	return enumValues[index]
 }
 
 func parseBoolScalarValue(raw string) bool {

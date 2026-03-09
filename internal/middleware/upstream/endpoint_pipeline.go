@@ -13,11 +13,17 @@ import (
 
 // MessagesTranslateMiddleware atomically handles endpoint-related request processing.
 type MessagesTranslateMiddleware struct {
-	catalog           models.Catalog
-	selector          *models.Selector
-	pathMapping       map[string]string
-	reasoningPolicies []reasoning.Policy
-	codec             transform.EndpointCodec
+	catalog                models.Catalog
+	selector               *models.Selector
+	pathMapping            map[string]string
+	reasoningPolicies      []reasoning.Policy
+	runtimeOptionsProvider func() MessagesTranslateRuntimeOptions
+	codec                  transform.EndpointCodec
+}
+
+type MessagesTranslateRuntimeOptions struct {
+	ClaudeHaikuFallbackModels []string
+	ReasoningPolicies         []reasoning.Policy
 }
 
 // NewMessagesTranslate builds a single middleware for:
@@ -55,6 +61,30 @@ func NewMessagesTranslate(
 	}
 }
 
+// NewMessagesTranslateWithRuntimeOptions builds endpoint middleware with per-request runtime options.
+func NewMessagesTranslateWithRuntimeOptions(
+	catalog models.Catalog,
+	mapping map[string]string,
+	provider func() MessagesTranslateRuntimeOptions,
+) *MessagesTranslateMiddleware {
+	parsedPolicies, _ := reasoning.EffectivePoliciesFromMap(nil)
+	return &MessagesTranslateMiddleware{
+		catalog:                catalog,
+		selector:               models.NewSelector(),
+		pathMapping:            mapping,
+		reasoningPolicies:      parsedPolicies,
+		runtimeOptionsProvider: provider,
+		codec: transform.EndpointCodec{
+			MessagesToChatRequest:       transform.MessagesToChatRequest,
+			ChatToMessagesResponse:      transform.ChatToMessagesResponse,
+			ChatSSEToMessages:           transform.TranslateChatSSEToMessages,
+			MessagesToResponsesRequest:  transform.MessagesToResponsesRequest,
+			ResponsesToMessagesResponse: transform.ResponsesToMessagesResponse,
+			ResponsesSSEToMessages:      transform.TranslateResponsesSSEToMessages,
+		},
+	}
+}
+
 func (m *MessagesTranslateMiddleware) Handle(ctx *middleware.Context, next middleware.Next) (*http.Response, error) {
 	if ctx == nil || ctx.Request == nil {
 		return next()
@@ -62,7 +92,20 @@ func (m *MessagesTranslateMiddleware) Handle(ctx *middleware.Context, next middl
 
 	req := ctx.Request
 	rc := ensureRequestContext(req)
-	transform.RewriteModel(req, rc, m.catalog, m.selector)
+	selector := m.selector
+	reasoningPolicies := cloneReasoningPolicies(m.reasoningPolicies)
+	if m.runtimeOptionsProvider != nil {
+		runtimeOptions := m.runtimeOptionsProvider()
+		if runtimeOptions.ClaudeHaikuFallbackModels != nil {
+			selector = models.NewSelectorWithConfig(models.SelectorConfig{
+				ClaudeHaikuFallbackModels: runtimeOptions.ClaudeHaikuFallbackModels,
+			})
+		}
+		if runtimeOptions.ReasoningPolicies != nil {
+			reasoningPolicies = cloneReasoningPolicies(runtimeOptions.ReasoningPolicies)
+		}
+	}
+	transform.RewriteModel(req, rc, m.catalog, selector)
 	transform.SelectTargetEndpoint(req, rc)
 	ctx.Request = withRequestContext(req, rc)
 
@@ -72,8 +115,8 @@ func (m *MessagesTranslateMiddleware) Handle(ctx *middleware.Context, next middl
 		modelName = strings.TrimSpace(rc.Info.Model)
 	}
 	supportedEfforts := cloneReasoningEfforts(rc.Info.SupportedReasoningEffort)
-	policyForChat, _ := reasoning.MatchPolicy(m.reasoningPolicies, modelName, reasoning.TargetChat)
-	policyForResponses, _ := reasoning.MatchPolicy(m.reasoningPolicies, modelName, reasoning.TargetResponses)
+	policyForChat, _ := reasoning.MatchPolicy(reasoningPolicies, modelName, reasoning.TargetChat)
+	policyForResponses, _ := reasoning.MatchPolicy(reasoningPolicies, modelName, reasoning.TargetResponses)
 
 	codec.MessagesToChatRequest = func(body []byte) ([]byte, bool) {
 		return transform.MessagesToChatRequestWithOptions(body, transform.MessagesReasoningOptions{
@@ -109,6 +152,15 @@ func cloneReasoningEfforts(items []string) []string {
 		return nil
 	}
 	cloned := make([]string, len(items))
+	copy(cloned, items)
+	return cloned
+}
+
+func cloneReasoningPolicies(items []reasoning.Policy) []reasoning.Policy {
+	if len(items) == 0 {
+		return nil
+	}
+	cloned := make([]reasoning.Policy, len(items))
 	copy(cloned, items)
 	return cloned
 }
