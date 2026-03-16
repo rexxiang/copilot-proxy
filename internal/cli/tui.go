@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core/account"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -13,61 +13,34 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-var errAccountNotFound = errors.New("account not found")
-
-// AuthActions provides callbacks for TUI auth operations.
-type AuthActions struct {
-	SetDefault func(user string) error
-	Remove     func(user string) error
-}
-
-// defaultAuthActions creates actions that operate on config directly.
-func defaultAuthActions(auth *config.AuthConfig) AuthActions {
-	return AuthActions{
-		SetDefault: func(user string) error {
-			if err := auth.SetDefault(user); err != nil {
-				return fmt.Errorf("set default account: %w", err)
-			}
-			if err := config.SaveAuth(*auth); err != nil {
-				return fmt.Errorf("save auth config: %w", err)
-			}
-			return nil
-		},
-		Remove: func(user string) error {
-			if !auth.RemoveAccount(user) {
-				return errAccountNotFound
-			}
-			if err := config.SaveAuth(*auth); err != nil {
-				return fmt.Errorf("save auth config: %w", err)
-			}
-			return nil
-		},
-	}
-}
-
 type authItem struct {
-	user        string
-	defaultUser string
+	dto account.AccountDTO
 }
 
 func (a authItem) Title() string {
-	if a.user == a.defaultUser {
-		return a.user + " (default)"
+	if a.dto.IsDefault {
+		return a.dto.User + " (default)"
 	}
-	return a.user
+	return a.dto.User
 }
 
 func (a authItem) Description() string { return "" }
-func (a authItem) FilterValue() string { return a.user }
+func (a authItem) FilterValue() string { return a.dto.User }
+
+type accountManager interface {
+	List() []account.AccountDTO
+	SwitchDefault(user string) error
+	Remove(user string) error
+}
 
 type authListModel struct {
-	list    list.Model
-	help    help.Model
-	keys    authKeyMap
-	auth    *config.AuthConfig
-	actions AuthActions
-	err     error
-	done    bool
+	list     list.Model
+	help     help.Model
+	keys     authKeyMap
+	manager  accountManager
+	err      error
+	done     bool
+	selected int
 }
 
 type authKeyMap struct {
@@ -84,25 +57,23 @@ func newAuthKeyMap() authKeyMap {
 	}
 }
 
-func newAuthListModel(auth *config.AuthConfig, actions AuthActions) authListModel {
-	items := make([]list.Item, 0, len(auth.Accounts))
-	for _, account := range auth.Accounts {
-		items = append(items, authItem{user: account.User, defaultUser: auth.Default})
-	}
-	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
+func newAuthListModel(manager accountManager) authListModel {
+	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Copilot Accounts"
 	l.SetShowHelp(false)
 	l.DisableQuitKeybindings()
 
-	return authListModel{
-		list:    l,
-		help:    help.New(),
-		keys:    newAuthKeyMap(),
-		auth:    auth,
-		actions: actions,
-		err:     nil,
-		done:    false,
+	model := authListModel{
+		list:     l,
+		help:     help.New(),
+		keys:     newAuthKeyMap(),
+		manager:  manager,
+		err:      nil,
+		done:     false,
+		selected: 0,
 	}
+	model.refreshItems()
+	return model
 }
 
 func (m *authListModel) Init() tea.Cmd { return nil }
@@ -115,22 +86,28 @@ func (m *authListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.setDefault):
 			if item, ok := m.list.SelectedItem().(authItem); ok {
-				if err := m.actions.SetDefault(item.user); err != nil {
+				if m.manager == nil {
+					m.err = errors.New("account manager unavailable")
+					return m, tea.Quit
+				}
+				if err := m.manager.SwitchDefault(item.dto.User); err != nil {
 					m.err = err
 					return m, tea.Quit
 				}
-				m.auth.Default = item.user
 				m.refreshItems()
 				m.done = true
 				return m, tea.Quit
 			}
 		case key.Matches(msg, m.keys.remove):
 			if item, ok := m.list.SelectedItem().(authItem); ok {
-				if err := m.actions.Remove(item.user); err != nil {
+				if m.manager == nil {
+					m.err = errors.New("account manager unavailable")
+					return m, tea.Quit
+				}
+				if err := m.manager.Remove(item.dto.User); err != nil {
 					m.err = err
 					return m, tea.Quit
 				}
-				m.auth.RemoveAccount(item.user)
 				m.refreshItems()
 				m.done = true
 				return m, tea.Quit
@@ -152,11 +129,26 @@ func (m *authListModel) View() string {
 }
 
 func (m *authListModel) refreshItems() {
-	items := make([]list.Item, 0, len(m.auth.Accounts))
-	for _, account := range m.auth.Accounts {
-		items = append(items, authItem{user: account.User, defaultUser: m.auth.Default})
+	if m.manager == nil {
+		m.list.SetItems([]list.Item{})
+		return
+	}
+	accounts := m.manager.List()
+	items := make([]list.Item, 0, len(accounts))
+	defaultIdx := 0
+	for i, acct := range accounts {
+		if acct.IsDefault {
+			defaultIdx = i
+		}
+		items = append(items, authItem{dto: acct})
 	}
 	m.list.SetItems(items)
+	if len(items) > 0 && defaultIdx < len(items) {
+		m.list.Select(defaultIdx)
+		m.selected = defaultIdx
+	} else {
+		m.selected = 0
+	}
 }
 
 func (k *authKeyMap) ShortHelp() []key.Binding {
@@ -167,25 +159,23 @@ func (k *authKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{k.ShortHelp()}
 }
 
-func runAuthListTUI() error {
-	cfg, err := config.LoadAuth()
-	if err != nil {
-		return fmt.Errorf("load auth config: %w", err)
+func runAuthListTUI(manager accountManager) error {
+	if manager == nil {
+		return errors.New("account manager unavailable")
 	}
-	if len(cfg.Accounts) == 0 {
-		_, err := fmt.Fprintln(os.Stdout, "No accounts configured")
-		if err != nil {
+	accounts := manager.List()
+	if len(accounts) == 0 {
+		if _, err := fmt.Fprintln(os.Stdout, "No accounts configured"); err != nil {
 			return fmt.Errorf("print empty accounts: %w", err)
 		}
 		return nil
 	}
 
 	if !isTTY(os.Stdout.Fd()) {
-		return printAccounts(cfg)
+		return printAccounts(accounts)
 	}
 
-	actions := defaultAuthActions(&cfg)
-	model := newAuthListModel(&cfg, actions)
+	model := newAuthListModel(manager)
 	program := tea.NewProgram(&model, tea.WithAltScreen())
 	result, err := program.Run()
 	if err != nil {
@@ -198,10 +188,13 @@ func runAuthListTUI() error {
 	return nil
 }
 
-func printAccounts(cfg config.AuthConfig) error {
-	for _, account := range cfg.Accounts {
+func printAccounts(accounts []account.AccountDTO) error {
+	for _, account := range accounts {
+		if account.User == "" {
+			continue
+		}
 		label := account.User
-		if account.User == cfg.Default {
+		if account.IsDefault {
 			label += " (default)"
 		}
 		if _, err := fmt.Fprintln(os.Stdout, label); err != nil {

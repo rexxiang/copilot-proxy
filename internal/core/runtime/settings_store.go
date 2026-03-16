@@ -1,4 +1,4 @@
-package cli
+package runtime
 
 import (
 	"errors"
@@ -17,7 +17,8 @@ var (
 	errInvalidRateLimitSecond = errors.New("rate_limit_seconds must be >= 0")
 )
 
-type runtimeSettingsSnapshot struct {
+// Snapshot captures the runtime-derived settings.
+type Snapshot struct {
 	MaxRetries                        int
 	RetryBackoff                      time.Duration
 	RateLimitCooldown                 time.Duration
@@ -26,24 +27,27 @@ type runtimeSettingsSnapshot struct {
 	ReasoningPolicies                 []reasoning.Policy
 }
 
-type runtimeSettingsStore struct {
+// SettingsStore maintains a live copy of settings and its compiled runtime snapshot.
+type SettingsStore struct {
 	settings atomic.Value // config.Settings
-	snapshot atomic.Value // runtimeSettingsSnapshot
+	snapshot atomic.Value // Snapshot
 }
 
-func newRuntimeSettingsStore(initial config.Settings) (*runtimeSettingsStore, error) {
+// NewSettingsStore creates a store backed by an initial settings snapshot.
+func NewSettingsStore(initial config.Settings) (*SettingsStore, error) {
 	snapshot, err := compileRuntimeSettingsSnapshot(initial)
 	if err != nil {
 		return nil, err
 	}
 
-	store := &runtimeSettingsStore{}
+	store := &SettingsStore{}
 	store.settings.Store(cloneRuntimeSettings(initial))
 	store.snapshot.Store(cloneRuntimeSettingsSnapshot(snapshot))
 	return store, nil
 }
 
-func (s *runtimeSettingsStore) Current() config.Settings {
+// Current returns a cloned copy of the active settings.
+func (s *SettingsStore) Current() config.Settings {
 	if s == nil {
 		return config.DefaultSettings()
 	}
@@ -54,24 +58,27 @@ func (s *runtimeSettingsStore) Current() config.Settings {
 	return cloneRuntimeSettings(current)
 }
 
-func (s *runtimeSettingsStore) Snapshot() runtimeSettingsSnapshot {
+// Snapshot returns a cloned runtime snapshot.
+func (s *SettingsStore) Snapshot() Snapshot {
 	if s == nil {
-		snapshot, _ := compileRuntimeSettingsSnapshot(config.DefaultSettings())
-		return snapshot
+		snap, _ := compileRuntimeSettingsSnapshot(config.DefaultSettings())
+		return snap
 	}
-	current, ok := s.snapshot.Load().(runtimeSettingsSnapshot)
+	current, ok := s.snapshot.Load().(Snapshot)
 	if !ok {
-		snapshot, _ := compileRuntimeSettingsSnapshot(config.DefaultSettings())
-		return snapshot
+		snap, _ := compileRuntimeSettingsSnapshot(config.DefaultSettings())
+		return snap
 	}
 	return cloneRuntimeSettingsSnapshot(current)
 }
 
-func (s *runtimeSettingsStore) Validate(next config.Settings) (runtimeSettingsSnapshot, error) {
+// Validate compiles the provided settings without mutating the store.
+func (s *SettingsStore) Validate(next config.Settings) (Snapshot, error) {
 	return compileRuntimeSettingsSnapshot(next)
 }
 
-func (s *runtimeSettingsStore) Publish(next config.Settings, snapshot runtimeSettingsSnapshot) {
+// Publish replaces the active settings with the provided snapshot.
+func (s *SettingsStore) Publish(next config.Settings, snapshot Snapshot) {
 	if s == nil {
 		return
 	}
@@ -79,19 +86,19 @@ func (s *runtimeSettingsStore) Publish(next config.Settings, snapshot runtimeSet
 	s.snapshot.Store(cloneRuntimeSettingsSnapshot(snapshot))
 }
 
-func compileRuntimeSettingsSnapshot(settings config.Settings) (runtimeSettingsSnapshot, error) {
+func compileRuntimeSettingsSnapshot(settings config.Settings) (Snapshot, error) {
 	normalized := cloneRuntimeSettings(settings)
 	defaults := config.DefaultSettings()
 
 	if normalized.MaxRetries <= 0 {
-		return runtimeSettingsSnapshot{}, errInvalidMaxRetries
+		return Snapshot{}, errInvalidMaxRetries
 	}
 	retryBackoff := normalized.RetryBackoff.Duration()
 	if retryBackoff <= 0 {
-		return runtimeSettingsSnapshot{}, errInvalidRetryBackoff
+		return Snapshot{}, errInvalidRetryBackoff
 	}
 	if normalized.RateLimitSeconds < 0 {
-		return runtimeSettingsSnapshot{}, errInvalidRateLimitSecond
+		return Snapshot{}, errInvalidRateLimitSecond
 	}
 
 	fallbackModels := normalizedStringSlice(normalized.ClaudeHaikuFallbackModels)
@@ -101,10 +108,10 @@ func compileRuntimeSettingsSnapshot(settings config.Settings) (runtimeSettingsSn
 
 	policies, err := reasoning.EffectivePoliciesFromMap(normalized.ReasoningPoliciesMap)
 	if err != nil {
-		return runtimeSettingsSnapshot{}, fmt.Errorf("compile reasoning policies: %w", err)
+		return Snapshot{}, fmt.Errorf("compile reasoning policies: %w", err)
 	}
 
-	return runtimeSettingsSnapshot{
+	return Snapshot{
 		MaxRetries:                        normalized.MaxRetries,
 		RetryBackoff:                      retryBackoff,
 		RateLimitCooldown:                 time.Duration(normalized.RateLimitSeconds) * time.Second,
@@ -124,7 +131,7 @@ func cloneRuntimeSettings(input config.Settings) config.Settings {
 	return clone
 }
 
-func cloneRuntimeSettingsSnapshot(input runtimeSettingsSnapshot) runtimeSettingsSnapshot {
+func cloneRuntimeSettingsSnapshot(input Snapshot) Snapshot {
 	clone := input
 	clone.ClaudeHaikuFallbackModels = cloneStringSliceRuntime(input.ClaudeHaikuFallbackModels)
 	clone.ReasoningPolicies = cloneReasoningPolicies(input.ReasoningPolicies)

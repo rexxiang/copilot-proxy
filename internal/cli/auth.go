@@ -8,8 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"copilot-proxy/internal/auth"
 	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core/controller"
 )
 
 var (
@@ -39,50 +39,77 @@ func runAuthLogin() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	flow := newDefaultDeviceFlow()
-	device, err := flow.RequestCodeWithContext(ctx)
+	ctrl, err := controller.NewServiceController(ctx, controller.ControllerDeps{})
+	if err != nil {
+		return fmt.Errorf("init controller: %w", err)
+	}
+	defer ctrl.Stop()
+
+	svc := ctrl.AccountService()
+	if svc == nil {
+		return errors.New("account service unavailable")
+	}
+
+	challenge, err := svc.BeginLogin(ctx)
 	if err != nil {
 		return fmt.Errorf("request device code: %w", err)
 	}
-	if _, err := fmt.Fprintf(os.Stdout, "Open %s and enter code %s\n", device.VerificationURI, device.UserCode); err != nil {
+	if _, err := fmt.Fprintf(os.Stdout, "Open %s and enter code %s\n", challenge.VerificationURI, challenge.UserCode); err != nil {
 		return fmt.Errorf("write auth prompt: %w", err)
 	}
-	ghToken, err := flow.PollAccessTokenWithContext(ctx, device)
+
+	result, err := svc.PollLogin(ctx, challenge.Seq)
 	if err != nil {
-		return fmt.Errorf("poll access token: %w", err)
+		return fmt.Errorf("poll login: %w", err)
+	}
+	if result.Login == "" || result.Token == "" {
+		return fmt.Errorf("poll login: invalid credentials")
 	}
 
-	login, err := auth.FetchUserWithContext(ctx, nil, "", ghToken)
-	if err != nil {
-		return fmt.Errorf("fetch user: %w", err)
+	account := config.Account{
+		User:    result.Login,
+		GhToken: result.Token,
+		AppID:   "",
 	}
-
-	cfg, err := config.LoadAuth()
-	if err != nil {
-		return fmt.Errorf("load auth config: %w", err)
+	if err := svc.Add(account); err != nil {
+		return fmt.Errorf("save account: %w", err)
 	}
-
-	cfg.UpsertAccount(config.Account{User: login, GhToken: ghToken, AppID: ""})
-	if err := config.SaveAuth(cfg); err != nil {
-		return fmt.Errorf("save auth config: %w", err)
+	if _, err := fmt.Fprintf(os.Stdout, "Account %s added\n", result.Login); err != nil {
+		return fmt.Errorf("write auth success: %w", err)
 	}
 	return nil
 }
 
 func runAuthRemove(user string) error {
-	cfg, err := config.LoadAuth()
+	ctrl, err := controller.NewServiceController(context.Background(), controller.ControllerDeps{})
 	if err != nil {
-		return fmt.Errorf("load auth config: %w", err)
+		return fmt.Errorf("init controller: %w", err)
 	}
-	if removed := cfg.RemoveAccount(user); !removed {
-		return errAuthAccountNotFound
+	defer ctrl.Stop()
+
+	svc := ctrl.AccountService()
+	if svc == nil {
+		return errors.New("account service unavailable")
 	}
-	if err := config.SaveAuth(cfg); err != nil {
-		return fmt.Errorf("save auth config: %w", err)
+	if err := svc.Remove(user); err != nil {
+		if errors.Is(err, config.ErrAccountNotFound) {
+			return errAuthAccountNotFound
+		}
+		return fmt.Errorf("remove account: %w", err)
 	}
 	return nil
 }
 
 func runAuthList() error {
-	return runAuthListTUI()
+	ctrl, err := controller.NewServiceController(context.Background(), controller.ControllerDeps{})
+	if err != nil {
+		return fmt.Errorf("init controller: %w", err)
+	}
+	defer ctrl.Stop()
+
+	svc := ctrl.AccountService()
+	if svc == nil {
+		return errors.New("account service unavailable")
+	}
+	return runAuthListTUI(svc)
 }

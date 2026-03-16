@@ -7,7 +7,11 @@ staticcheck = "latest"
 CGO_ENABLED = "0"
 
 [tasks]
-build = "go build -o ./bin/copilot-proxy ./cmd/copilot-proxy"
+# Build the CLI plus the C shared library (`mise x -- build`).
+build = "go build -o ./bin/copilot-proxy ./cmd/copilot-proxy && CGO_ENABLED=1 go build -buildmode=c-shared -o ./bin/copilot-proxy-c.so ./cmd/copilot-proxy-c"
+# Build only the C shared library (`mise x -- build-c-shared`).
+"build-c-shared" = "CGO_ENABLED=1 go build -buildmode=c-shared -o ./bin/copilot-proxy-c.so ./cmd/copilot-proxy-c"
 test = "go test ./..."
+"test-cgo" = "CGO_ENABLED=1 go test ./cmd/copilot-proxy-c"
 go = "go"
 "go:run" = "go run ./..."

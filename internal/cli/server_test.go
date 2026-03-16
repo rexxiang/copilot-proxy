@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"copilot-proxy/internal/config"
+	accountcore "copilot-proxy/internal/core/account"
 	"copilot-proxy/internal/models"
 )
 
@@ -48,13 +49,18 @@ func TestBuildServerUsesDefaultSettings(t *testing.T) {
 		t.Fatalf("buildServer error: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = runtime.server.Close()
+		if runtime.runtime != nil && runtime.runtime.Server != nil {
+			_ = runtime.runtime.Server.Close()
+		}
 	})
 
-	if runtime.server.Addr != config.DefaultSettings().ListenAddr {
-		t.Fatalf("unexpected addr: %s", runtime.server.Addr)
+	if runtime.runtime == nil || runtime.runtime.Server == nil {
+		t.Fatalf("runtime server should be initialized")
 	}
-	if runtime.authStore == nil {
+	if runtime.runtime.Server.Addr != config.DefaultSettings().ListenAddr {
+		t.Fatalf("unexpected addr: %s", runtime.runtime.Server.Addr)
+	}
+	if runtime.runtime.AuthStore == nil {
 		t.Fatalf("expected runtime authStore to be initialized")
 	}
 }
@@ -81,7 +87,7 @@ func TestActivateDefaultAccount(t *testing.T) {
 	}
 
 	var saved config.AuthConfig
-	err := activateDefaultAccount(auth, "u2", func(next config.AuthConfig) error {
+	err := accountcore.ActivateDefaultAccount(auth, "u2", func(next config.AuthConfig) error {
 		saved = next
 		return nil
 	})
@@ -104,7 +110,7 @@ func TestActivateDefaultAccountMissingUser(t *testing.T) {
 		},
 	}
 
-	err := activateDefaultAccount(auth, "missing", func(next config.AuthConfig) error {
+	err := accountcore.ActivateDefaultAccount(auth, "missing", func(next config.AuthConfig) error {
 		return nil
 	})
 	if !errors.Is(err, config.ErrAccountNotFound) {
@@ -124,7 +130,7 @@ func TestActivateDefaultAccountSaveFailureRollsBack(t *testing.T) {
 		},
 	}
 
-	err := activateDefaultAccount(auth, "u2", func(next config.AuthConfig) error {
+	err := accountcore.ActivateDefaultAccount(auth, "u2", func(next config.AuthConfig) error {
 		return errors.New("save failed")
 	})
 	if err == nil {
@@ -144,7 +150,7 @@ func TestUpsertAccountPreserveDefaultKeepsExistingDefault(t *testing.T) {
 	}
 
 	var saved config.AuthConfig
-	err := upsertAccountPreserveDefault(auth, config.Account{
+	err := accountcore.UpsertAccountPreserveDefault(auth, config.Account{
 		User:    "u2",
 		GhToken: "new-u2",
 		AppID:   "",
@@ -170,7 +176,7 @@ func TestUpsertAccountPreserveDefaultSetsDefaultWhenNoAccounts(t *testing.T) {
 	auth := &config.AuthConfig{}
 
 	var saved config.AuthConfig
-	err := upsertAccountPreserveDefault(auth, config.Account{
+	err := accountcore.UpsertAccountPreserveDefault(auth, config.Account{
 		User:    "u-new",
 		GhToken: "token-new",
 		AppID:   "",
@@ -197,7 +203,7 @@ func TestUpsertAccountPreserveDefaultSaveFailureRollsBack(t *testing.T) {
 		},
 	}
 
-	err := upsertAccountPreserveDefault(auth, config.Account{
+	err := accountcore.UpsertAccountPreserveDefault(auth, config.Account{
 		User:    "u2",
 		GhToken: "new-u2",
 		AppID:   "",
@@ -250,5 +256,81 @@ func TestIsExpectedShutdownError(t *testing.T) {
 				t.Fatalf("isExpectedShutdownError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestActivateDefaultAccountHelperPersistsAndRollsBackOnFailure(t *testing.T) {
+	auth := &config.AuthConfig{
+		Default: "alice",
+		Accounts: []config.Account{
+			{User: "alice"},
+			{User: "bob"},
+		},
+	}
+
+	var saved config.AuthConfig
+	if err := activateDefaultAccount(auth, "bob", func(next config.AuthConfig) error {
+		saved = next
+		return nil
+	}); err != nil {
+		t.Fatalf("activate default: %v", err)
+	}
+	if auth.Default != "bob" {
+		t.Fatalf("expected auth default to update, got %q", auth.Default)
+	}
+	if saved.Default != "bob" {
+		t.Fatalf("expected saved default to be bob, got %q", saved.Default)
+	}
+
+	err := activateDefaultAccount(auth, "alice", func(next config.AuthConfig) error {
+		return errors.New("persist fails")
+	})
+	if err == nil {
+		t.Fatalf("expected error when save fails")
+	}
+	if auth.Default != "bob" {
+		t.Fatalf("expected default to remain bob after persist failure, got %q", auth.Default)
+	}
+}
+
+func TestUpsertAccountPreserveDefaultHelperAddsAccountAndRollsBack(t *testing.T) {
+	auth := &config.AuthConfig{
+		Default: "alpha",
+		Accounts: []config.Account{
+			{User: "alpha", GhToken: "old"},
+		},
+	}
+
+	var saved config.AuthConfig
+	if err := upsertAccountPreserveDefault(auth, config.Account{User: "beta", GhToken: "new"}, func(next config.AuthConfig) error {
+		saved = next
+		return nil
+	}); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	if len(auth.Accounts) != 2 {
+		t.Fatalf("expected two accounts after upsert, got %d", len(auth.Accounts))
+	}
+	if auth.Default != "alpha" {
+		t.Fatalf("expected default to remain alpha, got %q", auth.Default)
+	}
+	if len(saved.Accounts) != 2 || saved.Default != "alpha" {
+		t.Fatalf("expected saved snapshot to preserve state, got %+v", saved)
+	}
+
+	auth.Accounts = auth.Accounts[:1]
+	if err := upsertAccountPreserveDefault(auth, config.Account{User: "gamma"}, func(next config.AuthConfig) error {
+		return errors.New("persist fails")
+	}); err == nil {
+		t.Fatalf("expected error when persist fails")
+	}
+	if len(auth.Accounts) != 1 {
+		t.Fatalf("expected rollback to single account, got %d", len(auth.Accounts))
+	}
+	if auth.Accounts[0].User != "alpha" {
+		t.Fatalf("expected remaining account to be alpha, got %q", auth.Accounts[0].User)
+	}
+	if auth.Default != "alpha" {
+		t.Fatalf("expected default to remain alpha after rollback, got %q", auth.Default)
 	}
 }

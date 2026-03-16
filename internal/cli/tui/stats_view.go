@@ -66,11 +66,8 @@ func (v *StatsView) renderAccountAndSubscription(sb *strings.Builder) {
 	if sb == nil || v == nil || v.state == nil {
 		return
 	}
-	if v.state.AuthConfig != nil {
-		account, _, _ := v.state.AuthConfig.DefaultAccount()
-		if account.User != "" {
-			_, _ = fmt.Fprintf(sb, "\nAccount: %s\n", account.User)
-		}
+	if v.state.ActiveAccount != "" {
+		_, _ = fmt.Fprintf(sb, "\nAccount: %s\n", v.state.ActiveAccount)
 	}
 
 	if v.state.UserInfo != nil {

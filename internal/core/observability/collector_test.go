@@ -1,4 +1,4 @@
-package monitor
+package observability
 
 import (
 	"sync"
@@ -315,11 +315,6 @@ func TestCollector_MultipleModels(t *testing.T) {
 			t.Errorf("expected 3 requests for %s, got %d", model, snap.ByModel[model].Count)
 		}
 	}
-}
-
-func TestCollector_Interface(t *testing.T) {
-	// Ensure ThreadSafeCollector implements Collector interface
-	var _ Collector = (*ThreadSafeCollector)(nil)
 }
 
 func TestCollector_RecordFirstResponseAndCompleteForStream(t *testing.T) {

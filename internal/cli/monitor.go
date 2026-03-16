@@ -8,9 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"copilot-proxy/internal/auth"
 	"copilot-proxy/internal/cli/tui"
 	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core/account"
+	coreconfig "copilot-proxy/internal/core/config"
+	"copilot-proxy/internal/core/model"
+	"copilot-proxy/internal/core/observability"
+	"copilot-proxy/internal/core/stats"
 	"copilot-proxy/internal/debounce"
 	"copilot-proxy/internal/models"
 	"copilot-proxy/internal/monitor"
@@ -28,7 +32,10 @@ var errSettingsApplyResultNil = errors.New("settings apply result is nil")
 // MonitorDeps contains dependencies for creating a MonitorModel.
 type MonitorDeps struct {
 	Collector       monitor.Collector
-	DebugLogger     *monitor.DebugLogger
+	StatsService    statsService
+	ModelService    modelService
+	AccountService  accountService
+	ConfigService   *coreconfig.Service
 	Models          []monitor.ModelInfo
 	UserInfo        *monitor.UserInfo
 	AuthConfig      *config.AuthConfig
@@ -36,7 +43,6 @@ type MonitorDeps struct {
 	AddAccount      func(account config.Account) error
 	HTTPClient      *http.Client
 	ProxyInvoker    models.RequestDoer
-	LogDir          string // Directory for debug log files
 	LoadSettings    func() (config.Settings, error)
 	ApplySettings   func(config.Settings) (config.Settings, error)
 }
@@ -53,7 +59,6 @@ type monitorKeyMap struct {
 	down      key.Binding
 	pageUp    key.Binding
 	pageDown  key.Binding
-	debug     key.Binding
 	expand    key.Binding
 	settings  key.Binding
 	accounts  key.Binding
@@ -62,6 +67,33 @@ type monitorKeyMap struct {
 }
 
 const monitorRequestTimeout = 30 * time.Second
+
+type statsService interface {
+	MonitorSnapshot() monitor.Snapshot
+	Reset()
+}
+
+type modelService interface {
+	List() []models.ModelInfo
+	Refresh(ctx context.Context) ([]models.ModelInfo, error)
+}
+
+type accountService interface {
+	List() []account.AccountDTO
+	Current() (config.Account, bool, error)
+	SwitchDefault(user string) error
+	Add(account config.Account) error
+	Remove(user string) error
+	BeginLogin(ctx context.Context) (account.LoginChallenge, error)
+	PollLogin(ctx context.Context, seq int64) (account.LoginResult, error)
+	CancelLogin(seq int64)
+	PremiumInfo(ctx context.Context, force bool) (monitor.UserInfo, error)
+	InvalidatePremium(user string)
+}
+
+type observabilityProvider interface {
+	Observability() *observability.Observability
+}
 
 func newMonitorKeyMap() monitorKeyMap {
 	return monitorKeyMap{
@@ -75,7 +107,6 @@ func newMonitorKeyMap() monitorKeyMap {
 		down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓", "down")),
 		pageUp:    key.NewBinding(key.WithKeys("pgup"), key.WithHelp("PgUp", "page up")),
 		pageDown:  key.NewBinding(key.WithKeys("pgdn"), key.WithHelp("PgDn", "page down")),
-		debug:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "debug")),
 		expand:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("↵", "expand")),
 		settings:  key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("^S", "settings")),
 		accounts:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "accounts")),
@@ -106,23 +137,16 @@ type userInfoLoadedMsg struct {
 	err  error
 }
 
-type accountDeviceCodeMsg struct {
-	seq    int
-	device auth.DeviceCodeResponse
+type accountLoginChallengeMsg struct {
+	seq       int64
+	challenge account.LoginChallenge
+	err       error
+}
+
+type accountLoginResultMsg struct {
+	seq    int64
+	result account.LoginResult
 	err    error
-}
-
-type accountTokenMsg struct {
-	seq   int
-	token string
-	err   error
-}
-
-type accountUserMsg struct {
-	seq   int
-	login string
-	token string
-	err   error
 }
 
 type settingsAppliedMsg struct {
@@ -133,11 +157,10 @@ type settingsAppliedMsg struct {
 // MonitorModel is the main bubbletea model for the monitor TUI.
 type MonitorModel struct {
 	state                        tui.ViewState
-	collector                    monitor.Collector
-	debugLogger                  *monitor.DebugLogger
-	models                       []monitor.ModelInfo
-	userInfo                     *monitor.UserInfo
-	snapshot                     monitor.Snapshot
+	statsService                 statsService
+	modelService                 modelService
+	accountService               accountService
+	configService                *coreconfig.Service
 	width                        int
 	height                       int
 	help                         help.Model
@@ -146,19 +169,18 @@ type MonitorModel struct {
 	quitting                     bool
 	loading                      bool
 	lastRefresh                  time.Time
-	authConfig                   *config.AuthConfig
-	httpClient                   *http.Client
-	proxyInvoker                 models.RequestDoer
 	loadSettings                 func() (config.Settings, error)
 	applySettings                func(config.Settings) (config.Settings, error)
 	currentSettings              config.Settings
 	statusMsg                    string
-	statusView                   tui.ViewState // Which view the status message belongs to
+	statusView                   tui.ViewState
+	snapshot                     monitor.Snapshot
 	loadedUserInfo               bool
 	loadedModels                 bool
 	userInfoQueue                debounce.Debouncer
 	premiumDetector              agentPremiumRefreshDetector
 	userInfoRefreshAfterInFlight bool
+	userInfoForceRefresh         bool
 
 	// View components
 	statsView       *tui.StatsView
@@ -167,10 +189,12 @@ type MonitorModel struct {
 	configModal     *tui.ConfigModal
 	accountModal    *tui.AccountModal
 	sharedState     *tui.SharedState
+	userInfo        *monitor.UserInfo
 	activateAccount func(user string) error
 	addAccount      func(account config.Account) error
-	accountAuthSeq  int
+	accountAuthSeq  int64
 	accountAuthDone context.CancelFunc
+	accountAuthCtx  context.Context
 }
 
 // NewMonitorModel creates a new monitor TUI model.
@@ -178,73 +202,131 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 	if deps == nil {
 		deps = &MonitorDeps{}
 	}
+
+	statsSvc := resolveStatsService(deps)
+	modelSvc := resolveModelService(deps, serverAddr)
+	accountSvc := resolveAccountService(deps)
+	configSvc := deps.ConfigService
+	if configSvc == nil {
+		configSvc = coreconfig.NewService(config.DefaultSettings())
+	}
+
 	loadSettings := deps.LoadSettings
 	if loadSettings == nil {
-		loadSettings = config.LoadSettings
+		loadSettings = func() (config.Settings, error) {
+			return configSvc.Current(), nil
+		}
 	}
 	applySettings := deps.ApplySettings
 	if applySettings == nil {
 		applySettings = func(settings config.Settings) (config.Settings, error) {
-			if err := config.SaveSettings(&settings); err != nil {
-				return config.Settings{}, fmt.Errorf("save settings: %w", err)
-			}
-			return settings, nil
+			return configSvc.Update(settings)
 		}
 	}
 
+	statsSvc.MonitorSnapshot()
+	modelsList := modelSvc.List()
+	if deps != nil && len(deps.Models) > 0 {
+		modelsList = deps.Models
+	}
 	sharedState := &tui.SharedState{
-		Snapshot:    emptySnapshot(),
-		Models:      deps.Models,
-		UserInfo:    deps.UserInfo,
-		AuthConfig:  deps.AuthConfig,
-		LogsBlinkOn: true,
-		StatusView:  tui.ViewStats,
+		Snapshot:      emptySnapshot(),
+		Models:        modelsList,
+		UserInfo:      deps.UserInfo,
+		ActiveAccount: "",
+		LogsBlinkOn:   true,
+		StatusView:    tui.ViewStats,
+	}
+	if accountSvc != nil {
+		if acct, _, err := accountSvc.Current(); err == nil {
+			sharedState.ActiveAccount = acct.User
+		}
 	}
 
 	model := MonitorModel{
 		state:           tui.ViewStats,
-		collector:       deps.Collector,
-		debugLogger:     deps.DebugLogger,
-		models:          deps.Models,
-		userInfo:        deps.UserInfo,
-		snapshot:        emptySnapshot(),
+		statsService:    statsSvc,
+		modelService:    modelSvc,
+		accountService:  accountSvc,
+		configService:   configSvc,
 		help:            help.New(),
 		keys:            newMonitorKeyMap(),
 		serverAddr:      serverAddr,
-		authConfig:      deps.AuthConfig,
-		activateAccount: deps.ActivateAccount,
-		addAccount:      deps.AddAccount,
-		httpClient:      deps.HTTPClient,
-		proxyInvoker:    deps.ProxyInvoker,
 		loadSettings:    loadSettings,
 		applySettings:   applySettings,
-		currentSettings: config.DefaultSettings(),
+		currentSettings: configSvc.Current(),
 		statusView:      tui.ViewStats,
+		snapshot:        emptySnapshot(),
 		sharedState:     sharedState,
 		userInfoQueue:   debounce.New(userInfoRefreshDebounceDelay, debounce.ModeLeading),
 		premiumDetector: newAgentPremiumRefreshDetector(),
-
-		// Initialize view components
-		statsView:    tui.NewStatsView(),
-		modelsView:   tui.NewModelsView(),
-		logsView:     tui.NewLogsView(),
-		configModal:  tui.NewConfigModal(),
-		accountModal: tui.NewAccountModal(),
+		activateAccount: deps.ActivateAccount,
+		addAccount:      deps.AddAccount,
+		statsView:       tui.NewStatsView(),
+		modelsView:      tui.NewModelsView(),
+		logsView:        tui.NewLogsView(),
+		configModal:     tui.NewConfigModal(),
+		accountModal:    tui.NewAccountModal(),
 	}
 
-	if models.DefaultModelsManager().HasModels() {
-		model.loadedModels = true
-	}
+	model.loadedModels = len(sharedState.Models) > 0
+	model.loadedUserInfo = sharedState.UserInfo != nil
 
-	// Set up view components
 	model.statsView.SetState(sharedState)
 	model.modelsView.SetState(sharedState)
+	model.modelsView.SetModels(sharedState.Models)
 	model.logsView.SetState(sharedState)
 
-	model.modelsView.SetModels(deps.Models)
-	model.logsView.SetDebugLogger(deps.DebugLogger)
-
 	return model
+}
+
+func resolveStatsService(deps *MonitorDeps) statsService {
+	if deps != nil && deps.StatsService != nil {
+		return deps.StatsService
+	}
+	if deps != nil && deps.Collector != nil {
+		if provider, ok := deps.Collector.(observabilityProvider); ok {
+			return stats.NewService(provider.Observability())
+		}
+	}
+	return stats.NewService(nil)
+}
+
+func resolveModelService(deps *MonitorDeps, serverAddr string) modelService {
+	if deps != nil && deps.ModelService != nil {
+		return deps.ModelService
+	}
+	client := newMonitorHTTPClient()
+	if deps != nil && deps.HTTPClient != nil {
+		client = deps.HTTPClient
+	}
+	proxyURL := serverAddr
+	if !strings.HasPrefix(proxyURL, "http") {
+		proxyURL = "http://" + proxyURL
+	}
+	return model.NewService(models.DefaultModelsManager(), nil, client, proxyURL)
+}
+
+func resolveAccountService(deps *MonitorDeps) accountService {
+	if deps != nil && deps.AccountService != nil {
+		return deps.AccountService
+	}
+	var authCfg config.AuthConfig
+	if deps != nil && deps.AuthConfig != nil {
+		authCfg = *deps.AuthConfig
+	}
+	options := []account.Option{}
+	if deps != nil && deps.HTTPClient != nil {
+		options = append(options, account.WithHTTPClient(deps.HTTPClient))
+	} else {
+		options = append(options, account.WithHTTPClient(newMonitorHTTPClient()))
+	}
+	if deps != nil && (deps.ActivateAccount != nil || deps.AddAccount != nil) {
+		options = append(options, account.WithSaveAuthFunc(func(config.AuthConfig) error {
+			return nil
+		}))
+	}
+	return account.New(authCfg, options...)
 }
 
 // Init initializes the model.
@@ -254,8 +336,7 @@ func (m *MonitorModel) Init() tea.Cmd {
 		cmds = append(cmds, cmd)
 	}
 
-	// Only load models if global cache is empty
-	if !models.DefaultModelsManager().HasModels() {
+	if !m.loadedModels {
 		cmds = append(cmds, m.loadModelsCmd())
 	}
 
@@ -270,64 +351,24 @@ func tickCmd() tea.Cmd {
 
 func (m *MonitorModel) loadModelsCmd() tea.Cmd {
 	return func() tea.Msg {
-		client := m.httpClient
-		if client == nil {
-			client = newMonitorHTTPClient()
-		}
-
 		ctx, cancel := context.WithTimeout(context.Background(), monitorRequestTimeout)
 		defer cancel()
-
-		if m.proxyInvoker != nil {
-			items, err := models.FetchViaDoer(
-				ctx,
-				m.proxyInvoker,
-				"http://in-process"+config.ModelsPath,
-			)
-			if err == nil || !shouldFallbackToProxyURL(err) || m.serverAddr == "" {
-				return modelsLoadedMsg{models: items, err: err}
-			}
-		}
-
-		// Use proxy to fetch models - the proxy handles auth and header injection
-		proxyURL := "http://" + m.serverAddr
-		items, err := models.FetchViaProxy(ctx, client, proxyURL)
-		return modelsLoadedMsg{models: items, err: err}
+		items, err := m.modelService.Refresh(ctx)
+		return modelsLoadedMsg{models: toMonitorModels(items), err: err}
 	}
 }
 
-func shouldFallbackToProxyURL(err error) bool {
-	if err == nil {
-		return false
-	}
-	if models.IsHTTPStatus(err, http.StatusNotFound) || models.IsHTTPStatus(err, http.StatusMethodNotAllowed) {
-		return true
-	}
-	var statusErr *models.HTTPStatusError
-	return !errors.As(err, &statusErr)
-}
-
-func (m *MonitorModel) loadUserInfoCmd() tea.Cmd {
+func (m *MonitorModel) loadUserInfoCmd(force bool) tea.Cmd {
 	return func() tea.Msg {
-		if m.authConfig == nil || len(m.authConfig.Accounts) == 0 {
+		if m.accountService == nil {
 			return userInfoLoadedMsg{info: nil, err: errNoAuthConfigured}
 		}
 
-		account, _, err := m.authConfig.DefaultAccount()
-		if err != nil {
-			return userInfoLoadedMsg{info: nil, err: err}
-		}
-
-		client := m.httpClient
-		if client == nil {
-			client = newMonitorHTTPClient()
-		}
-
 		ctx, cancel := context.WithTimeout(context.Background(), monitorRequestTimeout)
 		defer cancel()
 
-		info, err := monitor.FetchUserInfo(ctx, client, config.GitHubAPIURL, account.GhToken)
-		return userInfoLoadedMsg{info: info, err: err}
+		info, err := m.accountService.PremiumInfo(ctx, force)
+		return userInfoLoadedMsg{info: &info, err: err}
 	}
 }
 
@@ -348,12 +389,10 @@ func (m *MonitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleUserInfoLoaded(msg)
 	case userInfoRefreshDueMsg:
 		return m.handleUserInfoRefreshDue(msg)
-	case accountDeviceCodeMsg:
-		return m.handleAccountDeviceCode(msg)
-	case accountTokenMsg:
-		return m.handleAccountToken(msg)
-	case accountUserMsg:
-		return m.handleAccountUser(msg)
+	case accountLoginChallengeMsg:
+		return m.handleAccountLoginChallenge(msg)
+	case accountLoginResultMsg:
+		return m.handleAccountLoginResult(msg)
 	case settingsAppliedMsg:
 		m.handleSettingsApplied(&msg)
 	}
@@ -364,6 +403,28 @@ func (m *MonitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func emptySnapshot() monitor.Snapshot {
 	return monitor.Snapshot{}
+}
+
+func toMonitorModels(items []models.ModelInfo) []monitor.ModelInfo {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make([]monitor.ModelInfo, len(items))
+	for i := range items {
+		result[i] = items[i]
+	}
+	return result
+}
+
+func fromMonitorModels(items []monitor.ModelInfo) []models.ModelInfo {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make([]models.ModelInfo, len(items))
+	for i := range items {
+		result[i] = items[i]
+	}
+	return result
 }
 
 func (m *MonitorModel) setStatus(view tui.ViewState, message string) {
@@ -393,6 +454,9 @@ func (m *MonitorModel) beginUserInfoRefreshDeferred() tea.Cmd {
 
 func (m *MonitorModel) enqueueUserInfoRefresh(source userInfoRefreshSource) tea.Cmd {
 	result := m.userInfoQueue.Trigger()
+	if source == userInfoRefreshSourceManual {
+		m.userInfoForceRefresh = true
+	}
 	if !result.Schedule {
 		if source == userInfoRefreshSourceManual && m.userInfoQueue.State().InFlight {
 			m.userInfoRefreshAfterInFlight = true
@@ -413,7 +477,9 @@ func (m *MonitorModel) startUserInfoRefreshIfNeeded() tea.Cmd {
 	m.userInfoQueue.MarkStarted()
 	m.loading = true
 	m.setStatus(tui.ViewStats, "Refreshing user info...")
-	return m.loadUserInfoCmd()
+	force := m.userInfoForceRefresh
+	m.userInfoForceRefresh = false
+	return m.loadUserInfoCmd(force)
 }
 
 func scheduleUserInfoDue(seq int, delay time.Duration) tea.Cmd {
@@ -528,9 +594,8 @@ func (m *MonitorModel) handleOpenAccountModal() (tea.Model, tea.Cmd) {
 	if m.accountModal == nil {
 		m.accountModal = tui.NewAccountModal()
 	}
-	if err := m.accountModal.Open(m.authConfig); err != nil {
+	if err := m.openAccountModal(); err != nil {
 		m.setStatus(tui.ViewStats, fmt.Sprintf("Account: %v", err))
-		return m, nil
 	}
 	return m, nil
 }
@@ -554,8 +619,8 @@ func (m *MonitorModel) handleAccountModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 			m.accountModal.SetError(err.Error())
 			return m, nil
 		}
-		if m.authConfig != nil {
-			m.authConfig.Default = user
+		if m.sharedState != nil {
+			m.sharedState.ActiveAccount = user
 		}
 		m.accountModal.Close()
 		m.userInfo = nil
@@ -575,30 +640,42 @@ func (m *MonitorModel) handleAccountModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 }
 
 func (m *MonitorModel) activateSelectedAccount(user string) error {
-	if m.activateAccount != nil {
-		return m.activateAccount(user)
-	}
-	if m.authConfig == nil {
+	if m.accountService == nil {
 		return errNoAuthConfigured
 	}
-	if err := m.authConfig.SetDefault(user); err != nil {
+	current, _, _ := m.accountService.Current()
+	prev := current.User
+	if err := m.accountService.SwitchDefault(user); err != nil {
 		return err
 	}
-	if err := config.SaveAuth(*m.authConfig); err != nil {
-		return fmt.Errorf("save auth config: %w", err)
+	if m.activateAccount != nil {
+		if err := m.activateAccount(user); err != nil {
+			if prev != "" {
+				_ = m.accountService.SwitchDefault(prev)
+			}
+			return err
+		}
+	}
+	if m.sharedState != nil {
+		m.sharedState.ActiveAccount = user
 	}
 	return nil
 }
 
 func (m *MonitorModel) startAddAccountFlow() (tea.Model, tea.Cmd) {
-	m.cancelAccountAuth(false)
-	m.accountAuthSeq++
-	seq := m.accountAuthSeq
-
+	m.cancelAccountAuth(true)
+	if m.accountService == nil {
+		if m.accountModal != nil {
+			m.accountModal.SetError(errNoAuthConfigured.Error())
+		}
+		m.setStatus(tui.ViewStats, "Account add failed")
+		return m, nil
+	}
 	ctx, cancel := context.WithCancel(context.Background())
+	m.accountAuthCtx = ctx
 	m.accountAuthDone = cancel
 	m.setStatus(tui.ViewStats, "Requesting device code...")
-	return m, m.requestDeviceCodeCmd(ctx, seq)
+	return m, m.beginAccountLoginCmd(ctx)
 }
 
 func (m *MonitorModel) cancelAccountAuth(invalidateSeq bool) {
@@ -606,82 +683,49 @@ func (m *MonitorModel) cancelAccountAuth(invalidateSeq bool) {
 		m.accountAuthDone()
 		m.accountAuthDone = nil
 	}
+	if m.accountService != nil {
+		m.accountService.CancelLogin(0)
+	}
+	m.accountAuthCtx = nil
 	if invalidateSeq {
-		m.accountAuthSeq++
+		m.accountAuthSeq = 0
 	}
 }
 
-func (m *MonitorModel) requestDeviceCodeCmd(ctx context.Context, seq int) tea.Cmd {
+func (m *MonitorModel) beginAccountLoginCmd(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		flow := newDefaultDeviceFlow()
-		device, err := flow.RequestCodeWithContext(ctx)
-		return accountDeviceCodeMsg{
+		if m.accountService == nil {
+			return accountLoginChallengeMsg{
+				err: errNoAuthConfigured,
+			}
+		}
+		challenge, err := m.accountService.BeginLogin(ctx)
+		return accountLoginChallengeMsg{
+			seq:       challenge.Seq,
+			challenge: challenge,
+			err:       err,
+		}
+	}
+}
+
+func (m *MonitorModel) pollAccountLoginCmd(ctx context.Context, seq int64) tea.Cmd {
+	return func() tea.Msg {
+		if m.accountService == nil {
+			return accountLoginResultMsg{
+				seq: seq,
+				err: errNoAuthConfigured,
+			}
+		}
+		result, err := m.accountService.PollLogin(ctx, seq)
+		return accountLoginResultMsg{
 			seq:    seq,
-			device: device,
+			result: result,
 			err:    err,
 		}
 	}
 }
 
-func (m *MonitorModel) pollAccessTokenCmd(
-	ctx context.Context,
-	seq int,
-	device auth.DeviceCodeResponse,
-) tea.Cmd {
-	return func() tea.Msg {
-		flow := newDefaultDeviceFlow()
-		tokenValue, err := flow.PollAccessTokenWithContext(ctx, device)
-		return accountTokenMsg{
-			seq:   seq,
-			token: tokenValue,
-			err:   err,
-		}
-	}
-}
-
-func (m *MonitorModel) fetchUserLoginCmd(seq int, tokenValue string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), monitorRequestTimeout)
-		defer cancel()
-		login, err := auth.FetchUserWithContext(ctx, nil, "", tokenValue)
-		return accountUserMsg{
-			seq:   seq,
-			login: login,
-			token: tokenValue,
-			err:   err,
-		}
-	}
-}
-
-func (m *MonitorModel) handleAccountDeviceCode(msg accountDeviceCodeMsg) (tea.Model, tea.Cmd) {
-	if msg.seq != m.accountAuthSeq {
-		return m, nil
-	}
-	if msg.err != nil {
-		m.cancelAccountAuth(false)
-		if m.accountModal != nil {
-			m.accountModal.EndAddAuthToList()
-			m.accountModal.SetError(fmt.Sprintf("request device code: %v", msg.err))
-		}
-		m.setStatus(tui.ViewStats, "Account add failed")
-		return m, nil
-	}
-
-	if m.accountModal != nil {
-		m.accountModal.BeginAddAuth(msg.device.VerificationURI, msg.device.UserCode)
-	}
-	m.setStatus(tui.ViewStats, "Waiting for device authorization...")
-
-	m.cancelAccountAuth(false)
-	ctx, cancel := context.WithCancel(context.Background())
-	m.accountAuthDone = cancel
-	return m, m.pollAccessTokenCmd(ctx, msg.seq, msg.device)
-}
-
-func (m *MonitorModel) handleAccountToken(msg accountTokenMsg) (tea.Model, tea.Cmd) {
-	if msg.seq != m.accountAuthSeq {
-		return m, nil
-	}
+func (m *MonitorModel) handleAccountLoginChallenge(msg accountLoginChallengeMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.cancelAccountAuth(false)
 		if errors.Is(msg.err, context.Canceled) {
@@ -689,38 +733,60 @@ func (m *MonitorModel) handleAccountToken(msg accountTokenMsg) (tea.Model, tea.C
 		}
 		if m.accountModal != nil {
 			m.accountModal.EndAddAuthToList()
-			m.accountModal.SetError(fmt.Sprintf("poll access token: %v", msg.err))
+			m.accountModal.SetError(fmt.Sprintf("request device code: %v", msg.err))
 		}
 		m.setStatus(tui.ViewStats, "Account add failed")
 		return m, nil
 	}
-	return m, m.fetchUserLoginCmd(msg.seq, msg.token)
+	m.accountAuthSeq = msg.seq
+	if m.accountModal != nil {
+		m.accountModal.BeginAddAuth(msg.challenge.VerificationURI, msg.challenge.UserCode)
+	}
+	m.setStatus(tui.ViewStats, "Waiting for device authorization...")
+	ctx := m.accountAuthCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return m, m.pollAccountLoginCmd(ctx, msg.seq)
 }
 
-func (m *MonitorModel) handleAccountUser(msg accountUserMsg) (tea.Model, tea.Cmd) {
+func (m *MonitorModel) handleAccountLoginResult(msg accountLoginResultMsg) (tea.Model, tea.Cmd) {
 	if msg.seq != m.accountAuthSeq {
 		return m, nil
 	}
 	m.cancelAccountAuth(false)
 	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) {
+			if m.accountModal != nil {
+				m.accountModal.EndAddAuthToList()
+			}
+			return m, nil
+		}
 		if m.accountModal != nil {
 			m.accountModal.EndAddAuthToList()
-			m.accountModal.SetError(fmt.Sprintf("fetch user: %v", msg.err))
+			m.accountModal.SetError(fmt.Sprintf("poll login: %v", msg.err))
+		}
+		m.setStatus(tui.ViewStats, "Account add failed")
+		return m, nil
+	}
+	if msg.result.Login == "" || msg.result.Token == "" {
+		if m.accountModal != nil {
+			m.accountModal.EndAddAuthToList()
+			m.accountModal.SetError("poll login: invalid credentials")
 		}
 		m.setStatus(tui.ViewStats, "Account add failed")
 		return m, nil
 	}
 
 	account := config.Account{
-		User:    msg.login,
-		GhToken: msg.token,
+		User:    msg.result.Login,
+		GhToken: msg.result.Token,
 		AppID:   "",
 	}
 
-	hadAccounts := m.authConfig != nil && len(m.authConfig.Accounts) > 0
-	previousDefault := ""
-	if m.authConfig != nil {
-		previousDefault = m.authConfig.Default
+	hadAccounts := false
+	if m.accountService != nil && len(m.accountService.List()) > 0 {
+		hadAccounts = true
 	}
 
 	if err := m.addAuthorizedAccount(account); err != nil {
@@ -732,73 +798,67 @@ func (m *MonitorModel) handleAccountUser(msg accountUserMsg) (tea.Model, tea.Cmd
 		return m, nil
 	}
 
-	if m.authConfig == nil {
-		m.authConfig = &config.AuthConfig{
-			Default:  "",
-			Accounts: nil,
-		}
-	}
-	m.authConfig.UpsertAccount(account)
-	if hadAccounts && previousDefault != "" && previousDefault != account.User {
-		_ = m.authConfig.SetDefault(previousDefault)
-	}
-	m.sharedState.AuthConfig = m.authConfig
+	m.refreshActiveAccount()
 
 	if m.accountModal != nil {
-		if err := m.accountModal.Open(m.authConfig); err != nil {
+		m.accountModal.EndAddAuthToList()
+		if err := m.openAccountModal(); err != nil {
 			m.setStatus(tui.ViewStats, fmt.Sprintf("Account: %v", err))
 			return m, nil
 		}
 	}
 
 	m.setStatus(tui.ViewStats, fmt.Sprintf("Account added: %s", account.User))
-
 	if !hadAccounts {
 		m.userInfo = nil
 		m.sharedState.UserInfo = nil
 		m.loadedUserInfo = false
 		return m, m.beginUserInfoRefreshDeferred()
 	}
-
 	return m, nil
 }
 
+func (m *MonitorModel) openAccountModal() error {
+	if m.accountModal == nil {
+		return nil
+	}
+	accounts, active := m.accountDTOsForModal()
+	return m.accountModal.Open(accounts, active)
+}
+
 func (m *MonitorModel) addAuthorizedAccount(account config.Account) error {
+	if m.accountService == nil {
+		return errNoAuthConfigured
+	}
+	if err := m.accountService.Add(account); err != nil {
+		return err
+	}
 	if m.addAccount != nil {
-		return m.addAccount(account)
-	}
-
-	if m.authConfig == nil {
-		m.authConfig = &config.AuthConfig{
-			Default:  "",
-			Accounts: nil,
-		}
-	}
-	previous := cloneAuthConfig(*m.authConfig)
-	hadAccounts := len(m.authConfig.Accounts) > 0
-	previousDefault := m.authConfig.Default
-
-	m.authConfig.UpsertAccount(account)
-	if hadAccounts && previousDefault != "" && previousDefault != account.User {
-		if err := m.authConfig.SetDefault(previousDefault); err != nil {
-			*m.authConfig = previous
+		if err := m.addAccount(account); err != nil {
+			_ = m.accountService.Remove(account.User)
 			return err
 		}
-	}
-
-	if err := config.SaveAuth(*m.authConfig); err != nil {
-		*m.authConfig = previous
-		return fmt.Errorf("save auth config: %w", err)
 	}
 	return nil
 }
 
-func cloneAuthConfig(auth config.AuthConfig) config.AuthConfig {
-	accounts := make([]config.Account, len(auth.Accounts))
-	copy(accounts, auth.Accounts)
-	return config.AuthConfig{
-		Default:  auth.Default,
-		Accounts: accounts,
+func (m *MonitorModel) accountDTOsForModal() ([]account.AccountDTO, string) {
+	if m.accountService == nil {
+		return nil, ""
+	}
+	var active string
+	if acct, _, err := m.accountService.Current(); err == nil {
+		active = acct.User
+	}
+	return m.accountService.List(), active
+}
+
+func (m *MonitorModel) refreshActiveAccount() {
+	if m.accountService == nil || m.sharedState == nil {
+		return
+	}
+	if acct, _, err := m.accountService.Current(); err == nil {
+		m.sharedState.ActiveAccount = acct.User
 	}
 }
 
@@ -880,25 +940,23 @@ func isMouseWheelButton(button tea.MouseButton) bool {
 }
 
 func (m *MonitorModel) handleClearLogsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.collector == nil {
-		return m.handleCurrentViewKey(msg)
-	}
-
 	switch m.state {
 	case tui.ViewStats:
-		if resetter, ok := m.collector.(monitor.StatsResetter); ok {
-			resetter.ResetStats()
-		} else {
-			m.collector.Reset()
+		if m.statsService != nil {
+			m.statsService.Reset()
+			m.snapshot = m.statsService.MonitorSnapshot()
+			m.sharedState.Snapshot = m.snapshot
 		}
-		m.snapshot = m.collector.Snapshot()
-		m.sharedState.Snapshot = m.snapshot
 		m.setStatus(tui.ViewStats, "Stats counters cleared")
 		return m, nil
 	case tui.ViewModels:
 		return m.handleCurrentViewKey(msg)
 	case tui.ViewLogs:
-		m.collector.Reset()
+		if m.statsService != nil {
+			m.statsService.Reset()
+			m.snapshot = m.statsService.MonitorSnapshot()
+			m.sharedState.Snapshot = m.snapshot
+		}
 	}
 	return m.handleCurrentViewKey(msg)
 }
@@ -932,8 +990,8 @@ func (m *MonitorModel) handleTick() (tea.Model, tea.Cmd) {
 	if m.sharedState != nil {
 		m.sharedState.LogsBlinkOn = !m.sharedState.LogsBlinkOn
 	}
-	if m.collector != nil {
-		m.snapshot = m.collector.Snapshot()
+	if m.statsService != nil {
+		m.snapshot = m.statsService.MonitorSnapshot()
 		m.sharedState.Snapshot = m.snapshot
 		premiumSet := premiumModelSet(m.sharedState.Models)
 		if len(premiumSet) > 0 && m.premiumDetector.HasNewEligible(m.snapshot, premiumSet) {
@@ -948,12 +1006,12 @@ func (m *MonitorModel) handleTick() (tea.Model, tea.Cmd) {
 func (m *MonitorModel) handleModelsLoaded(msg modelsLoadedMsg) {
 	m.loading = false
 	if msg.err == nil {
-		m.models = msg.models
-		m.sharedState.Models = msg.models
+		models := fromMonitorModels(msg.models)
+		m.sharedState.Models = models
 		m.setStatus(tui.ViewModels, fmt.Sprintf("Loaded %d models", len(msg.models)))
 		m.lastRefresh = time.Now()
 		m.loadedModels = true
-		m.modelsView.SetModels(msg.models)
+		m.modelsView.SetModels(models)
 		return
 	}
 	m.setStatus(tui.ViewModels, fmt.Sprintf("Models: %v", msg.err))
@@ -967,10 +1025,9 @@ func (m *MonitorModel) handleUserInfoLoaded(msg userInfoLoadedMsg) (tea.Model, t
 	}
 	m.loading = false
 	if msg.err == nil {
-		m.userInfo = msg.info
-		m.setStatus(tui.ViewStats, "User info updated")
-		m.loadedUserInfo = true
 		m.sharedState.UserInfo = msg.info
+		m.loadedUserInfo = msg.info != nil
+		m.setStatus(tui.ViewStats, "Subscription info updated")
 		return m, nil
 	}
 	m.setStatus(tui.ViewStats, fmt.Sprintf("User: %v", msg.err))

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core/account"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -58,21 +58,16 @@ func NewAccountModal() *AccountModal {
 	}
 }
 
-func (m *AccountModal) Open(auth *config.AuthConfig) error {
-	accounts := make([]string, 0)
-	active := ""
-	if auth != nil {
-		accounts = make([]string, 0, len(auth.Accounts))
-		for _, account := range auth.Accounts {
-			if account.User == "" {
-				continue
-			}
-			accounts = append(accounts, account.User)
+func (m *AccountModal) Open(accounts []account.AccountDTO, active string) error {
+	users := make([]string, 0, len(accounts))
+	for _, acct := range accounts {
+		if acct.User == "" {
+			continue
 		}
-		active = auth.Default
+		users = append(users, acct.User)
 	}
 
-	m.accounts = accounts
+	m.accounts = users
 	m.active = active
 	m.selected = 0
 	for i := range m.accounts {

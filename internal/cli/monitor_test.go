@@ -1,15 +1,18 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/auth"
 	"copilot-proxy/internal/cli/tui"
 	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core/account"
+	coreconfig "copilot-proxy/internal/core/config"
+	"copilot-proxy/internal/core/stats"
 	"copilot-proxy/internal/monitor"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -1000,46 +1003,6 @@ func TestFormatPromptOutputContext(t *testing.T) {
 	}
 }
 
-func TestMonitorModel_DebugMode(t *testing.T) {
-	collector := monitor.NewCollector(100)
-	debugLogger := monitor.NewDebugLogger()
-	t.Cleanup(func() {
-		_ = debugLogger.Close()
-	})
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-	if err := debugLogger.Init(tmpDir); err != nil {
-		t.Fatalf("init debug logger: %v", err)
-	}
-	auth := &config.AuthConfig{}
-	deps := MonitorDeps{
-		Collector:   collector,
-		DebugLogger: debugLogger,
-		AuthConfig:  auth,
-	}
-	model := NewMonitorModel(&deps, "")
-
-	// Switch to logs view (debug toggle only works in Logs view)
-	model.state = tui.ViewLogs
-
-	// Toggle debug mode with 'd' key
-	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
-	_, _ = model.Update(keyMsg)
-
-	// Verify debug logging is enabled
-	if !debugLogger.DebugEnabled() {
-		t.Error("debug logger should be enabled")
-	}
-
-	// Toggle again
-	_, _ = model.Update(keyMsg)
-
-	// Verify debug logging is disabled
-	if debugLogger.DebugEnabled() {
-		t.Error("debug logger should be disabled")
-	}
-}
-
 func TestMonitorModel_LogsViewRendering(t *testing.T) {
 	collector := monitor.NewCollector(100)
 	collector.RecordLocal(&monitor.RequestRecord{
@@ -1181,6 +1144,37 @@ func TestMonitorModel_ConfigModalSaveAppliesSettings(t *testing.T) {
 	}
 }
 
+func TestMonitorModel_ApplySettingsUpdatesConfigService(t *testing.T) {
+	collector := monitor.NewCollector(100)
+	// Isolate config writes so SaveSettings updates a temp directory instead of the real home directory.
+	t.Setenv("HOME", t.TempDir())
+	statsSvc := stats.NewService(collector.Observability())
+	configSvc := coreconfig.NewService(config.DefaultSettings())
+	deps := MonitorDeps{
+		Collector:     collector,
+		StatsService:  statsSvc,
+		ConfigService: configSvc,
+	}
+	model := NewMonitorModel(&deps, "127.0.0.1:4000")
+	candidate := configSvc.Current()
+	candidate.ListenAddr = "127.0.0.1:51234"
+
+	cmd := model.applySettingsCmd(&candidate)
+	msg := cmd()
+	settingsMsg, ok := msg.(settingsAppliedMsg)
+	if !ok {
+		t.Fatalf("expected settingsAppliedMsg, got %T", msg)
+	}
+	if settingsMsg.err != nil {
+		t.Fatalf("expected apply to succeed, got %v", settingsMsg.err)
+	}
+	model.handleSettingsApplied(&settingsMsg)
+
+	if configSvc.Current().ListenAddr != candidate.ListenAddr {
+		t.Fatalf("expected config service listen addr to update, got %q", configSvc.Current().ListenAddr)
+	}
+}
+
 func TestMonitorModel_AccountModalOpenOnlyInStats(t *testing.T) {
 	collector := monitor.NewCollector(100)
 	auth := &config.AuthConfig{
@@ -1221,23 +1215,14 @@ func TestMonitorModel_AccountModalOpenOnlyInStats(t *testing.T) {
 
 func TestMonitorModel_AccountModalActivateSuccessRefreshes(t *testing.T) {
 	collector := monitor.NewCollector(100)
-	auth := &config.AuthConfig{
-		Default: "u1",
-		Accounts: []config.Account{
-			{User: "u1", GhToken: "ghu-1"},
-			{User: "u2", GhToken: "ghu-2"},
-		},
-	}
-	activatedUser := ""
+	svc := newTestAccountService([]account.AccountDTO{
+		{User: "u1", IsDefault: true},
+		{User: "u2"},
+	}, "u1")
 	deps := MonitorDeps{
-		Collector:  collector,
-		AuthConfig: auth,
-		UserInfo:   &monitor.UserInfo{Plan: "business"},
-		ActivateAccount: func(user string) error {
-			activatedUser = user
-			auth.Default = user
-			return nil
-		},
+		Collector:      collector,
+		AccountService: svc,
+		UserInfo:       &monitor.UserInfo{Plan: "business"},
 	}
 	model := NewMonitorModel(&deps, "")
 	model.loadedUserInfo = true
@@ -1265,8 +1250,8 @@ func TestMonitorModel_AccountModalActivateSuccessRefreshes(t *testing.T) {
 	}
 	model = *updatedModel
 
-	if activatedUser != "u2" {
-		t.Fatalf("expected activate callback for u2, got %q", activatedUser)
+	if len(svc.switches) != 1 || svc.switches[0] != "u2" {
+		t.Fatalf("expected activate callback for u2, got %v", svc.switches)
 	}
 	if model.accountModal != nil && model.accountModal.IsOpen() {
 		t.Fatalf("expected account modal to close after successful activation")
@@ -1413,20 +1398,12 @@ func TestMonitorModel_AccountModalOpenWithoutAccountsShowsAddRow(t *testing.T) {
 
 func TestMonitorModel_AddAccountSuccessKeepsDefaultAndRefreshesModalList(t *testing.T) {
 	collector := monitor.NewCollector(100)
-	authCfg := &config.AuthConfig{
-		Default: "u1",
-		Accounts: []config.Account{
-			{User: "u1", GhToken: "t1"},
-		},
-	}
-	var added config.Account
+	svc := newTestAccountService([]account.AccountDTO{
+		{User: "u1", IsDefault: true},
+	}, "u1")
 	deps := MonitorDeps{
-		Collector:  collector,
-		AuthConfig: authCfg,
-		AddAccount: func(account config.Account) error {
-			added = account
-			return nil
-		},
+		Collector:      collector,
+		AccountService: svc,
 	}
 	model := NewMonitorModel(&deps, "")
 
@@ -1441,47 +1418,42 @@ func TestMonitorModel_AddAccountSuccessKeepsDefaultAndRefreshesModalList(t *test
 	if cmd == nil {
 		t.Fatalf("expected start add-account command")
 	}
-	seq := model.accountAuthSeq
+	seq := int64(1001)
 
-	updated, cmd = model.Update(accountDeviceCodeMsg{
+	updated, cmd = model.Update(accountLoginChallengeMsg{
 		seq: seq,
-		device: auth.DeviceCodeResponse{
+		challenge: account.LoginChallenge{
+			Seq:             seq,
 			VerificationURI: "https://github.com/login/device",
 			UserCode:        "ABCD-EFGH",
 		},
 	})
 	model = *mustMonitorModelFromUpdate(t, updated)
 	if cmd == nil {
-		t.Fatalf("expected poll token command")
+		t.Fatalf("expected poll login command")
 	}
 
-	updated, cmd = model.Update(accountTokenMsg{
-		seq:   seq,
-		token: "ghu-new",
-	})
-	model = *mustMonitorModelFromUpdate(t, updated)
-	if cmd == nil {
-		t.Fatalf("expected fetch user command")
-	}
-
-	updated, cmd = model.Update(accountUserMsg{
-		seq:   seq,
-		login: "u2",
-		token: "ghu-new",
+	updated, cmd = model.Update(accountLoginResultMsg{
+		seq: seq,
+		result: account.LoginResult{
+			Seq:   seq,
+			Token: "ghu-new",
+			Login: "u2",
+		},
 	})
 	model = *mustMonitorModelFromUpdate(t, updated)
 
 	if cmd != nil {
 		t.Fatalf("expected no user refresh command when accounts already existed")
 	}
-	if added.User != "u2" || added.GhToken != "ghu-new" {
-		t.Fatalf("expected add callback with new account, got %+v", added)
+	if len(svc.added) != 1 || svc.added[0].User != "u2" || svc.added[0].GhToken != "ghu-new" {
+		t.Fatalf("expected add callback with new account, got %+v", svc.added)
 	}
-	if authCfg.Default != "u1" {
-		t.Fatalf("expected default account to remain u1, got %q", authCfg.Default)
+	if current, _, err := svc.Current(); err != nil || current.User != "u1" {
+		t.Fatalf("expected default account to remain u1, got %v err %v", current, err)
 	}
-	if len(authCfg.Accounts) != 2 {
-		t.Fatalf("expected account list to include new account, got %d", len(authCfg.Accounts))
+	if got := len(svc.List()); got != 2 {
+		t.Fatalf("expected account list to include new account, got %d", got)
 	}
 	if model.accountModal == nil || !model.accountModal.IsOpen() {
 		t.Fatalf("expected account modal to stay open after add success")
@@ -1493,13 +1465,10 @@ func TestMonitorModel_AddAccountSuccessKeepsDefaultAndRefreshesModalList(t *test
 
 func TestMonitorModel_AddAccountFirstAccountTriggersUserRefresh(t *testing.T) {
 	collector := monitor.NewCollector(100)
-	authCfg := &config.AuthConfig{}
+	svc := newTestAccountService(nil, "")
 	deps := MonitorDeps{
-		Collector:  collector,
-		AuthConfig: authCfg,
-		AddAccount: func(account config.Account) error {
-			return nil
-		},
+		Collector:      collector,
+		AccountService: svc,
 	}
 	model := NewMonitorModel(&deps, "")
 
@@ -1511,57 +1480,45 @@ func TestMonitorModel_AddAccountFirstAccountTriggersUserRefresh(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected start add-account command")
 	}
-	seq := model.accountAuthSeq
+	seq := int64(1002)
 
-	updated, _ = model.Update(accountDeviceCodeMsg{
+	updated, _ = model.Update(accountLoginChallengeMsg{
 		seq: seq,
-		device: auth.DeviceCodeResponse{
+		challenge: account.LoginChallenge{
+			Seq:             seq,
 			VerificationURI: "https://github.com/login/device",
 			UserCode:        "ABCD-EFGH",
 		},
 	})
 	model = *mustMonitorModelFromUpdate(t, updated)
 
-	updated, _ = model.Update(accountTokenMsg{
-		seq:   seq,
-		token: "ghu-first",
-	})
-	model = *mustMonitorModelFromUpdate(t, updated)
-
-	updated, cmd = model.Update(accountUserMsg{
-		seq:   seq,
-		login: "u-first",
-		token: "ghu-first",
+	updated, cmd = model.Update(accountLoginResultMsg{
+		seq: seq,
+		result: account.LoginResult{
+			Seq:   seq,
+			Token: "ghu-first",
+			Login: "u-first",
+		},
 	})
 	model = *mustMonitorModelFromUpdate(t, updated)
 
 	if cmd == nil {
 		t.Fatalf("expected user-info refresh command when first account is added")
 	}
-	if authCfg.Default != "u-first" {
-		t.Fatalf("expected first added account to become default, got %q", authCfg.Default)
+	if current, _, err := svc.Current(); err != nil || current.User != "u-first" {
+		t.Fatalf("expected first added account to become default, got %v err %v", current, err)
 	}
-	if len(authCfg.Accounts) != 1 {
-		t.Fatalf("expected one account after first add, got %d", len(authCfg.Accounts))
+	if got := len(svc.List()); got != 1 {
+		t.Fatalf("expected one account after first add, got %d", got)
 	}
 }
 
 func TestMonitorModel_AddAccountCancelIgnoresLateMessages(t *testing.T) {
 	collector := monitor.NewCollector(100)
-	authCfg := &config.AuthConfig{
-		Default: "u1",
-		Accounts: []config.Account{
-			{User: "u1", GhToken: "t1"},
-		},
-	}
-	addCalled := false
+	svc := newTestAccountService([]account.AccountDTO{{User: "u1", HasToken: true, IsDefault: true}}, "u1")
 	deps := MonitorDeps{
-		Collector:  collector,
-		AuthConfig: authCfg,
-		AddAccount: func(account config.Account) error {
-			addCalled = true
-			return nil
-		},
+		Collector:      collector,
+		AccountService: svc,
 	}
 	model := NewMonitorModel(&deps, "")
 
@@ -1571,11 +1528,12 @@ func TestMonitorModel_AddAccountCancelIgnoresLateMessages(t *testing.T) {
 	model = *mustMonitorModelFromUpdate(t, updated)
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = *mustMonitorModelFromUpdate(t, updated)
-	seq := model.accountAuthSeq
+	seq := int64(1003)
 
-	updated, _ = model.Update(accountDeviceCodeMsg{
+	updated, _ = model.Update(accountLoginChallengeMsg{
 		seq: seq,
-		device: auth.DeviceCodeResponse{
+		challenge: account.LoginChallenge{
+			Seq:             seq,
 			VerificationURI: "https://github.com/login/device",
 			UserCode:        "ABCD-EFGH",
 		},
@@ -1588,17 +1546,111 @@ func TestMonitorModel_AddAccountCancelIgnoresLateMessages(t *testing.T) {
 		t.Fatalf("expected canceled status, got %q", model.statusMsg)
 	}
 
-	updated, _ = model.Update(accountUserMsg{
-		seq:   seq,
-		login: "late-user",
-		token: "late-token",
+	updated, _ = model.Update(accountLoginResultMsg{
+		seq: seq,
+		result: account.LoginResult{
+			Seq:   seq,
+			Token: "late-token",
+			Login: "late-user",
+		},
 	})
 	model = *mustMonitorModelFromUpdate(t, updated)
 
-	if addCalled {
+	if len(svc.added) != 0 {
 		t.Fatalf("expected late message to be ignored after cancel")
 	}
-	if len(authCfg.Accounts) != 1 || authCfg.Accounts[0].User != "u1" {
-		t.Fatalf("expected auth config unchanged after cancel, got %+v", authCfg.Accounts)
+	if got := len(svc.List()); got != 1 || svc.List()[0].User != "u1" {
+		t.Fatalf("expected account list unchanged after cancel, got %+v", svc.List())
 	}
+}
+
+type testAccountService struct {
+	accounts    []account.AccountDTO
+	defaultUser string
+	added       []config.Account
+	switches    []string
+}
+
+func newTestAccountService(accounts []account.AccountDTO, defaultUser string) *testAccountService {
+	tp := &testAccountService{
+		accounts:    cloneAccountDTOs(accounts),
+		defaultUser: defaultUser,
+	}
+	return tp
+}
+
+func cloneAccountDTOs(input []account.AccountDTO) []account.AccountDTO {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]account.AccountDTO, len(input))
+	copy(out, input)
+	return out
+}
+
+func (s *testAccountService) List() []account.AccountDTO {
+	return cloneAccountDTOs(s.accounts)
+}
+
+func (s *testAccountService) Current() (config.Account, bool, error) {
+	if s.defaultUser == "" {
+		return config.Account{}, false, config.ErrAccountNotFound
+	}
+	return config.Account{User: s.defaultUser}, true, nil
+}
+
+func (s *testAccountService) SwitchDefault(user string) error {
+	for _, acct := range s.accounts {
+		if acct.User == user {
+			s.defaultUser = user
+			s.switches = append(s.switches, user)
+			return nil
+		}
+	}
+	return config.ErrAccountNotFound
+}
+
+func (s *testAccountService) Add(acct config.Account) error {
+	s.added = append(s.added, acct)
+	dto := account.AccountDTO{
+		User:      acct.User,
+		AppID:     acct.AppID,
+		HasToken:  acct.GhToken != "",
+		IsDefault: acct.User == s.defaultUser || s.defaultUser == "",
+	}
+	if s.defaultUser == "" {
+		s.defaultUser = acct.User
+		dto.IsDefault = true
+	}
+	s.accounts = append(s.accounts, dto)
+	return nil
+}
+
+func (s *testAccountService) BeginLogin(ctx context.Context) (account.LoginChallenge, error) {
+	return account.LoginChallenge{}, nil
+}
+
+func (s *testAccountService) PollLogin(ctx context.Context, seq int64) (account.LoginResult, error) {
+	return account.LoginResult{}, nil
+}
+
+func (s *testAccountService) CancelLogin(seq int64) {}
+
+func (s *testAccountService) PremiumInfo(ctx context.Context, force bool) (monitor.UserInfo, error) {
+	return monitor.UserInfo{}, nil
+}
+
+func (s *testAccountService) InvalidatePremium(user string) {}
+
+func (s *testAccountService) Remove(user string) error {
+	for i, acct := range s.accounts {
+		if acct.User == user {
+			s.accounts = append(s.accounts[:i], s.accounts[i+1:]...)
+			if s.defaultUser == user {
+				s.defaultUser = ""
+			}
+			return nil
+		}
+	}
+	return config.ErrAccountNotFound
 }

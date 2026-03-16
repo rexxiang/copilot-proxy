@@ -6,106 +6,140 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core"
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/monitor"
 )
 
-func selectMappedModel(info middleware.RequestInfo) string {
-	if info.MappedModel != "" {
-		return info.MappedModel
+const (
+	localResponsesPath = config.ResponsesPath
+)
+
+// ObservabilityMiddleware reports lifecycle events to an observability sink.
+type ObservabilityMiddleware struct {
+	sink middleware.ObservabilitySink
+}
+
+// NewObservabilityMiddleware builds the middleware.
+func NewObservabilityMiddleware(sink middleware.ObservabilitySink) ObservabilityMiddleware {
+	return ObservabilityMiddleware{sink: sink}
+}
+
+func (m ObservabilityMiddleware) Handle(ctx *middleware.Context, next middleware.Next) (*http.Response, error) {
+	req := ctx.Request
+	if req == nil {
+		return next()
 	}
-	return info.Model
-}
 
-// MetricsMiddleware records request completion.
-type MetricsMiddleware struct {
-	metrics middleware.MetricsRecorder
-}
+	rc := ensureRequestContext(req)
+	rc.Headers = captureHeaders(req)
+	ctx.Request = withRequestContext(req, rc)
 
-type firstResponseRecorder interface {
-	RecordFirstResponse(requestID string, statusCode int, duration time.Duration, upstreamPath string, isStream bool)
-}
-
-// NewMetrics builds a metrics middleware.
-func NewMetrics(metrics middleware.MetricsRecorder) MetricsMiddleware {
-	return MetricsMiddleware{metrics: metrics}
-}
-
-func (m MetricsMiddleware) Handle(ctx *middleware.Context, next middleware.Next) (*http.Response, error) {
-	reqCtx := ctx.Request.Context()
-	if m.metrics != nil {
-		if rc, ok := middleware.RequestContextFrom(reqCtx); ok && rc != nil {
-			upstreamPath := fallbackUpstreamPath(ctx.Request, rc)
-			localPath := fallbackLocalPath(rc)
-			startRecord := &monitor.RequestRecord{
-				Timestamp:    rc.Start,
-				Method:       ctx.Request.Method,
-				Path:         localPath,
-				Model:        selectMappedModel(rc.Info),
-				Account:      rc.Account.User,
-				RequestID:    rc.ID,
-				IsVision:     rc.Info.IsVision,
-				IsAgent:      rc.Info.IsAgent,
-				UpstreamPath: upstreamPath,
-			}
-			m.metrics.RecordStart(startRecord)
+	if m.sink != nil && rc != nil {
+		record := &core.RequestRecord{
+			Timestamp:    rc.Start,
+			Method:       req.Method,
+			Path:         fallbackLocalPath(rc),
+			Model:        selectMappedModel(rc.Info),
+			Account:      rc.Account.User,
+			RequestID:    rc.ID,
+			IsVision:     rc.Info.IsVision,
+			IsAgent:      rc.Info.IsAgent,
+			UpstreamPath: fallbackUpstreamPath(req, rc),
 		}
+		m.sink.RecordStart(record)
+		m.addEvent("request.start", "request started", map[string]any{
+			"request_id": rc.ID,
+			"path":       record.Path,
+			"model":      record.Model,
+			"account":    record.Account,
+		})
 	}
+
 	resp, err := next()
-	if m.metrics == nil {
+	if m.sink == nil {
 		return resp, err
 	}
-	rc, ok := middleware.RequestContextFrom(reqCtx)
-	if !ok || rc == nil || rc.ID == "" {
-		return resp, err
-	}
-	if resp == nil {
-		if err != nil {
-			upstreamPath := fallbackUpstreamPath(ctx.Request, rc)
-			statusCode := statusCodeFromRequestError(err)
-			m.metrics.RecordComplete(rc.ID, statusCode, time.Since(rc.Start), upstreamPath)
+
+	if rc == nil || rc.ID == "" {
+		if resp == nil && err != nil && rc != nil {
+			m.recordCompletion(rc, statusCodeFromRequestError(err), time.Since(rc.Start), fallbackUpstreamPath(req, rc))
 		}
 		return resp, err
 	}
+
 	upstreamPath := responseUpstreamPath(resp, rc)
 	if isEventStreamResponse(resp) && resp.Body != nil {
-		if recorder, ok := m.metrics.(firstResponseRecorder); ok {
-			recorder.RecordFirstResponse(rc.ID, resp.StatusCode, time.Since(rc.Start), upstreamPath, true)
-		}
-		resp.Body = newStreamMetricsReadCloser(
-			resp.Body,
-			reqCtx,
-			resp.StatusCode,
-			func(statusCode int) {
-				m.metrics.RecordComplete(rc.ID, statusCode, time.Since(rc.Start), upstreamPath)
-			},
-		)
+		m.recordFirstResponse(rc, resp.StatusCode, time.Since(rc.Start), upstreamPath, true)
+		resp.Body = newStreamObservabilityReadCloser(resp.Body, req.Context(), resp.StatusCode, func(statusCode int) {
+			m.recordCompletion(rc, statusCode, time.Since(rc.Start), upstreamPath)
+		})
 		return resp, err
 	}
 
-	m.metrics.RecordComplete(rc.ID, resp.StatusCode, time.Since(rc.Start), upstreamPath)
+	if resp == nil {
+		m.recordCompletion(rc, statusCodeFromRequestError(err), time.Since(rc.Start), upstreamPath)
+		return resp, err
+	}
+
+	m.recordCompletion(rc, resp.StatusCode, time.Since(rc.Start), upstreamPath)
 	return resp, err
 }
 
-func isTimeoutRequestError(err error) bool {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
+func (m ObservabilityMiddleware) recordFirstResponse(rc *middleware.RequestContext, statusCode int, duration time.Duration, upstreamPath string, isStream bool) {
+	if rc == nil || rc.ID == "" || m.sink == nil {
+		return
 	}
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
+	m.sink.RecordFirstResponse(rc.ID, statusCode, duration, upstreamPath, isStream)
+	m.addEvent("request.first_response", "first response received", map[string]any{
+		"request_id":    rc.ID,
+		"status_code":   statusCode,
+		"upstream_path": upstreamPath,
+		"is_stream":     isStream,
+		"delay_ms":      duration.Milliseconds(),
+	})
 }
 
-func statusCodeFromRequestError(err error) int {
-	if errors.Is(err, context.Canceled) {
-		return monitor.StatusClientCanceled
+func (m ObservabilityMiddleware) recordCompletion(rc *middleware.RequestContext, statusCode int, duration time.Duration, upstreamPath string) {
+	if rc == nil || rc.ID == "" || m.sink == nil {
+		return
 	}
-	if isTimeoutRequestError(err) {
-		return http.StatusGatewayTimeout
+	m.sink.RecordComplete(rc.ID, statusCode, duration, upstreamPath)
+	m.addEvent("request.complete", "request finished", map[string]any{
+		"request_id":    rc.ID,
+		"status_code":   statusCode,
+		"upstream_path": upstreamPath,
+		"duration_ms":   duration.Milliseconds(),
+	})
+}
+
+func (m ObservabilityMiddleware) addEvent(eventType, message string, payload map[string]any) {
+	if m.sink == nil {
+		return
 	}
-	return http.StatusBadGateway
+	m.sink.AddEvent(core.Event{
+		Timestamp: time.Now(),
+		Type:      eventType,
+		Message:   message,
+		Payload:   payload,
+	})
+}
+
+func captureHeaders(req *http.Request) map[string]string {
+	if req == nil {
+		return nil
+	}
+	headers := make(map[string]string)
+	for k, v := range req.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+	return headers
 }
 
 func responseUpstreamPath(resp *http.Response, rc *middleware.RequestContext) string {
@@ -116,6 +150,9 @@ func responseUpstreamPath(resp *http.Response, rc *middleware.RequestContext) st
 }
 
 func fallbackUpstreamPath(req *http.Request, rc *middleware.RequestContext) string {
+	if rc != nil && rc.TargetUpstreamPath != "" {
+		return rc.TargetUpstreamPath
+	}
 	if req != nil && req.URL != nil && req.URL.Path != "" {
 		return req.URL.Path
 	}
@@ -135,14 +172,7 @@ func fallbackLocalPath(rc *middleware.RequestContext) string {
 	return rc.LocalPath
 }
 
-func isEventStreamResponse(resp *http.Response) bool {
-	if resp == nil {
-		return false
-	}
-	return isEventStreamResponseContentType(resp.Header.Get("Content-Type"))
-}
-
-type streamMetricsReadCloser struct {
+type streamObservabilityReadCloser struct {
 	body               io.ReadCloser
 	requestCtx         context.Context
 	upstreamStatusCode int
@@ -155,23 +185,18 @@ type streamMetricsReadCloser struct {
 	streamErr error
 }
 
-var errMetricsStreamClosedBeforeEOF = errors.New("stream closed before EOF")
+var errStreamClosedBeforeEOF = errors.New("stream closed before EOF")
 
-func newStreamMetricsReadCloser(
-	body io.ReadCloser,
-	requestCtx context.Context,
-	upstreamStatusCode int,
-	recordComplete func(statusCode int),
-) io.ReadCloser {
-	return &streamMetricsReadCloser{
+func newStreamObservabilityReadCloser(body io.ReadCloser, ctx context.Context, upstreamStatusCode int, recordComplete func(int)) io.ReadCloser {
+	return &streamObservabilityReadCloser{
 		body:               body,
-		requestCtx:         requestCtx,
+		requestCtx:         ctx,
 		upstreamStatusCode: upstreamStatusCode,
 		recordComplete:     recordComplete,
 	}
 }
 
-func (r *streamMetricsReadCloser) Read(p []byte) (int, error) {
+func (r *streamObservabilityReadCloser) Read(p []byte) (int, error) {
 	n, err := r.body.Read(p)
 	if n > 0 {
 		r.mu.Lock()
@@ -206,7 +231,7 @@ func (r *streamMetricsReadCloser) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (r *streamMetricsReadCloser) Close() error {
+func (r *streamObservabilityReadCloser) Close() error {
 	err := r.body.Close()
 	if statusCode, shouldComplete := r.statusOnClose(err); shouldComplete {
 		r.completeOnce(statusCode)
@@ -214,7 +239,7 @@ func (r *streamMetricsReadCloser) Close() error {
 	return err
 }
 
-func (r *streamMetricsReadCloser) statusOnClose(closeErr error) (int, bool) {
+func (r *streamObservabilityReadCloser) statusOnClose(closeErr error) (int, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -237,14 +262,54 @@ func (r *streamMetricsReadCloser) statusOnClose(closeErr error) (int, bool) {
 		}
 	}
 
-	r.streamErr = errMetricsStreamClosedBeforeEOF
-	return monitor.StatusClientCanceled, true
+	r.streamErr = errStreamClosedBeforeEOF
+	return 499, true
 }
 
-func (r *streamMetricsReadCloser) completeOnce(statusCode int) {
+func (r *streamObservabilityReadCloser) completeOnce(statusCode int) {
 	r.once.Do(func() {
 		if r.recordComplete != nil {
 			r.recordComplete(statusCode)
 		}
 	})
+}
+
+func selectMappedModel(info middleware.RequestInfo) string {
+	if info.MappedModel != "" {
+		return info.MappedModel
+	}
+	return info.Model
+}
+
+func statusCodeFromRequestError(err error) int {
+	if errors.Is(err, context.Canceled) {
+		return 499
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return http.StatusGatewayTimeout
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return http.StatusGatewayTimeout
+	}
+	return http.StatusBadGateway
+}
+
+func isEventStreamResponse(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	return isEventStreamResponseContentType(resp.Header.Get("Content-Type"))
+}
+
+func isEventStreamResponseContentType(contentType string) bool {
+	return strings.HasPrefix(strings.ToLower(contentType), "text/event-stream")
+}
+
+func isTimeoutRequestError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }

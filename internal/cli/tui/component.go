@@ -4,6 +4,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core"
+	"copilot-proxy/internal/models"
 	"copilot-proxy/internal/monitor"
 )
 
@@ -26,13 +28,14 @@ type ViewComponent interface {
 }
 
 type SharedState struct {
-	Snapshot    monitor.Snapshot
-	Models      []monitor.ModelInfo
-	UserInfo    *monitor.UserInfo
-	AuthConfig  *config.AuthConfig
-	LogsBlinkOn bool
-	Width       int
-	Height      int
-	StatusMsg   string
-	StatusView  ViewState
+	Snapshot      core.Snapshot
+	Models        []models.ModelInfo
+	UserInfo      *monitor.UserInfo
+	ActiveAccount string
+	AuthConfig    *config.AuthConfig
+	LogsBlinkOn   bool
+	Width         int
+	Height        int
+	StatusMsg     string
+	StatusView    ViewState
 }

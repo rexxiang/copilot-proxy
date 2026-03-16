@@ -7,19 +7,17 @@ import (
 	"strings"
 	"time"
 
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/core"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
 type LogsView struct {
-	width        int
-	height       int
-	state        *SharedState
-	offset       int
-	debugLogger  *monitor.DebugLogger
-	debugEnabled bool
+	width  int
+	height int
+	state  *SharedState
+	offset int
 }
 
 const (
@@ -30,14 +28,14 @@ const (
 	logsStatusErrorMin       = 400
 	logsDurationWidth        = 8
 	logsDefaultVisible       = 10
-	logsFooterOffset         = 8
+	logsFooterOffset         = 7
 	logsScrollHint           = "\u2191\u2193 PgUp/PgDn Home/End g/G"
 )
 
 var logsPlainStyle = lipgloss.NewStyle()
 
 type logsRow struct {
-	record monitor.RequestRecord
+	record core.RequestRecord
 	active bool
 }
 
@@ -159,10 +157,6 @@ func (v *LogsView) View() string {
 	// Footer with scroll info.
 	sb.WriteString(DimStyle.Render(fmt.Sprintf("\n  Showing %d of %d  %s", showing, len(allRecords), logsScrollHint)))
 
-	// Debug status
-	sb.WriteString("\n")
-	sb.WriteString(v.renderDebugStatusLine())
-
 	// Status message
 	if v.state != nil && v.state.StatusView == ViewLogs && v.state.StatusMsg != "" {
 		sb.WriteString("\n" + DimStyle.Render("  "+v.state.StatusMsg))
@@ -172,7 +166,7 @@ func (v *LogsView) View() string {
 }
 
 func stylePrimaryColumns(
-	record *monitor.RequestRecord,
+	record *core.RequestRecord,
 	premiumByModel map[string]bool,
 ) (timeStyle, modelStyle *lipgloss.Style) {
 	if shouldHighlightPrimaryColumns(record, premiumByModel) {
@@ -181,7 +175,7 @@ func stylePrimaryColumns(
 	return &DimStyle, &DimStyle
 }
 
-func shouldHighlightPrimaryColumns(record *monitor.RequestRecord, premiumByModel map[string]bool) bool {
+func shouldHighlightPrimaryColumns(record *core.RequestRecord, premiumByModel map[string]bool) bool {
 	if record.IsAgent {
 		return false
 	}
@@ -203,7 +197,7 @@ func renderStatus(statusCode int) (string, *lipgloss.Style) {
 	switch {
 	case statusCode == 0:
 		return fmt.Sprintf("%4s", "-"), &DimStyle
-	case statusCode == monitor.StatusClientCanceled:
+	case statusCode == core.StatusClientCanceled:
 		return fmt.Sprintf("%4d", statusCode), &DimStyle
 	case statusCode >= logsStatusErrorMin:
 		return fmt.Sprintf("%4d", statusCode), &ErrorStyle
@@ -212,7 +206,7 @@ func renderStatus(statusCode int) (string, *lipgloss.Style) {
 	}
 }
 
-func renderDuration(record *monitor.RequestRecord) (string, *lipgloss.Style) {
+func renderDuration(record *core.RequestRecord) (string, *lipgloss.Style) {
 	if record.IsStream {
 		if record.FirstResponseDuration > 0 {
 			return fmt.Sprintf("%*s", logsDurationWidth, FormatDuration(record.FirstResponseDuration)), &logsPlainStyle
@@ -231,7 +225,7 @@ func renderDuration(record *monitor.RequestRecord) (string, *lipgloss.Style) {
 	return fmt.Sprintf("%*s", logsDurationWidth, FormatDuration(record.Duration)), &logsPlainStyle
 }
 
-func renderStreamDuration(record *monitor.RequestRecord) (string, *lipgloss.Style) {
+func renderStreamDuration(record *core.RequestRecord) (string, *lipgloss.Style) {
 	if !record.IsStream {
 		return fmt.Sprintf("%*s", logsDurationWidth, "-"), &DimStyle
 	}
@@ -253,19 +247,6 @@ func renderStreamDuration(record *monitor.RequestRecord) (string, *lipgloss.Styl
 	return fmt.Sprintf("%*s", logsDurationWidth, FormatDuration(streamDuration)), &DimStyle
 }
 
-func (v *LogsView) renderDebugStatusLine() string {
-	if v.debugEnabled && v.debugLogger != nil {
-		logFile := v.debugLogger.FilePath()
-		if logFile == "" {
-			return "  Debug: " + SuccessStyle.Render("[on]")
-		}
-		return fmt.Sprintf("  Debug: %s %s",
-			SuccessStyle.Render("[on]"),
-			DimStyle.Render(logFile))
-	}
-	return DimStyle.Render("  Debug: [off]")
-}
-
 func isKnownPremiumModel(model string, premiumByModel map[string]bool) bool {
 	if model == "" {
 		return false
@@ -275,7 +256,7 @@ func isKnownPremiumModel(model string, premiumByModel map[string]bool) bool {
 }
 
 func shouldStrikeRequestRow(statusCode int) bool {
-	return statusCode == monitor.StatusClientCanceled || statusCode == http.StatusGatewayTimeout
+	return statusCode == core.StatusClientCanceled || statusCode == http.StatusGatewayTimeout
 }
 
 func renderCell(text string, baseStyle *lipgloss.Style, strike bool) string {
@@ -325,14 +306,6 @@ func (v *LogsView) SetState(state *SharedState) {
 	v.state = state
 }
 
-func (v *LogsView) SetDebugLogger(logger *monitor.DebugLogger) {
-	v.debugLogger = logger
-}
-
-func (v *LogsView) SetDebugEnabled(enabled bool) {
-	v.debugEnabled = enabled
-}
-
 func (v *LogsView) HandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 	if msg.Type == tea.KeyPgUp {
 		return v.handlePageUp()
@@ -360,8 +333,6 @@ func (v *LogsView) HandleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return v.handleEnd()
 	case "c":
 		return v.handleClear()
-	case "d":
-		return v.handleDebugToggle()
 	default:
 		return false, nil
 	}
@@ -458,30 +429,6 @@ func (v *LogsView) handleClear() (bool, tea.Cmd) {
 	return true, nil
 }
 
-func (v *LogsView) handleDebugToggle() (bool, tea.Cmd) {
-	if v.debugLogger == nil {
-		return true, nil
-	}
-	if v.debugLogger.DebugEnabled() {
-		if err := v.debugLogger.DisableDebug(); err != nil {
-			v.setLogsStatus(fmt.Sprintf("Error disabling debug: %v", err))
-		} else {
-			v.debugEnabled = false
-			v.clearLogsStatus()
-			v.SetDebugEnabled(false)
-		}
-		return true, nil
-	}
-	if err := v.debugLogger.EnableDebug(""); err != nil {
-		v.setLogsStatus(fmt.Sprintf("Error enabling debug: %v", err))
-		return true, nil
-	}
-	v.debugEnabled = true
-	v.clearLogsStatus()
-	v.SetDebugEnabled(true)
-	return true, nil
-}
-
 func (v *LogsView) setLogsStatus(message string) {
 	if v.state == nil {
 		return
@@ -495,6 +442,6 @@ func (v *LogsView) clearLogsStatus() {
 }
 
 func (v *LogsView) VisibleLines() int {
-	// Account for header, table header, separator, footer, debug status.
+	// Account for header, table header, separator, and footer.
 	return ClampVisibleLines(v.height, logsFooterOffset, logsDefaultVisible)
 }

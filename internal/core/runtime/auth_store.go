@@ -1,4 +1,4 @@
-package cli
+package runtime
 
 import (
 	"fmt"
@@ -12,7 +12,7 @@ type authStore struct {
 	auth config.AuthConfig
 }
 
-func newAuthStore(auth config.AuthConfig) *authStore {
+func NewAuthStore(auth config.AuthConfig) *authStore {
 	return &authStore{
 		mu:   sync.Mutex{},
 		auth: cloneAuth(auth),

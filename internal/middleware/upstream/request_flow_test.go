@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core"
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/monitor"
 )
 
 type upstreamStubAuthStore struct {
@@ -338,13 +338,13 @@ func TestParseRequestBodyOptionsProviderUsesLatestModePerRequest(t *testing.T) {
 	}
 }
 
-func TestCaptureDebugStoresHeaders(t *testing.T) {
+func TestObservabilityMiddlewareStoresHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req.Header.Set("X-Test", "one")
 	req.Header.Add("X-Test", "two")
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
 	ctx := &middleware.Context{Request: req}
-	mw := NewCaptureDebug()
+	mw := NewObservabilityMiddleware(nil)
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
 		rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
@@ -519,7 +519,7 @@ type metricsCapture struct {
 	lastCompleteDelay time.Duration
 }
 
-func (m *metricsCapture) RecordStart(_ *monitor.RequestRecord) {
+func (m *metricsCapture) RecordStart(_ *core.RequestRecord) {
 	m.started++
 }
 
@@ -540,11 +540,17 @@ func (m *metricsCapture) RecordComplete(requestID string, statusCode int, durati
 	m.lastCompleteDelay = duration
 }
 
-func (m *metricsCapture) Record(_ *monitor.RequestRecord) {}
+func (m *metricsCapture) Record(_ *core.RequestRecord) {}
+
+func (m *metricsCapture) AddEvent(event core.Event) {}
+
+func (m *metricsCapture) Snapshot() core.Snapshot {
+	return core.Snapshot{}
+}
 
 func TestMetricsRecordsContextCanceledAs499(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
@@ -577,7 +583,7 @@ func TestMetricsRecordsContextCanceledAs499(t *testing.T) {
 	if metrics.completed != 1 {
 		t.Fatalf("expected one RecordComplete call, got %d", metrics.completed)
 	}
-	if metrics.lastCompleteCode != monitor.StatusClientCanceled {
+	if metrics.lastCompleteCode != core.StatusClientCanceled {
 		t.Fatalf("expected canceled status 499, got %d", metrics.lastCompleteCode)
 	}
 	if metrics.lastCompletePath != localResponsesPath {
@@ -590,7 +596,7 @@ func TestMetricsRecordsContextCanceledAs499(t *testing.T) {
 
 func TestMetricsRecordsDeadlineExceededAs504(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
@@ -627,7 +633,7 @@ func TestMetricsRecordsDeadlineExceededAs504(t *testing.T) {
 
 func TestMetricsRecordsTimeoutNetErrorAs504(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
@@ -665,7 +671,7 @@ func TestMetricsRecordsTimeoutNetErrorAs504(t *testing.T) {
 
 func TestMetricsDefersSSECompletionUntilEOF(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
@@ -734,7 +740,7 @@ func TestMetricsDefersSSECompletionUntilEOF(t *testing.T) {
 
 func TestMetricsRecordsSSEContextCanceledAs499(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
@@ -785,14 +791,14 @@ func TestMetricsRecordsSSEContextCanceledAs499(t *testing.T) {
 	if metrics.completed != 1 {
 		t.Fatalf("expected one completion after cancel, got %d", metrics.completed)
 	}
-	if metrics.lastCompleteCode != monitor.StatusClientCanceled {
+	if metrics.lastCompleteCode != core.StatusClientCanceled {
 		t.Fatalf("expected status 499 after cancel, got %d", metrics.lastCompleteCode)
 	}
 }
 
 func TestMetricsRecordsSSEDeadlineExceededAs504(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
@@ -846,7 +852,7 @@ func TestMetricsRecordsSSEDeadlineExceededAs504(t *testing.T) {
 
 func TestMetricsRecordsSSECloseBeforeEOFAs499(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
@@ -885,14 +891,14 @@ func TestMetricsRecordsSSECloseBeforeEOFAs499(t *testing.T) {
 	if metrics.completed != 1 {
 		t.Fatalf("expected one completion after close-before-eof, got %d", metrics.completed)
 	}
-	if metrics.lastCompleteCode != monitor.StatusClientCanceled {
+	if metrics.lastCompleteCode != core.StatusClientCanceled {
 		t.Fatalf("expected status 499 for close-before-eof, got %d", metrics.lastCompleteCode)
 	}
 }
 
 func TestMetricsRecordsSSECloseAfterDoneAs200(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{

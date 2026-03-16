@@ -43,9 +43,11 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ### Build from source
 
-```bash
-mise x -- go build -o ./bin/copilot-proxy ./cmd/copilot-proxy
-```
+- CLI only (no CGO): `mise x -- go build -o ./bin/copilot-proxy ./cmd/copilot-proxy`
+- CLI and C ABI: `mise x -- build` (go build followed by `CGO_ENABLED=1 go build -buildmode=c-shared -o ./bin/copilot-proxy-c.so ./cmd/copilot-proxy-c`)
+- C ABI only: `mise x -- build-c-shared`
+
+The c-shared build emits `./bin/copilot-proxy-c.so` (or the platform-appropriate shared library) plus the generated header `./bin/copilot-proxy-c.h`.
 
 ## Usage
 
@@ -114,3 +116,40 @@ Map-style settings (for example `required_headers` and `reasoning_policies`) are
 - `copilot-proxy auth login` - authenticate via GitHub device flow
 - `copilot-proxy auth ls` - list and manage accounts
 - `copilot-proxy auth rm <user>` - remove an account
+
+## C ABI
+
+`cmd/copilot-proxy-c` boots the same `internal/core.Kernel` that powers the CLI/TUI runtime (including auth, config, models, and observability) and exposes it through a compact C ABI that exchanges `core.RequestInvocation`/`core.ResponsePayload` pairs over JSON. Building the shared workflow produces `./bin/copilot-proxy`, `./bin/copilot-proxy-c.so`, and the generated header `./bin/copilot-proxy-c.h`. Use `mise x -- build` for the combined CLI + shared library or `mise x -- build-c-shared` for the library alone.
+
+### Entry points
+
+```
+void *CopilotProxyCore_Create(void);
+void CopilotProxyCore_Destroy(void *core);
+int CopilotProxyCore_Start(void *core);
+int CopilotProxyCore_Stop(void *core);
+int CopilotProxyCore_Status(void *core);
+int CopilotProxyCore_Invoke(void *core, const char *request_json);
+void CopilotProxyCore_SetCallback(void *core, CopilotProxyCallback cb, void *user_data);
+```
+
+`CopilotProxyCore_Status` returns either `COPILOT_PROXY_CORE_STATUS_STOPPED` or `COPILOT_PROXY_CORE_STATUS_RUNNING`. `CopilotProxyCallback` has the signature:
+
+```
+typedef void (*CopilotProxyCallback)(const char *payload_json, const char *error_message, uint64_t invocation_id, void *user_data);
+```
+
+`request_json` / `payload_json` are the JSON encodings of `core.RequestInvocation` and `core.ResponsePayload`, respectively. `core.RequestInvocation` contains `Method`, `Path`, optional `Header` map, and `Body` bytes (JSON/Go encodes `[]byte` as base64). `core.ResponsePayload` mirrors the HTTP response (`StatusCode`, `Headers`, `Body`).
+
+### Lifecycle and threading
+
+`CopilotProxyCore_Create` sets up the runtime dependencies (settings, auth, model catalog, observability) so the C ABI shares the same kernel instance that the CLI and TUI use. `CopilotProxyCore_Start` launches that kernel on a dedicated goroutine, waits until the runtime reports `StateRunning`, and then returns. `CopilotProxyCore_Stop` asks the kernel to shut down, waits for the goroutine to exit, and propagates any fatal errors; revisit `CopilotProxyCore_Status` to confirm whether the stop succeeded. Because CLI/TUI/C all build the same core, they observe the same configuration, telemetry, and model availability.
+
+### Request queue and callback
+
+`CopilotProxyCore_Invoke` enqueues a JSON request into a single-threaded serialization loop. A dedicated goroutine serializes the JSON, invokes `kernel.Invoke`, re-encodes the response, and finally runs the callback on that same goroutine so users can rely on a consistent thread context. `payload_json` carries the `core.ResponsePayload`, while `error_message` carries Go error text that occurs during decoding, validation, or kernel rejection. `Invoke` returns non-zero when the queue is full, the kernel is not running, or the core has been destroyed; the callback still fires with whatever diagnostics are available. Wrap every `Invoke` between `Start`/`Stop`, register your callback with `CopilotProxyCore_SetCallback`, and destroy the handle once you are finished.
+
+## Testing
+
+- Run the general Go test suite (CGO disabled by default) with `mise x -- test`.
+- Verify the C ABI layer with `mise x -- test-cgo` (the same as `CGO_ENABLED=1 go test ./cmd/copilot-proxy-c`), ensuring the exported symbols link to the core kernel.

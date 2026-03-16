@@ -1,4 +1,4 @@
-package cli
+package runtime
 
 import (
 	"testing"
@@ -45,11 +45,11 @@ func TestCompileRuntimeSettingsSnapshot_RejectsInvalidRateLimit(t *testing.T) {
 	}
 }
 
-func TestRuntimeSettingsStore_PublishUpdatesAndClones(t *testing.T) {
+func TestSettingsStore_PublishUpdatesAndClones(t *testing.T) {
 	initial := config.DefaultSettings()
-	store, err := newRuntimeSettingsStore(initial)
+	store, err := NewSettingsStore(initial)
 	if err != nil {
-		t.Fatalf("newRuntimeSettingsStore error: %v", err)
+		t.Fatalf("NewSettingsStore error: %v", err)
 	}
 
 	next := initial

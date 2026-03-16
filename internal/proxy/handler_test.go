@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core/observability"
 	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/middleware/upstream"
 	"copilot-proxy/internal/models"
-	"copilot-proxy/internal/monitor"
 )
 
 type stubToken struct {
@@ -113,7 +113,7 @@ func buildTestUpstreamMiddlewares(
 	tokens middleware.TokenProvider,
 	headers map[string]string,
 	catalog models.Catalog,
-	metrics middleware.MetricsRecorder,
+	metrics middleware.ObservabilitySink,
 ) []middleware.Middleware {
 	return []middleware.Middleware{
 		upstream.NewContextInit(),
@@ -125,7 +125,6 @@ func buildTestUpstreamMiddlewares(
 				MessagesAgentDetectionRequestMode: true,
 			}
 		}),
-		upstream.NewCaptureDebug(),
 		upstream.NewRequestTimeout(0),
 		upstream.NewMessagesTranslateWithRuntimeOptions(catalog, config.PathMapping, func() upstream.MessagesTranslateRuntimeOptions {
 			return upstream.MessagesTranslateRuntimeOptions{}
@@ -133,8 +132,7 @@ func buildTestUpstreamMiddlewares(
 		upstream.NewTokenInjection(),
 		upstream.NewStaticHeaders(headers),
 		upstream.NewDynamicHeaders(),
-		upstream.NewMetrics(metrics),
-		upstream.NewDebugLog(nil),
+		upstream.NewObservabilityMiddleware(metrics),
 	}
 }
 
@@ -943,7 +941,7 @@ func newStubMetrics() *stubMetrics {
 	}
 }
 
-func (s *stubMetrics) RecordStart(r *monitor.RequestRecord) {
+func (s *stubMetrics) RecordStart(r *observability.RequestRecord) {
 	s.activeRequests[r.RequestID] = metricsRecord{
 		method:       r.Method,
 		path:         r.Path,
@@ -973,7 +971,7 @@ func (s *stubMetrics) RecordComplete(
 	}
 }
 
-func (s *stubMetrics) Record(r *monitor.RequestRecord) {
+func (s *stubMetrics) Record(r *observability.RequestRecord) {
 	s.records = append(s.records, metricsRecord{
 		method:       r.Method,
 		path:         r.Path,
@@ -986,6 +984,21 @@ func (s *stubMetrics) Record(r *monitor.RequestRecord) {
 		isVision:     r.IsVision,
 		isAgent:      r.IsAgent,
 	})
+}
+
+func (s *stubMetrics) RecordFirstResponse(requestID string, statusCode int, duration time.Duration, upstreamPath string, isStream bool) {
+	if record, ok := s.activeRequests[requestID]; ok {
+		record.statusCode = statusCode
+		record.duration = duration
+		record.upstreamPath = upstreamPath
+		s.activeRequests[requestID] = record
+	}
+}
+
+func (s *stubMetrics) AddEvent(observability.Event) {}
+
+func (s *stubMetrics) Snapshot() observability.Snapshot {
+	return observability.Snapshot{}
 }
 
 func TestProxyHandlerRecordsMetrics(t *testing.T) {
@@ -1269,65 +1282,5 @@ func TestProxyHandlerMetricsWithVisionAndAgent(t *testing.T) {
 	}
 	if !rec.isAgent {
 		t.Error("expected isAgent to be true")
-	}
-}
-
-func TestBuildLogEntrySkipsEventStreamBody(t *testing.T) {
-	body := "data: hello\n\n"
-
-	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", http.NoBody)
-	rc := &middleware.RequestContext{Start: time.Now(), Headers: map[string]string{}}
-	ctx := middleware.WithRequestContext(req.Context(), rc)
-	req = req.WithContext(ctx)
-
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Header:     make(http.Header),
-		Request:    req,
-	}
-	resp.Header.Set("Content-Type", "text/event-stream")
-
-	entry := upstream.BuildLogEntryFromContext(resp, ctx)
-	if entry.ResponseBody != "" {
-		t.Fatalf("expected empty response body for event-stream, got %q", entry.ResponseBody)
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-	if string(data) != body {
-		t.Fatalf("response body not preserved: got %q, want %q", string(data), body)
-	}
-}
-
-func TestBuildLogEntryPreservesNonEventStreamBody(t *testing.T) {
-	body := strings.Repeat("a", 5000)
-
-	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", http.NoBody)
-	rc := &middleware.RequestContext{Start: time.Now(), Headers: map[string]string{}}
-	ctx := middleware.WithRequestContext(req.Context(), rc)
-	req = req.WithContext(ctx)
-
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Header:     make(http.Header),
-		Request:    req,
-	}
-	resp.Header.Set("Content-Type", "application/json")
-
-	entry := upstream.BuildLogEntryFromContext(resp, ctx)
-	if entry.ResponseBody == "" {
-		t.Fatalf("expected response body capture")
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-	if string(data) != body {
-		t.Fatalf("response body not preserved: got %d bytes, want %d", len(data), len(body))
 	}
 }

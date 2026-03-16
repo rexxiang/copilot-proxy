@@ -4,23 +4,20 @@ import (
 	"strings"
 	"testing"
 
-	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core/account"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestAccountModalOpenDefaultsToActiveAccount(t *testing.T) {
-	auth := &config.AuthConfig{
-		Default: "u2",
-		Accounts: []config.Account{
-			{User: "u1"},
-			{User: "u2"},
-			{User: "u3"},
-		},
+	accounts := []account.AccountDTO{
+		{User: "u1"},
+		{User: "u2", IsDefault: true},
+		{User: "u3"},
 	}
 
 	modal := NewAccountModal()
-	if err := modal.Open(auth); err != nil {
+	if err := modal.Open(accounts, "u2"); err != nil {
 		t.Fatalf("open modal: %v", err)
 	}
 	if !modal.IsOpen() {
@@ -35,16 +32,11 @@ func TestAccountModalOpenDefaultsToActiveAccount(t *testing.T) {
 }
 
 func TestAccountModalHandleKeyNavigationAndActions(t *testing.T) {
-	auth := &config.AuthConfig{
-		Default: "u1",
-		Accounts: []config.Account{
-			{User: "u1"},
-			{User: "u2"},
-		},
-	}
-
 	modal := NewAccountModal()
-	if err := modal.Open(auth); err != nil {
+	if err := modal.Open([]account.AccountDTO{
+		{User: "u1", IsDefault: true},
+		{User: "u2"},
+	}, "u1"); err != nil {
 		t.Fatalf("open modal: %v", err)
 	}
 
@@ -79,7 +71,7 @@ func TestAccountModalHandleKeyNavigationAndActions(t *testing.T) {
 
 func TestAccountModalOpenWithNoAccountsStillOpensAddRow(t *testing.T) {
 	modal := NewAccountModal()
-	if err := modal.Open(&config.AuthConfig{}); err != nil {
+	if err := modal.Open(nil, ""); err != nil {
 		t.Fatalf("open modal with empty auth: %v", err)
 	}
 	if !modal.IsOpen() {
@@ -100,7 +92,7 @@ func TestAccountModalOpenWithNoAccountsStillOpensAddRow(t *testing.T) {
 
 func TestAccountModalAuthorizingEscReturnsCancelAdd(t *testing.T) {
 	modal := NewAccountModal()
-	if err := modal.Open(&config.AuthConfig{}); err != nil {
+	if err := modal.Open(nil, ""); err != nil {
 		t.Fatalf("open modal: %v", err)
 	}
 	modal.BeginAddAuth("https://github.com/login/device", "ABCD-EFGH")
@@ -116,16 +108,11 @@ func TestAccountModalAuthorizingEscReturnsCancelAdd(t *testing.T) {
 }
 
 func TestAccountModalViewShowsActiveMarkerAndError(t *testing.T) {
-	auth := &config.AuthConfig{
-		Default: "active-user",
-		Accounts: []config.Account{
-			{User: "active-user"},
-			{User: "other-user"},
-		},
-	}
-
 	modal := NewAccountModal()
-	if err := modal.Open(auth); err != nil {
+	if err := modal.Open([]account.AccountDTO{
+		{User: "active-user", IsDefault: true},
+		{User: "other-user"},
+	}, "active-user"); err != nil {
 		t.Fatalf("open modal: %v", err)
 	}
 	modal.SetError("activate failed")

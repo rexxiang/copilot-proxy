@@ -648,19 +648,14 @@ func TestLogsView_SpaceDoesNotPageDown(t *testing.T) {
 	}
 }
 
-func TestLogsView_EmptyStateStillShowsDebugStatus(t *testing.T) {
+func TestLogsView_DebugKeyIgnored(t *testing.T) {
 	view := NewLogsView()
 	view.SetSize(120, 20)
-	view.SetState(&SharedState{
-		Snapshot: monitor.Snapshot{},
-	})
+	view.SetState(&SharedState{})
 
-	rendered := view.View()
-	if !strings.Contains(rendered, "No requests logged yet") {
-		t.Fatalf("expected empty-state message, got %q", rendered)
-	}
-	if !strings.Contains(rendered, "Debug: [off]") {
-		t.Fatalf("expected debug status line in empty state, got %q", rendered)
+	handled, _ := view.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if handled {
+		t.Fatalf("expected debug key to be ignored")
 	}
 }
 
@@ -724,55 +719,6 @@ func TestLogsView_RenderDurationAndStreamForSSE(t *testing.T) {
 	nonStreamText, _ := renderStreamDuration(nonStreamRecord)
 	if strings.TrimSpace(nonStreamText) != "-" {
 		t.Fatalf("expected non-stream record stream column to be '-', got %q", nonStreamText)
-	}
-}
-
-func TestLogsView_DebugPathRenderedInSingleLine(t *testing.T) {
-	debugLogger := monitor.NewDebugLogger()
-	tmpDir := t.TempDir()
-	if err := debugLogger.Init(tmpDir); err != nil {
-		t.Fatalf("init debug logger: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = debugLogger.Close()
-	})
-
-	view := NewLogsView()
-	view.SetSize(120, 20)
-	state := &SharedState{
-		Snapshot:   monitor.Snapshot{},
-		StatusView: ViewLogs,
-	}
-	view.SetState(state)
-	view.SetDebugLogger(debugLogger)
-
-	handled, _ := view.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	if !handled {
-		t.Fatalf("expected debug toggle key to be handled")
-	}
-
-	debugPath := debugLogger.DebugFilePath()
-	if debugPath == "" {
-		t.Fatalf("expected debug path after enabling debug")
-	}
-
-	rendered := view.View()
-	lines := strings.Split(rendered, "\n")
-	pathLineCount := 0
-	for _, line := range lines {
-		if strings.Contains(line, debugPath) {
-			pathLineCount++
-			if !strings.Contains(line, "Debug:") {
-				t.Fatalf("expected debug path to be rendered on debug line, line=%q", line)
-			}
-		}
-	}
-
-	if pathLineCount != 1 {
-		t.Fatalf("expected debug path to appear once in a single line, got %d", pathLineCount)
-	}
-	if state.StatusMsg != "" {
-		t.Fatalf("expected no extra status line for debug path, got %q", state.StatusMsg)
 	}
 }
 
