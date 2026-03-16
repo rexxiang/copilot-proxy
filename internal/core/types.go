@@ -4,11 +4,14 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"copilot-proxy/internal/models"
 )
 
 // Core defines the foundational contracts shared between the kernel, observability,
 // account, config, and monitoring subsystems. These DTOs avoid importing
-// anything outside the standard library so they can be referenced transitively
+// anything outside the standard library (ModelInfo aliases into internal models
+// to stay in sync with persisted metadata) so they can be referenced transitively
 // without creating dependency cycles.
 const (
 	// StatusClientCanceled matches the HTTP status code sent when a client
@@ -117,6 +120,9 @@ type ModelStats struct {
 	AgentReqs   int64
 }
 
+// ModelInfo mirrors the persisted model metadata returned to the UI adapters.
+type ModelInfo = models.ModelInfo
+
 // Snapshot is a point-in-time view of the metrics collector.
 type Snapshot struct {
 	TotalRequests  int64
@@ -132,6 +138,22 @@ type Event struct {
 	Type      string
 	Message   string
 	Payload   map[string]any
+}
+
+// QuotaSnapshot represents quota usage state for GitHub Copilot subscriptions.
+type QuotaSnapshot struct {
+	Entitlement      int64   // Total quota
+	Remaining        int64   // Remaining quota
+	PercentRemaining float64 // Remaining percentage
+	Unlimited        bool    // Whether quota is unlimited
+}
+
+// UserInfo contains Copilot subscription information useful for the UI layers.
+type UserInfo struct {
+	Plan         string        // copilot_plan: "business", "individual"
+	Organization string        // Organization name
+	Quota        QuotaSnapshot // Premium interactions quota
+	ResetDate    time.Time     // Quota reset date
 }
 
 // MaskHeaders redacts well-known sensitive headers.

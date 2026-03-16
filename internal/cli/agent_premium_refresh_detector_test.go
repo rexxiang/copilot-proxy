@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/core"
 )
 
 func TestDetector_NewEligibleDetectedOnce(t *testing.T) {
@@ -12,8 +12,8 @@ func TestDetector_NewEligibleDetectedOnce(t *testing.T) {
 	premiumSet := map[string]struct{}{"gpt-4o": {}}
 	now := time.Now()
 
-	snapshot := monitor.Snapshot{
-		RecentRequests: []monitor.RequestRecord{
+	snapshot := core.Snapshot{
+		RecentRequests: []core.RequestRecord{
 			{
 				RequestID:  "req-1",
 				Timestamp:  now,
@@ -37,8 +37,8 @@ func TestDetector_RepeatedTickNoDuplicate(t *testing.T) {
 	premiumSet := map[string]struct{}{"gpt-4o": {}}
 	now := time.Now()
 
-	first := monitor.Snapshot{
-		RecentRequests: []monitor.RequestRecord{
+	first := core.Snapshot{
+		RecentRequests: []core.RequestRecord{
 			{
 				RequestID:  "req-1",
 				Timestamp:  now,
@@ -48,8 +48,8 @@ func TestDetector_RepeatedTickNoDuplicate(t *testing.T) {
 			},
 		},
 	}
-	second := monitor.Snapshot{
-		RecentRequests: []monitor.RequestRecord{
+	second := core.Snapshot{
+		RecentRequests: []core.RequestRecord{
 			{
 				RequestID:  "req-1",
 				Timestamp:  now,
@@ -83,8 +83,8 @@ func TestDetector_NonPremiumOrNonAgentOrErrorIgnored(t *testing.T) {
 	premiumSet := map[string]struct{}{"gpt-4o": {}}
 	now := time.Now()
 
-	snapshot := monitor.Snapshot{
-		RecentRequests: []monitor.RequestRecord{
+	snapshot := core.Snapshot{
+		RecentRequests: []core.RequestRecord{
 			{
 				RequestID:  "user-premium",
 				Timestamp:  now,

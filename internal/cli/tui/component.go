@@ -6,7 +6,6 @@ import (
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
 	"copilot-proxy/internal/models"
-	"copilot-proxy/internal/monitor"
 )
 
 // ViewState represents the current active view.
@@ -30,7 +29,7 @@ type ViewComponent interface {
 type SharedState struct {
 	Snapshot      core.Snapshot
 	Models        []models.ModelInfo
-	UserInfo      *monitor.UserInfo
+	UserInfo      *core.UserInfo
 	ActiveAccount string
 	AuthConfig    *config.AuthConfig
 	LogsBlinkOn   bool

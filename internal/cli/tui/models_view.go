@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/models"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,7 +16,7 @@ type ModelsView struct {
 	height int
 	state  *SharedState
 	offset int
-	models []monitor.ModelInfo
+	models []models.ModelInfo
 }
 
 const (
@@ -48,7 +48,7 @@ func (v *ModelsView) View() string {
 	}
 
 	// Sort models by ID
-	sortedModels := make([]monitor.ModelInfo, len(v.models))
+	sortedModels := make([]models.ModelInfo, len(v.models))
 	copy(sortedModels, v.models)
 	sort.Slice(sortedModels, func(i, j int) bool {
 		return sortedModels[i].ID < sortedModels[j].ID
@@ -134,7 +134,7 @@ func (v *ModelsView) SetState(state *SharedState) {
 	v.state = state
 }
 
-func (v *ModelsView) SetModels(models []monitor.ModelInfo) {
+func (v *ModelsView) SetModels(models []models.ModelInfo) {
 	v.models = models
 }
 

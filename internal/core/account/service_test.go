@@ -11,7 +11,7 @@ import (
 
 	"copilot-proxy/internal/auth"
 	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/core"
 )
 
 func TestAccountServiceLoginFlow(t *testing.T) {
@@ -184,8 +184,8 @@ func TestAccountServiceSwitchDefaultInvalidatesPremium(t *testing.T) {
 	}
 	svc := New(cfg, WithSaveAuthFunc(func(config.AuthConfig) error { return nil }))
 	svc.premium.mu.Lock()
-	svc.premium.cache[account.User] = PremiumInfo{Info: monitor.UserInfo{Plan: "A"}, Retrieved: time.Now()}
-	svc.premium.cache[other.User] = PremiumInfo{Info: monitor.UserInfo{Plan: "B"}, Retrieved: time.Now()}
+	svc.premium.cache[account.User] = PremiumInfo{Info: core.UserInfo{Plan: "A"}, Retrieved: time.Now()}
+	svc.premium.cache[other.User] = PremiumInfo{Info: core.UserInfo{Plan: "B"}, Retrieved: time.Now()}
 	svc.premium.mu.Unlock()
 
 	if err := svc.SwitchDefault(other.User); err != nil {

@@ -4,26 +4,26 @@ import (
 	"fmt"
 	"testing"
 
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/models"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestModelsView_HomeAndEndJumpToBoundaries(t *testing.T) {
-	models := make([]monitor.ModelInfo, 0, 20)
+	modelEntries := make([]models.ModelInfo, 0, 20)
 	for i := range 20 {
-		models = append(models, monitor.ModelInfo{ID: fmt.Sprintf("model-%02d", i)})
+		modelEntries = append(modelEntries, models.ModelInfo{ID: fmt.Sprintf("model-%02d", i)})
 	}
 
 	view := NewModelsView()
-	view.SetModels(models)
+	view.SetModels(modelEntries)
 	view.SetSize(120, 12)
 
 	handled, _ := view.HandleKey(tea.KeyMsg{Type: tea.KeyEnd})
 	if !handled {
 		t.Fatalf("expected End key to be handled")
 	}
-	maxOffset := len(models) - view.VisibleLines()
+	maxOffset := len(modelEntries) - view.VisibleLines()
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
@@ -41,13 +41,13 @@ func TestModelsView_HomeAndEndJumpToBoundaries(t *testing.T) {
 }
 
 func TestModelsView_SmallHeightClampsVisibleLinesAndPaging(t *testing.T) {
-	models := make([]monitor.ModelInfo, 0, 5)
+	modelEntries := make([]models.ModelInfo, 0, 5)
 	for i := range 5 {
-		models = append(models, monitor.ModelInfo{ID: fmt.Sprintf("model-%02d", i)})
+		modelEntries = append(modelEntries, models.ModelInfo{ID: fmt.Sprintf("model-%02d", i)})
 	}
 
 	view := NewModelsView()
-	view.SetModels(models)
+	view.SetModels(modelEntries)
 	view.SetSize(120, 3)
 
 	if got := view.VisibleLines(); got != 1 {
@@ -58,7 +58,7 @@ func TestModelsView_SmallHeightClampsVisibleLinesAndPaging(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected End key to be handled")
 	}
-	if view.offset != len(models)-1 {
-		t.Fatalf("expected offset %d after End with clamped page size, got %d", len(models)-1, view.offset)
+	if view.offset != len(modelEntries)-1 {
+		t.Fatalf("expected offset %d after End with clamped page size, got %d", len(modelEntries)-1, view.offset)
 	}
 }

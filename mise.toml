@@ -6,12 +6,14 @@ staticcheck = "latest"
 [env]
 CGO_ENABLED = "0"
 
+[vars]
+app = "copilot-proxy"
+
 [tasks]
-# Build the CLI plus the C shared library (`mise x -- build`).
-build = "go build -o ./bin/copilot-proxy ./cmd/copilot-proxy && CGO_ENABLED=1 go build -buildmode=c-shared -o ./bin/copilot-proxy-c.so ./cmd/copilot-proxy-c"
-# Build only the C shared library (`mise x -- build-c-shared`).
-"build-c-shared" = "CGO_ENABLED=1 go build -buildmode=c-shared -o ./bin/copilot-proxy-c.so ./cmd/copilot-proxy-c"
-test = "go test ./..."
-"test-cgo" = "CGO_ENABLED=1 go test ./cmd/copilot-proxy-c"
-go = "go"
-"go:run" = "go run ./..."
+"build:c-shared" = { run = "go build -buildmode=c-shared -o bin/{{vars.app}}-c.so ./cmd/{{vars.app}}-c", env = { CGO_ENABLED = "1" }}
+build = { run = "go build -o bin/{{vars.app}} ./cmd/{{vars.app}}", depends = ["build:c-shared"] }
+
+test = { run = "go test ./..." }
+"test:cgo" = { run = "go test ./cmd/{{vars.app}}-c", env = { CGO_ENABLED = "1" } }
+
+"go:run" = { run = "go run ./cmd/{{vars.app}}" }

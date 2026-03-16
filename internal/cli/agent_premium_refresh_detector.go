@@ -3,7 +3,8 @@ package cli
 import (
 	"fmt"
 
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/core"
+	"copilot-proxy/internal/models"
 )
 
 const statusHTTPErrorMin = 400
@@ -18,7 +19,7 @@ func newAgentPremiumRefreshDetector() agentPremiumRefreshDetector {
 	}
 }
 
-func (d *agentPremiumRefreshDetector) HasNewEligible(snapshot monitor.Snapshot, premiumSet map[string]struct{}) bool {
+func (d *agentPremiumRefreshDetector) HasNewEligible(snapshot core.Snapshot, premiumSet map[string]struct{}) bool {
 	if d == nil {
 		return false
 	}
@@ -44,7 +45,7 @@ func (d *agentPremiumRefreshDetector) HasNewEligible(snapshot monitor.Snapshot, 
 	return hasNew
 }
 
-func premiumModelSet(items []monitor.ModelInfo) map[string]struct{} {
+func premiumModelSet(items []models.ModelInfo) map[string]struct{} {
 	result := make(map[string]struct{})
 	for i := range items {
 		if !items[i].IsPremium || items[i].ID == "" {
@@ -55,7 +56,7 @@ func premiumModelSet(items []monitor.ModelInfo) map[string]struct{} {
 	return result
 }
 
-func eligibleAgentPremiumSignature(record monitor.RequestRecord, premiumSet map[string]struct{}) (string, bool) {
+func eligibleAgentPremiumSignature(record core.RequestRecord, premiumSet map[string]struct{}) (string, bool) {
 	if !record.IsAgent {
 		return "", false
 	}

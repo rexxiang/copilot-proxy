@@ -9,7 +9,7 @@ import (
 
 	"copilot-proxy/internal/auth"
 	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/core"
 )
 
 var (
@@ -194,10 +194,10 @@ func (s *Service) Remove(user string) error {
 }
 
 // PremiumInfo fetches the cached user info or refreshes when forced.
-func (s *Service) PremiumInfo(ctx context.Context, force bool) (monitor.UserInfo, error) {
+func (s *Service) PremiumInfo(ctx context.Context, force bool) (core.UserInfo, error) {
 	account, _, err := s.Current()
 	if err != nil {
-		return monitor.UserInfo{}, err
+		return core.UserInfo{}, err
 	}
 	return s.premium.Get(ctx, account, force)
 }

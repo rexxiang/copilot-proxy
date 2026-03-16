@@ -10,6 +10,7 @@ import (
 
 	"copilot-proxy/internal/cli/tui"
 	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core"
 	"copilot-proxy/internal/core/account"
 	coreconfig "copilot-proxy/internal/core/config"
 	"copilot-proxy/internal/core/model"
@@ -17,7 +18,6 @@ import (
 	"copilot-proxy/internal/core/stats"
 	"copilot-proxy/internal/debounce"
 	"copilot-proxy/internal/models"
-	"copilot-proxy/internal/monitor"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -31,13 +31,13 @@ var errSettingsApplyResultNil = errors.New("settings apply result is nil")
 
 // MonitorDeps contains dependencies for creating a MonitorModel.
 type MonitorDeps struct {
-	Collector       monitor.Collector
+	Collector       statsCollector
 	StatsService    statsService
 	ModelService    modelService
 	AccountService  accountService
 	ConfigService   *coreconfig.Service
-	Models          []monitor.ModelInfo
-	UserInfo        *monitor.UserInfo
+	Models          []models.ModelInfo
+	UserInfo        *core.UserInfo
 	AuthConfig      *config.AuthConfig
 	ActivateAccount func(user string) error
 	AddAccount      func(account config.Account) error
@@ -68,8 +68,13 @@ type monitorKeyMap struct {
 
 const monitorRequestTimeout = 30 * time.Second
 
+type statsCollector interface {
+	Snapshot() core.Snapshot
+	Reset()
+}
+
 type statsService interface {
-	MonitorSnapshot() monitor.Snapshot
+	MonitorSnapshot() core.Snapshot
 	Reset()
 }
 
@@ -87,7 +92,7 @@ type accountService interface {
 	BeginLogin(ctx context.Context) (account.LoginChallenge, error)
 	PollLogin(ctx context.Context, seq int64) (account.LoginResult, error)
 	CancelLogin(seq int64)
-	PremiumInfo(ctx context.Context, force bool) (monitor.UserInfo, error)
+	PremiumInfo(ctx context.Context, force bool) (core.UserInfo, error)
 	InvalidatePremium(user string)
 }
 
@@ -129,11 +134,11 @@ func (k *monitorKeyMap) FullHelp() [][]key.Binding {
 // Messages for async operations.
 type tickMsg time.Time
 type modelsLoadedMsg struct {
-	models []monitor.ModelInfo
+	models []models.ModelInfo
 	err    error
 }
 type userInfoLoadedMsg struct {
-	info *monitor.UserInfo
+	info *core.UserInfo
 	err  error
 }
 
@@ -174,7 +179,7 @@ type MonitorModel struct {
 	currentSettings              config.Settings
 	statusMsg                    string
 	statusView                   tui.ViewState
-	snapshot                     monitor.Snapshot
+	snapshot                     core.Snapshot
 	loadedUserInfo               bool
 	loadedModels                 bool
 	userInfoQueue                debounce.Debouncer
@@ -189,7 +194,7 @@ type MonitorModel struct {
 	configModal     *tui.ConfigModal
 	accountModal    *tui.AccountModal
 	sharedState     *tui.SharedState
-	userInfo        *monitor.UserInfo
+	userInfo        *core.UserInfo
 	activateAccount func(user string) error
 	addAccount      func(account config.Account) error
 	accountAuthSeq  int64
@@ -354,7 +359,7 @@ func (m *MonitorModel) loadModelsCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), monitorRequestTimeout)
 		defer cancel()
 		items, err := m.modelService.Refresh(ctx)
-		return modelsLoadedMsg{models: toMonitorModels(items), err: err}
+		return modelsLoadedMsg{models: items, err: err}
 	}
 }
 
@@ -401,30 +406,8 @@ func (m *MonitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func emptySnapshot() monitor.Snapshot {
-	return monitor.Snapshot{}
-}
-
-func toMonitorModels(items []models.ModelInfo) []monitor.ModelInfo {
-	if len(items) == 0 {
-		return nil
-	}
-	result := make([]monitor.ModelInfo, len(items))
-	for i := range items {
-		result[i] = items[i]
-	}
-	return result
-}
-
-func fromMonitorModels(items []monitor.ModelInfo) []models.ModelInfo {
-	if len(items) == 0 {
-		return nil
-	}
-	result := make([]models.ModelInfo, len(items))
-	for i := range items {
-		result[i] = items[i]
-	}
-	return result
+func emptySnapshot() core.Snapshot {
+	return core.Snapshot{}
 }
 
 func (m *MonitorModel) setStatus(view tui.ViewState, message string) {
@@ -1006,12 +989,11 @@ func (m *MonitorModel) handleTick() (tea.Model, tea.Cmd) {
 func (m *MonitorModel) handleModelsLoaded(msg modelsLoadedMsg) {
 	m.loading = false
 	if msg.err == nil {
-		models := fromMonitorModels(msg.models)
-		m.sharedState.Models = models
+		m.sharedState.Models = msg.models
 		m.setStatus(tui.ViewModels, fmt.Sprintf("Loaded %d models", len(msg.models)))
 		m.lastRefresh = time.Now()
 		m.loadedModels = true
-		m.modelsView.SetModels(models)
+		m.modelsView.SetModels(msg.models)
 		return
 	}
 	m.setStatus(tui.ViewModels, fmt.Sprintf("Models: %v", msg.err))

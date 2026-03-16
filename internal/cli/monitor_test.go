@@ -10,6 +10,7 @@ import (
 
 	"copilot-proxy/internal/cli/tui"
 	"copilot-proxy/internal/config"
+	core "copilot-proxy/internal/core"
 	"copilot-proxy/internal/core/account"
 	coreconfig "copilot-proxy/internal/core/config"
 	"copilot-proxy/internal/core/stats"
@@ -150,7 +151,7 @@ func TestMonitorModel_QuitKey(t *testing.T) {
 
 func TestMonitorModel_TickUpdatesSnapshot(t *testing.T) {
 	collector := monitor.NewCollector(100)
-	collector.RecordLocal(&monitor.RequestRecord{
+	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:  time.Now(),
 		Model:      "gpt-4o",
 		StatusCode: 200,
@@ -180,7 +181,7 @@ func TestMonitorModel_TickUpdatesSnapshot(t *testing.T) {
 
 func TestMonitorModel_TickUpdatesSnapshotInLogs(t *testing.T) {
 	collector := monitor.NewCollector(100)
-	collector.RecordLocal(&monitor.RequestRecord{
+	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:  time.Now(),
 		Model:      "gpt-4o",
 		StatusCode: 200,
@@ -205,7 +206,7 @@ func TestMonitorModel_TickUpdatesSnapshotInLogs(t *testing.T) {
 
 func TestMonitorModel_TickTogglesLogsBlinkAndKeepsSnapshotRefresh(t *testing.T) {
 	collector := monitor.NewCollector(100)
-	collector.RecordLocal(&monitor.RequestRecord{
+	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:  time.Now(),
 		Model:      "gpt-4o",
 		StatusCode: 200,
@@ -239,7 +240,7 @@ func TestMonitorModel_TickTogglesLogsBlinkAndKeepsSnapshotRefresh(t *testing.T) 
 func TestMonitorModel_ClearLogsResetsOffset(t *testing.T) {
 	collector := monitor.NewCollector(100)
 	for range 50 {
-		collector.RecordLocal(&monitor.RequestRecord{
+		collector.RecordLocal(&core.RequestRecord{
 			Timestamp:  time.Now(),
 			Model:      "gpt-4o",
 			StatusCode: 200,
@@ -285,14 +286,14 @@ func TestMonitorModel_ClearLogsResetsOffset(t *testing.T) {
 func TestMonitorModel_ClearStatsResetsCountersOnly(t *testing.T) {
 	collector := monitor.NewCollector(100)
 	now := time.Now()
-	collector.RecordLocal(&monitor.RequestRecord{
+	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:  now,
 		Model:      "gpt-4o",
 		StatusCode: 200,
 		Duration:   100 * time.Millisecond,
 		IsAgent:    false,
 	})
-	collector.RecordLocal(&monitor.RequestRecord{
+	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:  now,
 		Model:      "gpt-4o",
 		StatusCode: 200,
@@ -343,7 +344,7 @@ func buildLogsMonitorModelForMouseTests(t *testing.T) MonitorModel {
 	collector := monitor.NewCollector(100)
 	now := time.Now()
 	for i := range 20 {
-		collector.RecordLocal(&monitor.RequestRecord{
+		collector.RecordLocal(&core.RequestRecord{
 			Timestamp:  now.Add(-time.Duration(i) * time.Second),
 			Method:     "POST",
 			Path:       "/v1/chat/completions",
@@ -520,7 +521,7 @@ func TestMonitorModel_AgentPremiumEventQueuesRefresh(t *testing.T) {
 	}
 	model := NewMonitorModel(&deps, "")
 
-	collector.RecordLocal(&monitor.RequestRecord{
+	collector.RecordLocal(&core.RequestRecord{
 		RequestID:  "req-agent-premium-1",
 		Timestamp:  time.Now(),
 		Model:      "gpt-4o",
@@ -547,7 +548,7 @@ func TestMonitorModel_FirstTriggerDebounceDoesNotResetOnBurst(t *testing.T) {
 	}
 	model := NewMonitorModel(&deps, "")
 
-	collector.RecordLocal(&monitor.RequestRecord{
+	collector.RecordLocal(&core.RequestRecord{
 		RequestID:  "req-agent-premium-1",
 		Timestamp:  time.Now(),
 		Model:      "gpt-4o",
@@ -562,7 +563,7 @@ func TestMonitorModel_FirstTriggerDebounceDoesNotResetOnBurst(t *testing.T) {
 		t.Fatalf("expected first burst event to arm debounce sequence")
 	}
 
-	collector.RecordLocal(&monitor.RequestRecord{
+	collector.RecordLocal(&core.RequestRecord{
 		RequestID:  "req-agent-premium-2",
 		Timestamp:  time.Now().Add(time.Second),
 		Model:      "gpt-4o",
@@ -739,7 +740,7 @@ func TestMonitorModel_WindowResize(t *testing.T) {
 
 func TestMonitorModel_ViewRendering(t *testing.T) {
 	collector := monitor.NewCollector(100)
-	collector.RecordLocal(&monitor.RequestRecord{
+	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:  time.Now(),
 		Path:       "/v1/chat/completions",
 		Model:      "gpt-4o",
@@ -790,7 +791,7 @@ func TestMonitorModel_LogsViewRenderingFitsWindowAndKeepsHeader(t *testing.T) {
 	collector := monitor.NewCollector(200)
 	now := time.Now()
 	for i := range 120 {
-		collector.RecordLocal(&monitor.RequestRecord{
+		collector.RecordLocal(&core.RequestRecord{
 			Timestamp:    now.Add(-time.Duration(i) * time.Second),
 			Method:       "POST",
 			Path:         "/v1/chat/completions",
@@ -827,7 +828,7 @@ func TestMonitorModel_LogsViewSmallWindowRendersAndPages(t *testing.T) {
 	collector := monitor.NewCollector(50)
 	now := time.Now()
 	for i := range 12 {
-		collector.RecordLocal(&monitor.RequestRecord{
+		collector.RecordLocal(&core.RequestRecord{
 			Timestamp:    now.Add(-time.Duration(i) * time.Second),
 			Method:       "POST",
 			Path:         "/v1/chat/completions",
@@ -1005,7 +1006,7 @@ func TestFormatPromptOutputContext(t *testing.T) {
 
 func TestMonitorModel_LogsViewRendering(t *testing.T) {
 	collector := monitor.NewCollector(100)
-	collector.RecordLocal(&monitor.RequestRecord{
+	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:    time.Now(),
 		Method:       "POST",
 		Path:         "/v1/chat/completions",

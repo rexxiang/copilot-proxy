@@ -19,6 +19,14 @@
 
 Default listen address: `127.0.0.1:4000`.
 
+## Core / Monitor boundary
+
+- `internal/core` (observability, stats, account, models, etc.) owns the runtime instrumentation, persistence, and DTO implementations that drive metrics and user telemetry.
+- `internal/monitor` is a thin compatibility shim for the CLI/TUI: it re-exports `core.RequestRecord`, `core.Snapshot`, `models.ModelInfo`, and `monitor.UserInfo`, and it keeps the `/copilot_internal/user` helper so the UI can surface quota details without importing `core`.
+- The CLI/TUI consumes observability data through `core/stats.Service.MonitorSnapshot()` while persistence and sink wiring remain strictly inside `internal/core/observability`, keeping instrumentation logic decoupled from UI adapters.
+
+Keeping `internal/monitor` focused on surface-level DTOs and the user-info bridge ensures the UI layers stay decoupled from the actual metric collection.
+
 ## Install
 
 ### One-command install (latest release)
@@ -44,8 +52,8 @@ export PATH="$HOME/.local/bin:$PATH"
 ### Build from source
 
 - CLI only (no CGO): `mise x -- go build -o ./bin/copilot-proxy ./cmd/copilot-proxy`
-- CLI and C ABI: `mise x -- build` (go build followed by `CGO_ENABLED=1 go build -buildmode=c-shared -o ./bin/copilot-proxy-c.so ./cmd/copilot-proxy-c`)
-- C ABI only: `mise x -- build-c-shared`
+- CLI and C ABI: `mise x -- build` (go build followed by `mise run build:c-shared`)
+- C ABI only: `mise x -- build:c-shared`
 
 The c-shared build emits `./bin/copilot-proxy-c.so` (or the platform-appropriate shared library) plus the generated header `./bin/copilot-proxy-c.h`.
 
@@ -119,7 +127,7 @@ Map-style settings (for example `required_headers` and `reasoning_policies`) are
 
 ## C ABI
 
-`cmd/copilot-proxy-c` boots the same `internal/core.Kernel` that powers the CLI/TUI runtime (including auth, config, models, and observability) and exposes it through a compact C ABI that exchanges `core.RequestInvocation`/`core.ResponsePayload` pairs over JSON. Building the shared workflow produces `./bin/copilot-proxy`, `./bin/copilot-proxy-c.so`, and the generated header `./bin/copilot-proxy-c.h`. Use `mise x -- build` for the combined CLI + shared library or `mise x -- build-c-shared` for the library alone.
+`cmd/copilot-proxy-c` boots the same `internal/core.Kernel` that powers the CLI/TUI runtime (including auth, config, models, and observability) and exposes it through a compact C ABI that exchanges `core.RequestInvocation`/`core.ResponsePayload` pairs over JSON. Building the shared workflow produces `./bin/copilot-proxy`, `./bin/copilot-proxy-c.so`, and the generated header `./bin/copilot-proxy-c.h`. Use `mise x -- build` for the combined CLI + shared library or `mise x -- build:c-shared` for the library alone.
 
 ### Entry points
 
@@ -152,4 +160,4 @@ typedef void (*CopilotProxyCallback)(const char *payload_json, const char *error
 ## Testing
 
 - Run the general Go test suite (CGO disabled by default) with `mise x -- test`.
-- Verify the C ABI layer with `mise x -- test-cgo` (the same as `CGO_ENABLED=1 go test ./cmd/copilot-proxy-c`), ensuring the exported symbols link to the core kernel.
+- Verify the C ABI layer with `mise x -- test:cgo` (the same as `CGO_ENABLED=1 go test ./cmd/copilot-proxy-c`), ensuring the exported symbols link to the core kernel.

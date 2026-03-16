@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/core"
+	"copilot-proxy/internal/models"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -29,8 +30,8 @@ func statsRowForModel(rendered, model string) string {
 
 func TestStatsView_PremiumModelShowsUserAndAllCounts(t *testing.T) {
 	state := &SharedState{
-		Snapshot: monitor.Snapshot{
-			ByModel: map[string]*monitor.ModelStats{
+		Snapshot: core.Snapshot{
+			ByModel: map[string]*core.ModelStats{
 				"gpt-4o": {
 					Count:       8,
 					AgentReqs:   2,
@@ -41,7 +42,7 @@ func TestStatsView_PremiumModelShowsUserAndAllCounts(t *testing.T) {
 			},
 			TotalRequests: 8,
 		},
-		Models: []monitor.ModelInfo{
+		Models: []models.ModelInfo{
 			{ID: "gpt-4o", IsPremium: true},
 		},
 	}
@@ -74,8 +75,8 @@ func TestStatsView_PremiumModelShowsUserAndAllCounts(t *testing.T) {
 
 func TestStatsView_AvgTimeUsesUserAndAgentRequestTotal(t *testing.T) {
 	state := &SharedState{
-		Snapshot: monitor.Snapshot{
-			ByModel: map[string]*monitor.ModelStats{
+		Snapshot: core.Snapshot{
+			ByModel: map[string]*core.ModelStats{
 				"gpt-4o": {
 					Count:       2,
 					AgentReqs:   2,
@@ -84,7 +85,7 @@ func TestStatsView_AvgTimeUsesUserAndAgentRequestTotal(t *testing.T) {
 					TotalTime:   100 * time.Millisecond, // should not drive Avg Time now
 				},
 			},
-			RecentRequests: []monitor.RequestRecord{
+			RecentRequests: []core.RequestRecord{
 				{Timestamp: time.Now(), Model: "gpt-4o", StatusCode: 200, Duration: 100 * time.Millisecond, IsAgent: false},
 				{Timestamp: time.Now(), Model: "gpt-4o", StatusCode: 200, Duration: 200 * time.Millisecond, IsAgent: false},
 				{Timestamp: time.Now(), Model: "gpt-4o", StatusCode: 200, Duration: 300 * time.Millisecond, IsAgent: true},
@@ -92,7 +93,7 @@ func TestStatsView_AvgTimeUsesUserAndAgentRequestTotal(t *testing.T) {
 			},
 			TotalRequests: 2,
 		},
-		Models: []monitor.ModelInfo{
+		Models: []models.ModelInfo{
 			{ID: "gpt-4o", IsPremium: true},
 		},
 	}
@@ -111,8 +112,8 @@ func TestStatsView_AvgTimeUsesUserAndAgentRequestTotal(t *testing.T) {
 
 func TestStatsView_AvgTimeIncludesAgentDurations(t *testing.T) {
 	state := &SharedState{
-		Snapshot: monitor.Snapshot{
-			ByModel: map[string]*monitor.ModelStats{
+		Snapshot: core.Snapshot{
+			ByModel: map[string]*core.ModelStats{
 				"gpt-4o-mini": {
 					Count:       1,
 					AgentReqs:   1,
@@ -121,13 +122,13 @@ func TestStatsView_AvgTimeIncludesAgentDurations(t *testing.T) {
 					TotalTime:   100 * time.Millisecond, // old logic would show 100ms
 				},
 			},
-			RecentRequests: []monitor.RequestRecord{
+			RecentRequests: []core.RequestRecord{
 				{Timestamp: time.Now(), Model: "gpt-4o-mini", StatusCode: 200, Duration: 100 * time.Millisecond, IsAgent: false},
 				{Timestamp: time.Now(), Model: "gpt-4o-mini", StatusCode: 200, Duration: 900 * time.Millisecond, IsAgent: true},
 			},
 			TotalRequests: 1,
 		},
-		Models: []monitor.ModelInfo{
+		Models: []models.ModelInfo{
 			{ID: "gpt-4o-mini", IsPremium: true},
 		},
 	}
@@ -149,8 +150,8 @@ func TestStatsView_AvgTimeIncludesAgentDurations(t *testing.T) {
 
 func TestStatsView_AvgTimeForStreamUsesTotalDuration(t *testing.T) {
 	state := &SharedState{
-		Snapshot: monitor.Snapshot{
-			ByModel: map[string]*monitor.ModelStats{
+		Snapshot: core.Snapshot{
+			ByModel: map[string]*core.ModelStats{
 				"stream-model": {
 					Count:       1,
 					AgentReqs:   0,
@@ -159,7 +160,7 @@ func TestStatsView_AvgTimeForStreamUsesTotalDuration(t *testing.T) {
 					TotalTime:   300 * time.Millisecond, // old logic would show 300ms
 				},
 			},
-			RecentRequests: []monitor.RequestRecord{
+			RecentRequests: []core.RequestRecord{
 				{
 					Timestamp:             time.Now(),
 					Model:                 "stream-model",
@@ -172,7 +173,7 @@ func TestStatsView_AvgTimeForStreamUsesTotalDuration(t *testing.T) {
 			},
 			TotalRequests: 1,
 		},
-		Models: []monitor.ModelInfo{
+		Models: []models.ModelInfo{
 			{ID: "stream-model", IsPremium: true},
 		},
 	}
@@ -203,8 +204,8 @@ func TestStatsView_NonPremiumRowIsFullyDimmed(t *testing.T) {
 	})
 
 	state := &SharedState{
-		Snapshot: monitor.Snapshot{
-			ByModel: map[string]*monitor.ModelStats{
+		Snapshot: core.Snapshot{
+			ByModel: map[string]*core.ModelStats{
 				"free-model": {
 					Count:       3,
 					AgentReqs:   2,
@@ -215,7 +216,7 @@ func TestStatsView_NonPremiumRowIsFullyDimmed(t *testing.T) {
 			},
 			TotalRequests: 3,
 		},
-		Models: []monitor.ModelInfo{
+		Models: []models.ModelInfo{
 			{ID: "free-model", IsPremium: false},
 		},
 	}
@@ -250,8 +251,8 @@ func TestStatsView_NonPremiumRowIsFullyDimmed(t *testing.T) {
 
 func TestStatsView_AgentOnlyModelShowsInList(t *testing.T) {
 	state := &SharedState{
-		Snapshot: monitor.Snapshot{
-			ByModel: map[string]*monitor.ModelStats{
+		Snapshot: core.Snapshot{
+			ByModel: map[string]*core.ModelStats{
 				"agent-only-model": {
 					Count:       0,
 					AgentReqs:   4,
@@ -260,7 +261,7 @@ func TestStatsView_AgentOnlyModelShowsInList(t *testing.T) {
 				},
 			},
 		},
-		Models: []monitor.ModelInfo{
+		Models: []models.ModelInfo{
 			{ID: "agent-only-model", IsPremium: false},
 		},
 	}
@@ -281,18 +282,18 @@ func TestStatsView_AgentOnlyModelShowsInList(t *testing.T) {
 }
 
 func TestStatsView_HomeAndEndJumpListBoundaries(t *testing.T) {
-	byModel := make(map[string]*monitor.ModelStats, 20)
-	models := make([]monitor.ModelInfo, 0, 20)
+	byModel := make(map[string]*core.ModelStats, 20)
+	modelEntries := make([]models.ModelInfo, 0, 20)
 	for i := range 20 {
 		name := fmt.Sprintf("model-%02d", i)
-		byModel[name] = &monitor.ModelStats{Count: int64(i + 1), TotalTime: time.Second}
-		models = append(models, monitor.ModelInfo{ID: name, IsPremium: false})
+		byModel[name] = &core.ModelStats{Count: int64(i + 1), TotalTime: time.Second}
+		modelEntries = append(modelEntries, models.ModelInfo{ID: name, IsPremium: false})
 	}
 
 	view := NewStatsView()
 	view.SetState(&SharedState{
-		Snapshot: monitor.Snapshot{ByModel: byModel, TotalRequests: 20},
-		Models:   models,
+		Snapshot: core.Snapshot{ByModel: byModel, TotalRequests: 20},
+		Models:   modelEntries,
 	})
 	view.SetSize(120, 12)
 
@@ -323,8 +324,8 @@ func TestStatsView_HomeAndEndJumpListBoundaries(t *testing.T) {
 func TestStatsView_SortsModelRowsByName(t *testing.T) {
 	view := NewStatsView()
 	view.SetState(&SharedState{
-		Snapshot: monitor.Snapshot{
-			ByModel: map[string]*monitor.ModelStats{
+		Snapshot: core.Snapshot{
+			ByModel: map[string]*core.ModelStats{
 				"gpt-9": {Count: 1},
 				"gpt-4": {Count: 100},
 				"gpt-5": {Count: 10},

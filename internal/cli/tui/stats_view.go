@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/core"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -30,7 +30,7 @@ const (
 
 type statsModelEntry struct {
 	name  string
-	stats *monitor.ModelStats
+	stats *core.ModelStats
 }
 
 func NewStatsView() *StatsView {

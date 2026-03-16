@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/core"
+	"copilot-proxy/internal/models"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -20,12 +21,12 @@ func TestLogsView_AgentTimeAndModelAreDimmed(t *testing.T) {
 	})
 
 	state := &SharedState{
-		Models: []monitor.ModelInfo{
+		Models: []models.ModelInfo{
 			{ID: "user-model", IsPremium: true},
 			{ID: "agent-model", IsPremium: true},
 		},
-		Snapshot: monitor.Snapshot{
-			RecentRequests: []monitor.RequestRecord{
+		Snapshot: core.Snapshot{
+			RecentRequests: []core.RequestRecord{
 				{
 					Timestamp:    time.Date(2026, 2, 24, 12, 35, 56, 0, time.UTC),
 					Method:       "POST",
@@ -107,15 +108,15 @@ func TestLogsView_ClientCanceledStatusUsesDimStyle(t *testing.T) {
 	})
 
 	state := &SharedState{
-		Snapshot: monitor.Snapshot{
-			RecentRequests: []monitor.RequestRecord{
+		Snapshot: core.Snapshot{
+			RecentRequests: []core.RequestRecord{
 				{
 					Timestamp:    time.Date(2026, 2, 24, 12, 35, 56, 0, time.UTC),
 					Method:       "POST",
 					Path:         "/v1/chat/completions",
 					UpstreamPath: "/chat/completions",
 					Model:        "cancel-model",
-					StatusCode:   monitor.StatusClientCanceled,
+					StatusCode:   core.StatusClientCanceled,
 					Duration:     120 * time.Millisecond,
 					IsAgent:      false,
 				},
@@ -190,15 +191,15 @@ func TestLogsView_CanceledAndTimeoutRowsUseStrikeStyle(t *testing.T) {
 	})
 
 	state := &SharedState{
-		Snapshot: monitor.Snapshot{
-			RecentRequests: []monitor.RequestRecord{
+		Snapshot: core.Snapshot{
+			RecentRequests: []core.RequestRecord{
 				{
 					Timestamp:    time.Date(2026, 2, 24, 12, 37, 56, 0, time.UTC),
 					Method:       "POST",
 					Path:         "/v1/chat/completions",
 					UpstreamPath: "/chat/completions",
 					Model:        "cancel-model",
-					StatusCode:   monitor.StatusClientCanceled,
+					StatusCode:   core.StatusClientCanceled,
 					Duration:     100 * time.Millisecond,
 				},
 				{
@@ -279,15 +280,15 @@ func TestLogsView_CanceledRowStrikeStyleDoesNotNestCellStyles(t *testing.T) {
 	})
 
 	state := &SharedState{
-		Snapshot: monitor.Snapshot{
-			RecentRequests: []monitor.RequestRecord{
+		Snapshot: core.Snapshot{
+			RecentRequests: []core.RequestRecord{
 				{
 					Timestamp:    time.Date(2026, 2, 24, 12, 37, 56, 0, time.UTC),
 					Method:       "POST",
 					Path:         "/v1/chat/completions",
 					UpstreamPath: "/chat/completions",
 					Model:        "cancel-model",
-					StatusCode:   monitor.StatusClientCanceled,
+					StatusCode:   core.StatusClientCanceled,
 					Duration:     100 * time.Millisecond,
 				},
 			},
@@ -325,12 +326,12 @@ func TestLogsView_NonPremiumModelNameIsDimmed(t *testing.T) {
 	})
 
 	state := &SharedState{
-		Models: []monitor.ModelInfo{
+		Models: []models.ModelInfo{
 			{ID: "premium-model", IsPremium: true},
 			{ID: "free-model", IsPremium: false},
 		},
-		Snapshot: monitor.Snapshot{
-			RecentRequests: []monitor.RequestRecord{
+		Snapshot: core.Snapshot{
+			RecentRequests: []core.RequestRecord{
 				{
 					Timestamp:    time.Date(2026, 2, 24, 12, 35, 56, 0, time.UTC),
 					Method:       "POST",
@@ -394,9 +395,9 @@ func TestLogsView_NonPremiumModelNameIsDimmed(t *testing.T) {
 
 func TestLogsView_MouseWheelDownWithCtrlScrolls(t *testing.T) {
 	now := time.Now()
-	records := make([]monitor.RequestRecord, 0, 20)
+	records := make([]core.RequestRecord, 0, 20)
 	for i := range 20 {
-		records = append(records, monitor.RequestRecord{
+		records = append(records, core.RequestRecord{
 			Timestamp:  now.Add(-time.Duration(i) * time.Second),
 			Method:     "POST",
 			Path:       "/v1/chat/completions",
@@ -409,7 +410,7 @@ func TestLogsView_MouseWheelDownWithCtrlScrolls(t *testing.T) {
 	view := NewLogsView()
 	view.SetSize(120, 12) // visible lines = 4
 	view.SetState(&SharedState{
-		Snapshot: monitor.Snapshot{RecentRequests: records},
+		Snapshot: core.Snapshot{RecentRequests: records},
 	})
 
 	if view.offset != 0 {
@@ -431,9 +432,9 @@ func TestLogsView_MouseWheelDownWithCtrlScrolls(t *testing.T) {
 
 func TestLogsView_MouseWheelUpWithCtrlScrolls(t *testing.T) {
 	now := time.Now()
-	records := make([]monitor.RequestRecord, 0, 20)
+	records := make([]core.RequestRecord, 0, 20)
 	for i := range 20 {
-		records = append(records, monitor.RequestRecord{
+		records = append(records, core.RequestRecord{
 			Timestamp:  now.Add(-time.Duration(i) * time.Second),
 			Method:     "POST",
 			Path:       "/v1/chat/completions",
@@ -446,7 +447,7 @@ func TestLogsView_MouseWheelUpWithCtrlScrolls(t *testing.T) {
 	view := NewLogsView()
 	view.SetSize(120, 12) // visible lines = 4
 	view.SetState(&SharedState{
-		Snapshot: monitor.Snapshot{RecentRequests: records},
+		Snapshot: core.Snapshot{RecentRequests: records},
 	})
 	view.offset = 2
 
@@ -465,9 +466,9 @@ func TestLogsView_MouseWheelUpWithCtrlScrolls(t *testing.T) {
 
 func TestLogsView_MouseWheelWithoutCtrlIsIgnored(t *testing.T) {
 	now := time.Now()
-	records := make([]monitor.RequestRecord, 0, 20)
+	records := make([]core.RequestRecord, 0, 20)
 	for i := range 20 {
-		records = append(records, monitor.RequestRecord{
+		records = append(records, core.RequestRecord{
 			Timestamp:  now.Add(-time.Duration(i) * time.Second),
 			Method:     "POST",
 			Path:       "/v1/chat/completions",
@@ -480,7 +481,7 @@ func TestLogsView_MouseWheelWithoutCtrlIsIgnored(t *testing.T) {
 	view := NewLogsView()
 	view.SetSize(120, 12) // visible lines = 4
 	view.SetState(&SharedState{
-		Snapshot: monitor.Snapshot{RecentRequests: records},
+		Snapshot: core.Snapshot{RecentRequests: records},
 	})
 
 	handled, _ := view.HandleMouse(tea.MouseMsg{
@@ -497,9 +498,9 @@ func TestLogsView_MouseWheelWithoutCtrlIsIgnored(t *testing.T) {
 
 func TestLogsView_HomeEndAndGShortcutsJumpToBoundaries(t *testing.T) {
 	now := time.Now()
-	records := make([]monitor.RequestRecord, 0, 20)
+	records := make([]core.RequestRecord, 0, 20)
 	for i := range 20 {
-		records = append(records, monitor.RequestRecord{
+		records = append(records, core.RequestRecord{
 			Timestamp:  now.Add(-time.Duration(i) * time.Second),
 			Method:     "POST",
 			Path:       "/v1/chat/completions",
@@ -512,7 +513,7 @@ func TestLogsView_HomeEndAndGShortcutsJumpToBoundaries(t *testing.T) {
 	view := NewLogsView()
 	view.SetSize(120, 12)
 	view.SetState(&SharedState{
-		Snapshot: monitor.Snapshot{RecentRequests: records},
+		Snapshot: core.Snapshot{RecentRequests: records},
 	})
 
 	handled, _ := view.HandleKey(tea.KeyMsg{Type: tea.KeyEnd})
@@ -554,9 +555,9 @@ func TestLogsView_HomeEndAndGShortcutsJumpToBoundaries(t *testing.T) {
 
 func TestLogsView_PgDownPagesDown(t *testing.T) {
 	now := time.Now()
-	records := make([]monitor.RequestRecord, 0, 20)
+	records := make([]core.RequestRecord, 0, 20)
 	for i := range 20 {
-		records = append(records, monitor.RequestRecord{
+		records = append(records, core.RequestRecord{
 			Timestamp:  now.Add(-time.Duration(i) * time.Second),
 			Method:     "POST",
 			Path:       "/v1/chat/completions",
@@ -569,7 +570,7 @@ func TestLogsView_PgDownPagesDown(t *testing.T) {
 	view := NewLogsView()
 	view.SetSize(120, 12)
 	view.SetState(&SharedState{
-		Snapshot: monitor.Snapshot{RecentRequests: records},
+		Snapshot: core.Snapshot{RecentRequests: records},
 	})
 
 	pageSize := view.VisibleLines()
@@ -588,9 +589,9 @@ func TestLogsView_PgDownPagesDown(t *testing.T) {
 
 func TestLogsView_SmallHeightClampsVisibleLinesAndPaging(t *testing.T) {
 	now := time.Now()
-	records := make([]monitor.RequestRecord, 0, 5)
+	records := make([]core.RequestRecord, 0, 5)
 	for i := range 5 {
-		records = append(records, monitor.RequestRecord{
+		records = append(records, core.RequestRecord{
 			Timestamp:  now.Add(-time.Duration(i) * time.Second),
 			Method:     "POST",
 			Path:       "/v1/chat/completions",
@@ -603,7 +604,7 @@ func TestLogsView_SmallHeightClampsVisibleLinesAndPaging(t *testing.T) {
 	view := NewLogsView()
 	view.SetSize(120, 3)
 	view.SetState(&SharedState{
-		Snapshot: monitor.Snapshot{RecentRequests: records},
+		Snapshot: core.Snapshot{RecentRequests: records},
 	})
 
 	if got := view.VisibleLines(); got != 1 {
@@ -621,9 +622,9 @@ func TestLogsView_SmallHeightClampsVisibleLinesAndPaging(t *testing.T) {
 
 func TestLogsView_SpaceDoesNotPageDown(t *testing.T) {
 	now := time.Now()
-	records := make([]monitor.RequestRecord, 0, 20)
+	records := make([]core.RequestRecord, 0, 20)
 	for i := range 20 {
-		records = append(records, monitor.RequestRecord{
+		records = append(records, core.RequestRecord{
 			Timestamp:  now.Add(-time.Duration(i) * time.Second),
 			Method:     "POST",
 			Path:       "/v1/chat/completions",
@@ -636,7 +637,7 @@ func TestLogsView_SpaceDoesNotPageDown(t *testing.T) {
 	view := NewLogsView()
 	view.SetSize(120, 12)
 	view.SetState(&SharedState{
-		Snapshot: monitor.Snapshot{RecentRequests: records},
+		Snapshot: core.Snapshot{RecentRequests: records},
 	})
 
 	handled, _ := view.HandleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
@@ -663,7 +664,7 @@ func TestLogsView_HeaderUsesTimestampDurationAndStream(t *testing.T) {
 	view := NewLogsView()
 	view.SetSize(140, 20)
 	view.SetState(&SharedState{
-		Snapshot: monitor.Snapshot{},
+		Snapshot: core.Snapshot{},
 	})
 
 	rendered := view.View()
@@ -679,7 +680,7 @@ func TestLogsView_HeaderUsesTimestampDurationAndStream(t *testing.T) {
 }
 
 func TestLogsView_RenderDurationAndStreamForSSE(t *testing.T) {
-	streamingRecord := &monitor.RequestRecord{
+	streamingRecord := &core.RequestRecord{
 		Timestamp:             time.Now().Add(-2 * time.Second),
 		IsStream:              true,
 		Streaming:             true,
@@ -697,7 +698,7 @@ func TestLogsView_RenderDurationAndStreamForSSE(t *testing.T) {
 		t.Fatalf("expected streaming sse stream column to show elapsed stream duration, got %q", streamText)
 	}
 
-	completedRecord := &monitor.RequestRecord{
+	completedRecord := &core.RequestRecord{
 		Timestamp:             time.Now().Add(-3 * time.Second),
 		IsStream:              true,
 		Streaming:             false,
@@ -710,7 +711,7 @@ func TestLogsView_RenderDurationAndStreamForSSE(t *testing.T) {
 		t.Fatalf("expected completed sse stream duration 1.0s, got %q", completedStreamText)
 	}
 
-	nonStreamRecord := &monitor.RequestRecord{
+	nonStreamRecord := &core.RequestRecord{
 		Timestamp:  time.Now().Add(-1 * time.Second),
 		IsStream:   false,
 		StatusCode: 200,
@@ -728,8 +729,8 @@ func TestLogsView_ActiveRequestBlinkIndicatorTogglesBySharedState(t *testing.T) 
 	view.SetSize(120, 20)
 	state := &SharedState{
 		LogsBlinkOn: true,
-		Snapshot: monitor.Snapshot{
-			ActiveRequests: []monitor.RequestRecord{
+		Snapshot: core.Snapshot{
+			ActiveRequests: []core.RequestRecord{
 				{
 					Timestamp:  now,
 					Method:     "POST",
@@ -738,7 +739,7 @@ func TestLogsView_ActiveRequestBlinkIndicatorTogglesBySharedState(t *testing.T) 
 					StatusCode: 200,
 				},
 			},
-			RecentRequests: []monitor.RequestRecord{
+			RecentRequests: []core.RequestRecord{
 				{
 					Timestamp:  now.Add(-time.Second),
 					Method:     "POST",
@@ -785,8 +786,8 @@ func TestLogsView_ActiveSSERequestShowsBlinkIndicator(t *testing.T) {
 	view.SetSize(120, 20)
 	view.SetState(&SharedState{
 		LogsBlinkOn: true,
-		Snapshot: monitor.Snapshot{
-			ActiveRequests: []monitor.RequestRecord{
+		Snapshot: core.Snapshot{
+			ActiveRequests: []core.RequestRecord{
 				{
 					Timestamp:             time.Now().Add(-2 * time.Second),
 					Method:                "POST",

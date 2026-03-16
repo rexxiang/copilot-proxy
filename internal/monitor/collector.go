@@ -1,9 +1,6 @@
 package monitor
 
-import (
-	"copilot-proxy/internal/core/observability"
-	"copilot-proxy/internal/middleware"
-)
+import "copilot-proxy/internal/core/observability"
 
 // Collector defines the interface for request statistics collection.
 type Collector interface {
@@ -42,12 +39,4 @@ var (
 // NewCollector creates a new ThreadSafeCollector with the specified max history length.
 func NewCollector(maxHistory int) *ThreadSafeCollector {
 	return observability.NewCollector(maxHistory)
-}
-
-// NewObservabilitySink wraps a collector so it can be provided as an ObservabilitySink.
-func NewObservabilitySink(collector *ThreadSafeCollector) middleware.ObservabilitySink {
-	if collector == nil {
-		return nil
-	}
-	return collector
 }
