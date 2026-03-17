@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,22 +84,6 @@ func TestServiceControllerLifecycle(t *testing.T) {
 	}
 }
 
-func TestServiceControllerInvoke(t *testing.T) {
-	ctrl := newTestController(t)
-	if _, err := ctrl.Invoke(core.RequestInvocation{Method: http.MethodGet, Path: "/test"}); err == nil {
-		t.Fatalf("expected error when invoking before start")
-	}
-	errCh := startControllerAsync(t, ctrl)
-	defer stopControllerAndWait(t, ctrl, errCh)
-	resp, err := ctrl.Invoke(core.RequestInvocation{Method: http.MethodPost, Path: "/ok"})
-	if err != nil {
-		t.Fatalf("invoke failed: %v", err)
-	}
-	if resp.StatusCode != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNotImplemented)
-	}
-}
-
 func TestServiceControllerStartStopIdempotent(t *testing.T) {
 	ctrl := newTestController(t)
 	errCh := startControllerAsync(t, ctrl)
@@ -130,6 +117,160 @@ func TestServiceControllerPersistentCollectorExposure(t *testing.T) {
 	})
 	if got := ctrl.PersistentCollector(); got != persistent {
 		t.Fatalf("persistent collector mismatch, want %p got %p", persistent, got)
+	}
+}
+
+func TestServiceControllerModelRefreshUsesCorePathWithoutLocalServer(t *testing.T) {
+	var (
+		authHeader string
+		path       string
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader = r.Header.Get("Authorization")
+		path = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{
+					"id":                   "gpt-5-mini",
+					"name":                 "GPT-5 Mini",
+					"vendor":               "OpenAI",
+					"version":              "1",
+					"preview":              false,
+					"model_picker_enabled": true,
+					"supported_endpoints":  []string{config.UpstreamChatCompletionsPath},
+					"billing": map[string]any{
+						"is_premium": false,
+						"multiplier": 1.0,
+					},
+					"capabilities": map[string]any{
+						"family": "gpt-5-mini",
+						"type":   "chat",
+						"supports": map[string]any{
+							"reasoning_effort": []string{"low"},
+						},
+						"limits": map[string]any{
+							"max_context_window_tokens": 200000,
+							"max_prompt_tokens":         200000,
+							"max_output_tokens":         8000,
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	ctrl := buildTestController(t, func(deps *ControllerDeps) {
+		deps.Runtime.SettingsFunc = func() (runtimeconfig.Config, error) {
+			settings := runtimeconfig.Default()
+			settings.ListenAddr = "127.0.0.1:0"
+			settings.UpstreamBase = upstream.URL
+			return settings, nil
+		}
+		deps.Runtime.AuthFunc = func() (config.AuthConfig, error) {
+			return config.AuthConfig{
+				Default:  "alice",
+				Accounts: []config.Account{{User: "alice", GhToken: "token-alice"}},
+			}, nil
+		}
+		deps.Runtime.ModelLoader = nil
+		deps.Runtime.HTTPClient = upstream.Client()
+	})
+
+	got, err := ctrl.ModelService().Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("refresh models: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "gpt-5-mini" {
+		t.Fatalf("unexpected models: %+v", got)
+	}
+	if path != config.UpstreamModelsPath {
+		t.Fatalf("expected upstream /models path, got %q", path)
+	}
+	if authHeader != "Bearer token-alice" {
+		t.Fatalf("expected Authorization from default account, got %q", authHeader)
+	}
+}
+
+func TestServiceControllerModelRefreshUsesUpdatedDefaultAccount(t *testing.T) {
+	var (
+		mu         sync.Mutex
+		authHeader string
+		authConfig = config.AuthConfig{Default: "alice", Accounts: []config.Account{{User: "alice", GhToken: "token-alice"}, {User: "bob", GhToken: "token-bob"}}}
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authHeader = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{
+					"id":                   "gpt-5-mini",
+					"name":                 "GPT-5 Mini",
+					"vendor":               "OpenAI",
+					"version":              "1",
+					"preview":              false,
+					"model_picker_enabled": true,
+					"supported_endpoints":  []string{config.UpstreamChatCompletionsPath},
+					"billing": map[string]any{
+						"is_premium": false,
+						"multiplier": 1.0,
+					},
+					"capabilities": map[string]any{
+						"family": "gpt-5-mini",
+						"type":   "chat",
+						"supports": map[string]any{
+							"reasoning_effort": []string{"low"},
+						},
+						"limits": map[string]any{
+							"max_context_window_tokens": 200000,
+							"max_prompt_tokens":         200000,
+							"max_output_tokens":         8000,
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	ctrl := buildTestController(t, func(deps *ControllerDeps) {
+		deps.Runtime.SettingsFunc = func() (runtimeconfig.Config, error) {
+			settings := runtimeconfig.Default()
+			settings.ListenAddr = "127.0.0.1:0"
+			settings.UpstreamBase = upstream.URL
+			return settings, nil
+		}
+		deps.Runtime.AuthFunc = func() (config.AuthConfig, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return authConfig, nil
+		}
+		deps.Runtime.ModelLoader = nil
+		deps.Runtime.HTTPClient = upstream.Client()
+	})
+
+	if _, err := ctrl.ModelService().Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh models with first account: %v", err)
+	}
+	mu.Lock()
+	first := authHeader
+	authConfig.Default = "bob"
+	mu.Unlock()
+	if first != "Bearer token-alice" {
+		t.Fatalf("expected first refresh to use alice token, got %q", first)
+	}
+
+	if _, err := ctrl.ModelService().Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh models with second account: %v", err)
+	}
+	mu.Lock()
+	second := authHeader
+	mu.Unlock()
+	if second != "Bearer token-bob" {
+		t.Fatalf("expected second refresh to use bob token, got %q", second)
 	}
 }
 

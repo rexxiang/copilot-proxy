@@ -49,17 +49,11 @@ func TestBuildServerUsesDefaultSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildServer error: %v", err)
 	}
-	t.Cleanup(func() {
-		if runtime.runtime != nil && runtime.runtime.Server != nil {
-			_ = runtime.runtime.Server.Close()
-		}
-	})
-
-	if runtime.runtime == nil || runtime.runtime.Server == nil {
-		t.Fatalf("runtime server should be initialized")
+	if runtime.runtime == nil || runtime.runtime.Handler == nil {
+		t.Fatalf("runtime handler should be initialized")
 	}
-	if runtime.runtime.Server.Addr != appsettings.DefaultSettings().ListenAddr {
-		t.Fatalf("unexpected addr: %s", runtime.runtime.Server.Addr)
+	if runtime.runtime.ListenAddr != appsettings.DefaultSettings().ListenAddr {
+		t.Fatalf("unexpected addr: %s", runtime.runtime.ListenAddr)
 	}
 }
 

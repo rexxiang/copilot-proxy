@@ -13,13 +13,12 @@ import (
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
 	execute "copilot-proxy/internal/core/execute"
-	"copilot-proxy/internal/core/runtimeconfig"
 	"copilot-proxy/internal/core/runtimeapi"
+	"copilot-proxy/internal/core/runtimeconfig"
 	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/middleware/upstream"
 	"copilot-proxy/internal/models"
 	"copilot-proxy/internal/proxy"
-	"copilot-proxy/internal/server"
 	"copilot-proxy/internal/token"
 )
 
@@ -30,6 +29,8 @@ const (
 )
 
 var errModelCatalogRequired = errors.New("model catalog is required")
+var errRuntimeExecutorNotConfigured = errors.New("runtime executor is not configured")
+var errRuntimeResolveTokenNotConfigured = errors.New("runtime token resolver is not configured")
 
 // RuntimeDeps contains injectable dependencies for building the runtime.
 type RuntimeDeps struct {
@@ -45,10 +46,13 @@ type RuntimeDeps struct {
 
 // Runtime holds the HTTP server runtime resources.
 type Runtime struct {
-	Server        *server.Server
+	ListenAddr    string
+	Handler       http.Handler
 	RequestCloser interface{ Close() error }
 	HTTPClient    *http.Client
 	Observability middleware.ObservabilitySink
+	ModelCatalog  models.MutableCatalog
+	resolveToken  runtimeapi.ResolveTokenFunc
 	executor      *runtimeapi.Runtime
 }
 
@@ -58,7 +62,7 @@ func DefaultRuntimeDeps() RuntimeDeps {
 		SettingsFunc: func() (runtimeconfig.Config, error) {
 			return runtimeconfig.Default(), nil
 		},
-		AuthFunc:     config.LoadAuth,
+		AuthFunc: config.LoadAuth,
 	}
 }
 
@@ -149,16 +153,25 @@ func NewRuntimeWithContext(ctx context.Context, deps RuntimeDeps) (*Runtime, err
 	var requestCloser interface{ Close() error } = rateLimited
 
 	rt := &Runtime{
+		ListenAddr:    settings.ListenAddr,
 		HTTPClient:    deps.HTTPClient,
 		Observability: deps.Observability,
+		ModelCatalog:  modelCatalog,
+	}
+	rt.resolveToken = func(callCtx context.Context, accountRef string) (string, error) {
+		return resolveRuntimeToken(callCtx, deps.AuthFunc, tokens, accountRef)
 	}
 	rt.executor = runtimeapi.NewRuntime(runtimeapi.Options{
 		SettingsProvider: func(context.Context) (runtimeconfig.Config, error) {
 			return deps.SettingsFunc()
 		},
-		ResolveToken: func(callCtx context.Context, accountRef string) (string, error) {
-			return resolveRuntimeToken(callCtx, deps.AuthFunc, tokens, accountRef)
+		HTTPClientFactory: func() *http.Client {
+			if deps.HTTPClient != nil {
+				return deps.HTTPClient
+			}
+			return &http.Client{Timeout: 90 * time.Second}
 		},
+		ResolveToken: rt.resolveToken,
 		ResolveModel: func(_ context.Context, modelID string) (runtimeapi.ModelInfo, error) {
 			return resolveRuntimeModel(deps.SettingsFunc, modelCatalog, modelID)
 		},
@@ -167,7 +180,7 @@ func NewRuntimeWithContext(ctx context.Context, deps RuntimeDeps) (*Runtime, err
 		},
 	})
 
-	rt.Server = server.New(settings.ListenAddr, rt.buildExecuteHandler(proxyHandler))
+	rt.Handler = rt.buildExecuteHandler(proxyHandler)
 	rt.RequestCloser = requestCloser
 
 	return rt, nil
@@ -306,6 +319,32 @@ func preloadModels(
 	}
 	target.SetModels(loaded)
 	return nil
+}
+
+// RefreshModels reloads model catalog through runtime core capabilities.
+func (rt *Runtime) RefreshModels(ctx context.Context, accountRef string) ([]models.ModelInfo, error) {
+	if rt == nil || rt.executor == nil {
+		return nil, errRuntimeExecutorNotConfigured
+	}
+	if rt.resolveToken == nil {
+		return nil, errRuntimeResolveTokenNotConfigured
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tokenValue, err := rt.resolveToken(ctx, accountRef)
+	if err != nil {
+		return nil, fmt.Errorf("resolve token: %w", err)
+	}
+	items, err := rt.executor.FetchModels(ctx, tokenValue)
+	if err != nil {
+		return nil, fmt.Errorf("fetch models: %w", err)
+	}
+	if rt.ModelCatalog != nil {
+		rt.ModelCatalog.SetModels(items)
+	}
+	return items, nil
 }
 
 func (rt *Runtime) buildExecuteHandler(proxyHandler http.Handler) http.Handler {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"copilot-proxy/cmd/copilot-proxy/app/debounce"
 	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
 	"copilot-proxy/cmd/copilot-proxy/app/tui"
 	"copilot-proxy/internal/config"
@@ -17,7 +18,6 @@ import (
 	"copilot-proxy/internal/core/model"
 	"copilot-proxy/internal/core/observability"
 	"copilot-proxy/internal/core/stats"
-	"copilot-proxy/internal/debounce"
 	"copilot-proxy/internal/models"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -40,7 +40,6 @@ type MonitorDeps struct {
 	UserInfo       *core.UserInfo
 	AuthConfig     *config.AuthConfig
 	HTTPClient     *http.Client
-	ProxyInvoker   models.RequestDoer
 	LoadSettings   func() (appsettings.Settings, error)
 	ApplySettings  func(appsettings.Settings) (appsettings.Settings, error)
 }

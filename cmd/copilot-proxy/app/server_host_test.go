@@ -1,4 +1,4 @@
-package server
+package app
 
 import (
 	"context"
@@ -28,7 +28,7 @@ func (s *stubListener) Close() error              { s.closed.Store(true); return
 func (s *stubListener) Addr() net.Addr            { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0} }
 
 func TestServeWithRetryRetriesOnListenFailure(t *testing.T) {
-	srv := New(runtimeconfig.Default().ListenAddr, http.NewServeMux())
+	srv := newServerHost(runtimeconfig.Default().ListenAddr, http.NewServeMux())
 	t.Cleanup(func() {
 		_ = srv.Close()
 	})
@@ -56,7 +56,7 @@ func TestServeWithRetryRetriesOnListenFailure(t *testing.T) {
 }
 
 func TestServeWithRetryReturnsImmediatelyOnAddressInUse(t *testing.T) {
-	srv := New(runtimeconfig.Default().ListenAddr, http.NewServeMux())
+	srv := newServerHost(runtimeconfig.Default().ListenAddr, http.NewServeMux())
 	t.Cleanup(func() {
 		_ = srv.Close()
 	})

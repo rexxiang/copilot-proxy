@@ -1,4 +1,4 @@
-package server
+package app
 
 import (
 	"context"
@@ -15,11 +15,6 @@ import (
 	"copilot-proxy/internal/config"
 )
 
-type Server struct {
-	*http.Server
-	listenFn func(network, address string) (net.Listener, error)
-}
-
 const (
 	readHeaderTimeout  = 5 * time.Second
 	retryBackoffStart  = 200 * time.Millisecond
@@ -27,7 +22,12 @@ const (
 	retryBackoffFactor = 2
 )
 
-func New(addr string, handler http.Handler) *Server {
+type serverHost struct {
+	*http.Server
+	listenFn func(network, address string) (net.Listener, error)
+}
+
+func newServerHost(addr string, handler http.Handler) *serverHost {
 	mux := http.NewServeMux()
 	for _, path := range config.AllowedPaths {
 		mux.Handle(path, handler)
@@ -45,10 +45,10 @@ func New(addr string, handler http.Handler) *Server {
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
-	return &Server{Server: srv, listenFn: net.Listen}
+	return &serverHost{Server: srv, listenFn: net.Listen}
 }
 
-func (s *Server) Start(ctx context.Context) error {
+func (s *serverHost) Start(ctx context.Context) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
@@ -80,7 +80,7 @@ func isShutdownSignal(sig os.Signal) bool {
 	return sig == os.Interrupt || sig == syscall.SIGTERM
 }
 
-func (s *Server) shutdownWithTimeout(ctx context.Context) error {
+func (s *serverHost) shutdownWithTimeout(ctx context.Context) error {
 	ctxShutdown, cancel := context.WithTimeout(ctx, config.ShutdownTimeout)
 	defer cancel()
 	if err := s.Shutdown(ctxShutdown); err != nil {
@@ -89,7 +89,7 @@ func (s *Server) shutdownWithTimeout(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) serveWithRetry(ctx context.Context) error {
+func (s *serverHost) serveWithRetry(ctx context.Context) error {
 	backoff := retryBackoffStart
 	for {
 		select {

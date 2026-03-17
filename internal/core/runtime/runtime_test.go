@@ -93,8 +93,8 @@ func TestRuntimeBuildSucceedsWithoutAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build runtime: %v", err)
 	}
-	if rt == nil || rt.Server == nil {
-		t.Fatalf("expected runtime server to be initialized")
+	if rt == nil || rt.Handler == nil {
+		t.Fatalf("expected runtime handler to be initialized")
 	}
 	if got := catalog.GetModels(); len(got) != 0 {
 		t.Fatalf("expected empty model catalog without accounts, got %v", got)
@@ -200,7 +200,7 @@ func TestRuntimeUsesUpdatedExternalAuthAndSettingsState(t *testing.T) {
 	firstReq.Body = ioNopCloserBytes(requestBody)
 	firstReq.Header.Set("Content-Type", "application/json")
 	firstResp := httptest.NewRecorder()
-	rt.Server.Handler.ServeHTTP(firstResp, firstReq)
+	rt.Handler.ServeHTTP(firstResp, firstReq)
 	if firstResp.Code != http.StatusOK {
 		t.Fatalf("first response code = %d, want %d", firstResp.Code, http.StatusOK)
 	}
@@ -215,7 +215,7 @@ func TestRuntimeUsesUpdatedExternalAuthAndSettingsState(t *testing.T) {
 	secondReq.Body = ioNopCloserBytes(requestBody)
 	secondReq.Header.Set("Content-Type", "application/json")
 	secondResp := httptest.NewRecorder()
-	rt.Server.Handler.ServeHTTP(secondResp, secondReq)
+	rt.Handler.ServeHTTP(secondResp, secondReq)
 	if secondResp.Code != http.StatusOK {
 		t.Fatalf("second response code = %d, want %d", secondResp.Code, http.StatusOK)
 	}

@@ -4,15 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
+	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
-	"copilot-proxy/internal/core/kernel"
 	coremodel "copilot-proxy/internal/core/model"
 	"copilot-proxy/internal/core/observability"
 	"copilot-proxy/internal/core/runtime"
 	"copilot-proxy/internal/core/runtimeconfig"
 	corestats "copilot-proxy/internal/core/stats"
-	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/models"
 )
 
@@ -27,14 +28,19 @@ type ControllerDeps struct {
 	PersistentCollector *observability.PersistentCollector
 }
 
-// ServiceController orchestrates the kernel, runtime, and core services.
+// ServiceController orchestrates runtime lifecycle and core services.
 type ServiceController struct {
-	runtime    *runtime.Runtime
-	kernel     *kernel.Kernel
-	collector  *observability.Collector
-	persistent *observability.PersistentCollector
-	model      *coremodel.Service
-	stats      *corestats.Service
+	mu                sync.Mutex
+	startCtx          context.Context
+	state             core.ServiceState
+	host              *serverHost
+	runtime           *runtime.Runtime
+	collector         *observability.Collector
+	persistent        *observability.PersistentCollector
+	model             *coremodel.Service
+	stats             *corestats.Service
+	obs               *observability.Observability
+	stopEventReported bool
 }
 
 // NewServiceController builds the controller with the provided dependencies.
@@ -63,47 +69,110 @@ func NewServiceController(ctx context.Context, deps ControllerDeps) (*ServiceCon
 	if err != nil {
 		return nil, fmt.Errorf("build runtime: %w", err)
 	}
+	if rt == nil || rt.Handler == nil {
+		return nil, errors.New("runtime handler is not configured")
+	}
 
 	obs := collector.Observability()
 	if obs == nil {
 		return nil, errors.New("collector missing observability")
 	}
 
-	kern := kernel.NewKernel(rt, obs)
-	proxyAddr := rt.Server.Addr
-	if proxyAddr == "" {
-		proxyAddr = runtimeconfig.Default().ListenAddr
+	modelLoader := deps.Runtime.ModelLoader
+	if modelLoader == nil {
+		modelLoader = runtimeModelLoader{runtime: rt}
 	}
-	modelProxy := "http://" + proxyAddr
+
+	listenAddr := rt.ListenAddr
+	if listenAddr == "" {
+		listenAddr = runtimeconfig.Default().ListenAddr
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	return &ServiceController{
+		startCtx:   ctx,
+		state:      core.StateStopped,
+		host:       newServerHost(listenAddr, rt.Handler),
 		runtime:    rt,
-		kernel:     kern,
 		collector:  collector,
 		persistent: deps.PersistentCollector,
-		model:      coremodel.NewService(deps.Runtime.ModelCatalog, deps.Runtime.ModelLoader, deps.Runtime.HTTPClient, modelProxy),
+		model:      coremodel.NewService(deps.Runtime.ModelCatalog, modelLoader, deps.Runtime.HTTPClient, ""),
 		stats:      corestats.NewService(obs),
+		obs:        obs,
 	}, nil
 }
 
-// Start runs the kernel and blocks until the server stops.
+// Start runs the controller lifecycle and blocks until the server stops.
 func (c *ServiceController) Start() error {
-	return c.kernel.Start()
+	c.mu.Lock()
+	if c.state == core.StateRunning {
+		c.mu.Unlock()
+		return nil
+	}
+	if c.host == nil {
+		c.mu.Unlock()
+		return errors.New("runtime server host is not configured")
+	}
+	c.state = core.StateRunning
+	c.stopEventReported = false
+	c.addEventLocked(core.KernelEventTypeStart, "kernel started")
+	host := c.host
+	startCtx := c.startCtx
+	c.mu.Unlock()
+
+	if startCtx == nil {
+		startCtx = context.Background()
+	}
+	err := host.Start(startCtx)
+
+	c.mu.Lock()
+	c.state = core.StateStopped
+	c.recordStopEventLocked()
+	c.mu.Unlock()
+	if err != nil && !isExpectedShutdownError(err) {
+		return err
+	}
+	return nil
 }
 
-// Stop shuts down the kernel/server.
+// Stop shuts down the server host and runtime resources.
 func (c *ServiceController) Stop() error {
-	return c.kernel.Stop()
+	c.mu.Lock()
+	if c.state == core.StateStopped {
+		c.mu.Unlock()
+		return nil
+	}
+	host := c.host
+	var reqCloser interface{ Close() error }
+	if c.runtime != nil {
+		reqCloser = c.runtime.RequestCloser
+	}
+	c.mu.Unlock()
+
+	if host != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), config.ShutdownTimeout)
+		defer cancel()
+		_ = host.Shutdown(ctx)
+		_ = host.Close()
+	}
+	if reqCloser != nil {
+		_ = reqCloser.Close()
+	}
+
+	c.mu.Lock()
+	c.state = core.StateStopped
+	c.recordStopEventLocked()
+	c.mu.Unlock()
+	return nil
 }
 
-// Status reports the kernel state.
+// Status reports the service state.
 func (c *ServiceController) Status() core.ServiceState {
-	return c.kernel.Status()
-}
-
-// Invoke runs an in-process request through the kernel.
-func (c *ServiceController) Invoke(r core.RequestInvocation) (core.ResponsePayload, error) {
-	return c.kernel.Invoke(r)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state
 }
 
 // Runtime returns the underlying runtime.
@@ -129,4 +198,30 @@ func (c *ServiceController) ModelService() *coremodel.Service {
 // StatsService returns the stats service.
 func (c *ServiceController) StatsService() *corestats.Service {
 	return c.stats
+}
+
+func (c *ServiceController) addEventLocked(eventType, message string) {
+	if c.obs == nil {
+		return
+	}
+	c.obs.AddEvent(observability.Event{Timestamp: time.Now(), Type: eventType, Message: message})
+}
+
+func (c *ServiceController) recordStopEventLocked() {
+	if c.stopEventReported {
+		return
+	}
+	c.addEventLocked(core.KernelEventTypeStop, "kernel stopped")
+	c.stopEventReported = true
+}
+
+type runtimeModelLoader struct {
+	runtime *runtime.Runtime
+}
+
+func (l runtimeModelLoader) Load(ctx context.Context) ([]models.ModelInfo, error) {
+	if l.runtime == nil {
+		return nil, errors.New("runtime model loader is not configured")
+	}
+	return l.runtime.RefreshModels(ctx, "")
 }

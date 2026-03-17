@@ -106,15 +106,18 @@ func runServerWithTUI(enableTUI bool) error {
 	if useTUI {
 		return runWithTUI(ctx, ctrl)
 	}
-	if runtime == nil || runtime.Server == nil {
+	if runtime == nil || runtime.Handler == nil {
 		return errRuntimeServerRequired
 	}
-	srv := runtime.Server
+	addr := runtime.ListenAddr
+	if addr == "" {
+		addr = runtimeconfig.Default().ListenAddr
+	}
 	defer func() {
 		_ = ctrl.Stop()
 	}()
 
-	if _, err := fmt.Fprintf(os.Stdout, "Listening on %s\n", srv.Addr); err != nil {
+	if _, err := fmt.Fprintf(os.Stdout, "Listening on %s\n", addr); err != nil {
 		return fmt.Errorf("write listening message: %w", err)
 	}
 
@@ -136,8 +139,12 @@ func runWithTUI(ctx context.Context, ctrl *ServiceController) error {
 		return errRuntimeServerRequired
 	}
 	runtime := ctrl.Runtime()
-	if runtime == nil || runtime.Server == nil {
+	if runtime == nil || runtime.Handler == nil {
 		return errRuntimeServerRequired
+	}
+	addr := runtime.ListenAddr
+	if addr == "" {
+		addr = runtimeconfig.Default().ListenAddr
 	}
 	serverErr := make(chan error, 1)
 	go func(localCtrl *ServiceController) {
@@ -160,7 +167,7 @@ func runWithTUI(ctx context.Context, ctrl *ServiceController) error {
 	if err != nil {
 		return fmt.Errorf("load settings: %w", err)
 	}
-	currentSettings.ListenAddr = runtime.Server.Addr
+	currentSettings.ListenAddr = addr
 
 	coordinator := NewSettingsRuntimeCoordinator(&RuntimeCoordinatorConfig{
 		InitialSettings: currentSettings,
@@ -202,7 +209,7 @@ func runWithTUI(ctx context.Context, ctrl *ServiceController) error {
 	if modelSvc != nil {
 		monitorDeps.Models = modelSvc.List()
 	}
-	model := NewMonitorModel(&monitorDeps, runtime.Server.Addr)
+	model := NewMonitorModel(&monitorDeps, addr)
 
 	// Run TUI
 	program := tea.NewProgram(&model, tea.WithAltScreen())

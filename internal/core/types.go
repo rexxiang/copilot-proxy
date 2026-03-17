@@ -21,8 +21,7 @@ const (
 )
 
 var (
-	ErrNotStarted        = errors.New("core: service not started")
-	ErrInvalidInvocation = errors.New("core: invalid invocation")
+	ErrNotStarted = errors.New("core: service not started")
 )
 
 // ServiceState represents the runtime state of a core service controller.
@@ -33,12 +32,11 @@ const (
 	StateRunning ServiceState = "running"
 )
 
-// ServiceController orchestrates the kernel lifecycle.
+// ServiceController orchestrates service lifecycle.
 type ServiceController interface {
 	Start() error
 	Stop() error
 	Status() ServiceState
-	Invoke(r RequestInvocation) (ResponsePayload, error)
 }
 
 // RequestInvocation describes an in-process HTTP invocation.
