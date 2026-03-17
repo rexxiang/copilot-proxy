@@ -1,11 +1,9 @@
 package upstream
 
 import (
-	"fmt"
 	"net/http"
-	"strings"
 
-	"copilot-proxy/internal/core/endpoint/transform"
+	endpointflow "copilot-proxy/internal/core/endpoint/flow"
 	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/models"
 	"copilot-proxy/internal/reasoning"
@@ -14,11 +12,9 @@ import (
 // MessagesTranslateMiddleware atomically handles endpoint-related request processing.
 type MessagesTranslateMiddleware struct {
 	catalog                models.Catalog
-	selector               *models.Selector
 	pathMapping            map[string]string
 	reasoningPolicies      []reasoning.Policy
 	runtimeOptionsProvider func() MessagesTranslateRuntimeOptions
-	codec                  transform.EndpointCodec
 }
 
 type MessagesTranslateRuntimeOptions struct {
@@ -35,18 +31,9 @@ func NewMessagesTranslateWithRuntimeOptions(
 	parsedPolicies, _ := reasoning.EffectivePoliciesFromMap(nil)
 	return &MessagesTranslateMiddleware{
 		catalog:                catalog,
-		selector:               models.NewSelector(),
 		pathMapping:            mapping,
 		reasoningPolicies:      parsedPolicies,
 		runtimeOptionsProvider: provider,
-		codec: transform.EndpointCodec{
-			MessagesToChatRequest:       transform.MessagesToChatRequest,
-			ChatToMessagesResponse:      transform.ChatToMessagesResponse,
-			ChatSSEToMessages:           transform.TranslateChatSSEToMessages,
-			MessagesToResponsesRequest:  transform.MessagesToResponsesRequest,
-			ResponsesToMessagesResponse: transform.ResponsesToMessagesResponse,
-			ResponsesSSEToMessages:      transform.TranslateResponsesSSEToMessages,
-		},
 	}
 }
 
@@ -57,75 +44,28 @@ func (m *MessagesTranslateMiddleware) Handle(ctx *middleware.Context, next middl
 
 	req := ctx.Request
 	rc := ensureRequestContext(req)
-	selector := m.selector
-	reasoningPolicies := cloneReasoningPolicies(m.reasoningPolicies)
+	runtimeOptions := endpointflow.RuntimeOptions{
+		ReasoningPolicies: endpointflow.CloneReasoningPolicies(m.reasoningPolicies),
+	}
 	if m.runtimeOptionsProvider != nil {
-		runtimeOptions := m.runtimeOptionsProvider()
-		if runtimeOptions.ClaudeHaikuFallbackModels != nil {
-			selector = models.NewSelectorWithConfig(models.SelectorConfig{
-				ClaudeHaikuFallbackModels: runtimeOptions.ClaudeHaikuFallbackModels,
-			})
+		provided := m.runtimeOptionsProvider()
+		if provided.ClaudeHaikuFallbackModels != nil {
+			runtimeOptions.ClaudeHaikuFallbackModels = provided.ClaudeHaikuFallbackModels
 		}
-		if runtimeOptions.ReasoningPolicies != nil {
-			reasoningPolicies = cloneReasoningPolicies(runtimeOptions.ReasoningPolicies)
+		if provided.ReasoningPolicies != nil {
+			runtimeOptions.ReasoningPolicies = endpointflow.CloneReasoningPolicies(provided.ReasoningPolicies)
 		}
 	}
-	transform.RewriteModel(req, rc, m.catalog, selector)
-	transform.SelectTargetEndpoint(req, rc)
-	ctx.Request = withRequestContext(req, rc)
-
-	codec := m.codec
-	modelName := strings.TrimSpace(rc.Info.MappedModel)
-	if modelName == "" {
-		modelName = strings.TrimSpace(rc.Info.Model)
-	}
-	supportedEfforts := cloneReasoningEfforts(rc.Info.SupportedReasoningEffort)
-	policyForChat, _ := reasoning.MatchPolicy(reasoningPolicies, modelName, reasoning.TargetChat)
-	policyForResponses, _ := reasoning.MatchPolicy(reasoningPolicies, modelName, reasoning.TargetResponses)
-
-	codec.MessagesToChatRequest = func(body []byte) ([]byte, bool) {
-		return transform.MessagesToChatRequestWithOptions(body, transform.MessagesReasoningOptions{
-			PolicyEffort:             policyForChat,
-			SupportedReasoningEffort: supportedEfforts,
-		})
-	}
-	codec.MessagesToResponsesRequest = func(body []byte) ([]byte, bool) {
-		return transform.MessagesToResponsesRequestWithOptions(body, transform.MessagesReasoningOptions{
-			PolicyEffort:             policyForResponses,
-			SupportedReasoningEffort: supportedEfforts,
-		})
-	}
-
-	resp, err := transform.ApplyEndpointTransform(ctx.Request, rc, codec, func(req *http.Request) (*http.Response, error) {
-		ctx.Request = req
-		rc, ok := middleware.RequestContextFrom(req.Context())
-		if !ok || rc == nil {
-			rc = ensureRequestContext(req)
-			ctx.Request = withRequestContext(req, rc)
-		}
-		transform.ApplyUpstreamPath(req, rc, m.pathMapping)
+	resp, err := endpointflow.ApplyCatalogEndpointTransform(req, rc, m.catalog, m.pathMapping, runtimeOptions, func(req *http.Request, rc *middleware.RequestContext) (*http.Response, error) {
+		ctx.Request = withRequestContext(req, rc)
 		return next()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("apply endpoint transform: %w", err)
+		return nil, err
 	}
 	return resp, nil
 }
 
-func cloneReasoningEfforts(items []string) []string {
-	if len(items) == 0 {
-		return nil
-	}
-	cloned := make([]string, len(items))
-	copy(cloned, items)
-	return cloned
-}
-
 func cloneReasoningPolicies(items []reasoning.Policy) []reasoning.Policy {
-	if len(items) == 0 {
-		return nil
-	}
-	cloned := make([]reasoning.Policy, len(items))
-	copy(cloned, items)
-	return cloned
+	return endpointflow.CloneReasoningPolicies(items)
 }

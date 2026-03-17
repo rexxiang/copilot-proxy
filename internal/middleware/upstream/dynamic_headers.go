@@ -3,6 +3,7 @@ package upstream
 import (
 	"net/http"
 
+	endpointflow "copilot-proxy/internal/core/endpoint/flow"
 	"copilot-proxy/internal/middleware"
 )
 
@@ -21,15 +22,6 @@ func (m DynamicHeadersMiddleware) Handle(ctx *middleware.Context, next middlewar
 		return next()
 	}
 
-	if rc.Info.IsAgent {
-		req.Header.Set("X-Initiator", "agent")
-	} else {
-		req.Header.Set("X-Initiator", "user")
-	}
-
-	if rc.Info.IsVision {
-		req.Header.Set("Copilot-Vision-Request", "true")
-	}
-
+	endpointflow.ApplyDynamicHeaders(req.Header, rc.Info)
 	return next()
 }

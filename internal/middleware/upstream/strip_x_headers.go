@@ -2,8 +2,8 @@ package upstream
 
 import (
 	"net/http"
-	"strings"
 
+	endpointflow "copilot-proxy/internal/core/endpoint/flow"
 	"copilot-proxy/internal/middleware"
 )
 
@@ -19,10 +19,6 @@ func (m StripXHeadersMiddleware) Handle(ctx *middleware.Context, next middleware
 	if ctx == nil || ctx.Request == nil {
 		return next()
 	}
-	for key := range ctx.Request.Header {
-		if strings.HasPrefix(strings.ToLower(key), "x-") {
-			ctx.Request.Header.Del(key)
-		}
-	}
+	endpointflow.StripClientXHeaders(ctx.Request.Header)
 	return next()
 }

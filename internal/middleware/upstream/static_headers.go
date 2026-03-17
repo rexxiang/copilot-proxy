@@ -3,6 +3,7 @@ package upstream
 import (
 	"net/http"
 
+	endpointflow "copilot-proxy/internal/core/endpoint/flow"
 	"copilot-proxy/internal/middleware"
 )
 
@@ -28,8 +29,6 @@ func (m StaticHeadersMiddleware) Handle(ctx *middleware.Context, next middleware
 	if m.headersProvider != nil {
 		headers = m.headersProvider()
 	}
-	for key, value := range headers {
-		req.Header.Set(key, value)
-	}
+	endpointflow.ApplyStaticHeaders(req.Header, headers, true)
 	return next()
 }
