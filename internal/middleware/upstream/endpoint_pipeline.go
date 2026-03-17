@@ -7,9 +7,11 @@ import (
 	"copilot-proxy/internal/reasoning"
 	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
 	models "copilot-proxy/internal/runtime/model"
+	runtimemiddleware "copilot-proxy/internal/runtime/server/middleware"
 )
 
-// MessagesTranslateMiddleware atomically handles endpoint-related request processing.
+// MessagesTranslateMiddleware remains as a compatibility shim while endpoint middleware
+// implementation has moved to internal/runtime/server/middleware.
 type MessagesTranslateMiddleware struct {
 	catalog                models.Catalog
 	pathMapping            map[string]string
@@ -17,10 +19,8 @@ type MessagesTranslateMiddleware struct {
 	runtimeOptionsProvider func() MessagesTranslateRuntimeOptions
 }
 
-type MessagesTranslateRuntimeOptions struct {
-	ClaudeHaikuFallbackModels []string
-	ReasoningPolicies         []reasoning.Policy
-}
+// MessagesTranslateRuntimeOptions controls endpoint routing and translation behavior per request.
+type MessagesTranslateRuntimeOptions = runtimemiddleware.MessagesTranslateRuntimeOptions
 
 // NewMessagesTranslateWithRuntimeOptions builds endpoint middleware with per-request runtime options.
 func NewMessagesTranslateWithRuntimeOptions(
@@ -38,32 +38,26 @@ func NewMessagesTranslateWithRuntimeOptions(
 }
 
 func (m *MessagesTranslateMiddleware) Handle(ctx *middleware.Context, next middleware.Next) (*http.Response, error) {
-	if ctx == nil || ctx.Request == nil {
+	if m == nil {
 		return next()
 	}
 
-	req := ctx.Request
-	rc := ensureRequestContext(req)
-	runtimeOptions := endpointflow.RuntimeOptions{
-		ReasoningPolicies: endpointflow.CloneReasoningPolicies(m.reasoningPolicies),
-	}
-	if m.runtimeOptionsProvider != nil {
-		provided := m.runtimeOptionsProvider()
-		if provided.ClaudeHaikuFallbackModels != nil {
-			runtimeOptions.ClaudeHaikuFallbackModels = provided.ClaudeHaikuFallbackModels
+	delegate := runtimemiddleware.NewMessagesTranslateWithRuntimeOptions(m.catalog, m.pathMapping, func() runtimemiddleware.MessagesTranslateRuntimeOptions {
+		opts := runtimemiddleware.MessagesTranslateRuntimeOptions{
+			ReasoningPolicies: cloneReasoningPolicies(m.reasoningPolicies),
 		}
-		if provided.ReasoningPolicies != nil {
-			runtimeOptions.ReasoningPolicies = endpointflow.CloneReasoningPolicies(provided.ReasoningPolicies)
+		if m.runtimeOptionsProvider != nil {
+			provided := m.runtimeOptionsProvider()
+			if provided.ClaudeHaikuFallbackModels != nil {
+				opts.ClaudeHaikuFallbackModels = provided.ClaudeHaikuFallbackModels
+			}
+			if provided.ReasoningPolicies != nil {
+				opts.ReasoningPolicies = cloneReasoningPolicies(provided.ReasoningPolicies)
+			}
 		}
-	}
-	resp, err := endpointflow.ApplyCatalogEndpointTransform(req, rc, m.catalog, m.pathMapping, runtimeOptions, func(req *http.Request, rc *middleware.RequestContext) (*http.Response, error) {
-		ctx.Request = withRequestContext(req, rc)
-		return next()
+		return opts
 	})
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return delegate.Handle(ctx, next)
 }
 
 func cloneReasoningPolicies(items []reasoning.Policy) []reasoning.Policy {
