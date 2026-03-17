@@ -16,9 +16,9 @@ import (
 	runtimeapi "copilot-proxy/internal/runtime/api"
 	runtimeconfig "copilot-proxy/internal/runtime/config"
 	execute "copilot-proxy/internal/runtime/execute"
+	identitytoken "copilot-proxy/internal/runtime/identity/token"
 	models "copilot-proxy/internal/runtime/model"
 	core "copilot-proxy/internal/runtime/types"
-	"copilot-proxy/internal/token"
 )
 
 const (
@@ -206,7 +206,7 @@ func resolveRuntimeToken(
 	if err != nil {
 		return "", err
 	}
-	return token.Resolve(ctx, account)
+	return identitytoken.Resolve(ctx, account)
 }
 
 func resolveRuntimeAccount(auth runtimeconfig.AuthConfig, accountRef string) (runtimeconfig.Account, error) {
@@ -291,7 +291,7 @@ func preloadModels(
 		}
 		return fmt.Errorf("resolve default account: %w", err)
 	}
-	tokenValue, err := token.Resolve(ctx, account)
+	tokenValue, err := identitytoken.Resolve(ctx, account)
 	if err != nil {
 		return fmt.Errorf("fetch token: %w", err)
 	}
