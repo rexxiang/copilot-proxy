@@ -37,6 +37,21 @@ func TestModelServiceRefreshLoaderError(t *testing.T) {
 	}
 }
 
+func TestNewServiceWithoutCatalogUsesPrivateCatalog(t *testing.T) {
+	first := NewService(nil, nil, nil, "")
+	second := NewService(nil, nil, nil, "")
+
+	firstCatalog, ok := first.catalog.(interface{ SetModels([]models.ModelInfo) })
+	if !ok {
+		t.Fatalf("expected first service catalog to support SetModels")
+	}
+	firstCatalog.SetModels([]models.ModelInfo{{ID: "gpt-private"}})
+
+	if got := second.List(); len(got) != 0 {
+		t.Fatalf("expected second service to keep an isolated catalog, got %+v", got)
+	}
+}
+
 func TestModelServiceRefreshViaProxyUsesSingleModelsPath(t *testing.T) {
 	catalog := &stubCatalog{}
 	var requestedPath string

@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 
-	"copilot-proxy/internal/cli"
+	"copilot-proxy/cmd/copilot-proxy/app"
 )
 
 func main() {
-	if err := cli.Run(os.Args[1:]); err != nil {
+	if err := app.Run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

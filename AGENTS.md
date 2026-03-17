@@ -64,9 +64,9 @@ Default listen address: `http://127.0.0.1:4000`
 
 ```text
 cmd/copilot-proxy/     CLI entry
+  app/                 command routing, server wiring, Bubble Tea monitor, app-owned state
 cmd/copilot-proxy-c/   C ABI entry
 internal/
-  cli/                 command routing, server wiring, Bubble Tea monitor, app-owned state
   auth/                GitHub device flow + user lookup
   config/              auth/settings persistence and constants
   core/
@@ -88,7 +88,7 @@ internal/
 ## Core Runtime Rules
 
 - **Auth source of truth**: `~/.config/copilot-proxy/auth.json`, with `@default` as active account.
-- **CLI/TUI state ownership**: login sessions, active-account edits, and settings editing state live in the CLI/TUI layer and persist through config callbacks.
+- **CLI/TUI state ownership**: login sessions, active-account edits, settings editing state, and model catalog state live in the app layer and persist through config callbacks or injected state holders.
 - **Runtime statelessness**: `internal/core/runtimeapi` and the C ABI resolve auth/settings/models through callbacks/providers instead of holding mutable app state.
 - **Monitor views**: Stats / Models / Logs, refreshed by periodic tick.
 - **Stats account modal** (`a`, Stats view only):
@@ -116,6 +116,6 @@ internal/
 
 - Keep changes focused and minimal.
 - Follow existing middleware/TUI patterns before introducing new structure.
-- Prefer dependency injection already used in `internal/cli/server.go` for testability.
+- Prefer dependency injection already used in `cmd/copilot-proxy/app/server.go` for testability.
 - When changing auth, monitor, SSE/log behavior, add/adjust tests in the same area.
 - Avoid broad refactors unless explicitly requested.

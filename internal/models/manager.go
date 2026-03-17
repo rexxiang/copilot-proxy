@@ -5,31 +5,16 @@ import (
 	"time"
 )
 
-// Manager provides process-wide caching for models data.
+// Manager provides caller-owned caching for models data.
 type Manager struct {
 	mu       sync.RWMutex
 	models   []ModelInfo
 	loadedAt time.Time
 }
 
-var (
-	defaultManager     *Manager
-	defaultManagerOnce sync.Once
-)
-
-// DefaultManager returns the global singleton Manager instance.
-func DefaultManager() *Manager {
-	defaultManagerOnce.Do(func() {
-		defaultManager = new(Manager)
-		defaultManager.models = nil
-		defaultManager.loadedAt = time.Time{}
-	})
-	return defaultManager
-}
-
-// DefaultModelsManager is kept for compatibility and delegates to DefaultManager.
-func DefaultModelsManager() *Manager {
-	return DefaultManager()
+// NewManager returns a fresh catalog instance owned by the caller.
+func NewManager() *Manager {
+	return &Manager{}
 }
 
 // GetModels returns a copy of the cached models.

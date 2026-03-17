@@ -28,6 +28,8 @@ const (
 	defaultModelTimeout  = 5 * time.Second
 )
 
+var errModelCatalogRequired = errors.New("model catalog is required")
+
 // RuntimeDeps contains injectable dependencies for building the runtime.
 type RuntimeDeps struct {
 	HTTPClient    *http.Client
@@ -36,7 +38,7 @@ type RuntimeDeps struct {
 	AuthFunc      func() (config.AuthConfig, error)
 	Observability middleware.ObservabilitySink
 	TokenManager  middleware.TokenProvider
-	ModelCatalog  models.Catalog
+	ModelCatalog  models.MutableCatalog
 	ModelLoader   models.Loader
 }
 
@@ -109,7 +111,7 @@ func NewRuntimeWithContext(ctx context.Context, deps RuntimeDeps) (*Runtime, err
 
 	modelCatalog := deps.ModelCatalog
 	if modelCatalog == nil {
-		modelCatalog = models.DefaultModelsManager()
+		return nil, errModelCatalogRequired
 	}
 	if err := preloadModels(ctx, &settings, &auth, tokens, deps.HTTPClient, settings.RequiredHeadersWithDefaults(), modelCatalog, deps.ModelLoader); err != nil {
 		return nil, err
@@ -217,7 +219,7 @@ func resolveRuntimeAccount(auth config.AuthConfig, accountRef string) (config.Ac
 
 func resolveRuntimeModel(
 	loadSettings func() (config.Settings, error),
-	catalog models.Catalog,
+	catalog models.MutableCatalog,
 	modelID string,
 ) (runtimeapi.ModelInfo, error) {
 	resolved := runtimeapi.ModelInfo{ID: strings.TrimSpace(modelID)}
@@ -252,7 +254,7 @@ func preloadModels(
 	tokens middleware.TokenProvider,
 	client *http.Client,
 	baseHeaders map[string]string,
-	catalog models.Catalog,
+	catalog models.MutableCatalog,
 	loader models.Loader,
 ) error {
 	if settings == nil || auth == nil {

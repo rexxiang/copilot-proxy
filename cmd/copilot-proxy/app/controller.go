@@ -1,4 +1,4 @@
-package controller
+package app
 
 import (
 	"context"
@@ -44,7 +44,7 @@ func NewServiceController(ctx context.Context, deps ControllerDeps) (*ServiceCon
 	}
 
 	if deps.Runtime.ModelCatalog == nil {
-		deps.Runtime.ModelCatalog = models.DefaultModelsManager()
+		deps.Runtime.ModelCatalog = models.NewManager()
 	}
 
 	if deps.Runtime.SettingsFunc == nil {

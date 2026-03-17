@@ -1,4 +1,4 @@
-package cli
+package app
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/cli/tui"
+	"copilot-proxy/cmd/copilot-proxy/app/tui"
 	"copilot-proxy/internal/config"
 	core "copilot-proxy/internal/core"
 	"copilot-proxy/internal/core/account"

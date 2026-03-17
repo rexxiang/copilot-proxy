@@ -1,4 +1,4 @@
-package cli
+package app
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"copilot-proxy/internal/cli/tui"
+	"copilot-proxy/cmd/copilot-proxy/app/tui"
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
 	"copilot-proxy/internal/core/account"
@@ -31,17 +31,17 @@ var errSettingsApplyResultNil = errors.New("settings apply result is nil")
 
 // MonitorDeps contains dependencies for creating a MonitorModel.
 type MonitorDeps struct {
-	Collector       statsCollector
-	StatsService    statsService
-	ModelService    modelService
-	AccountService  accountService
-	Models          []models.ModelInfo
-	UserInfo        *core.UserInfo
-	AuthConfig      *config.AuthConfig
-	HTTPClient      *http.Client
-	ProxyInvoker    models.RequestDoer
-	LoadSettings    func() (config.Settings, error)
-	ApplySettings   func(config.Settings) (config.Settings, error)
+	Collector      statsCollector
+	StatsService   statsService
+	ModelService   modelService
+	AccountService accountService
+	Models         []models.ModelInfo
+	UserInfo       *core.UserInfo
+	AuthConfig     *config.AuthConfig
+	HTTPClient     *http.Client
+	ProxyInvoker   models.RequestDoer
+	LoadSettings   func() (config.Settings, error)
+	ApplySettings  func(config.Settings) (config.Settings, error)
 }
 
 // monitorKeyMap defines keybindings for the monitor TUI.
@@ -313,7 +313,7 @@ func resolveModelService(deps *MonitorDeps, serverAddr string) modelService {
 	if !strings.HasPrefix(proxyURL, "http") {
 		proxyURL = "http://" + proxyURL
 	}
-	return model.NewService(models.DefaultModelsManager(), nil, client, proxyURL)
+	return model.NewService(models.NewManager(), nil, client, proxyURL)
 }
 
 func resolveAccountService(deps *MonitorDeps) accountService {

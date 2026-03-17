@@ -1,4 +1,4 @@
-package controller_test
+package app
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
-	"copilot-proxy/internal/core/controller"
 	"copilot-proxy/internal/core/observability"
 	"copilot-proxy/internal/core/runtime"
 	"copilot-proxy/internal/models"
@@ -23,14 +22,14 @@ func (l testLoader) Load(ctx context.Context) ([]models.ModelInfo, error) {
 	return l.models, nil
 }
 
-func newTestController(t *testing.T) *controller.ServiceController {
+func newTestController(t *testing.T) *ServiceController {
 	return buildTestController(t, nil)
 }
 
-func buildTestController(t *testing.T, modify func(*controller.ControllerDeps)) *controller.ServiceController {
+func buildTestController(t *testing.T, modify func(*ControllerDeps)) *ServiceController {
 	t.Helper()
 	ctx := context.Background()
-	deps := controller.ControllerDeps{
+	deps := ControllerDeps{
 		Runtime: runtime.RuntimeDeps{
 			SettingsFunc: func() (config.Settings, error) {
 				settings := config.DefaultSettings()
@@ -40,14 +39,14 @@ func buildTestController(t *testing.T, modify func(*controller.ControllerDeps)) 
 			AuthFunc: func() (config.AuthConfig, error) {
 				return config.AuthConfig{}, nil
 			},
-			ModelCatalog: models.DefaultModelsManager(),
+			ModelCatalog: models.NewManager(),
 			ModelLoader:  testLoader{models: []models.ModelInfo{{ID: "test-model"}}},
 		},
 	}
 	if modify != nil {
 		modify(&deps)
 	}
-	ctrl, err := controller.NewServiceController(ctx, deps)
+	ctrl, err := NewServiceController(ctx, deps)
 	if err != nil {
 		t.Fatalf("build controller: %v", err)
 	}
@@ -113,7 +112,7 @@ func TestServiceControllerStartStopIdempotent(t *testing.T) {
 
 func TestServiceControllerCollectorInjection(t *testing.T) {
 	custom := observability.NewCollector(5)
-	ctrl := buildTestController(t, func(deps *controller.ControllerDeps) {
+	ctrl := buildTestController(t, func(deps *ControllerDeps) {
 		deps.Collector = custom
 	})
 	if got := ctrl.Collector(); got != custom {
@@ -124,7 +123,7 @@ func TestServiceControllerCollectorInjection(t *testing.T) {
 func TestServiceControllerPersistentCollectorExposure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metrics.json")
 	persistent := observability.NewPersistentCollector(5, path)
-	ctrl := buildTestController(t, func(deps *controller.ControllerDeps) {
+	ctrl := buildTestController(t, func(deps *ControllerDeps) {
 		deps.PersistentCollector = persistent
 	})
 	if got := ctrl.PersistentCollector(); got != persistent {
@@ -132,7 +131,7 @@ func TestServiceControllerPersistentCollectorExposure(t *testing.T) {
 	}
 }
 
-func startControllerAsync(t *testing.T, ctrl *controller.ServiceController) <-chan error {
+func startControllerAsync(t *testing.T, ctrl *ServiceController) <-chan error {
 	t.Helper()
 	errCh := make(chan error, 1)
 	go func() {
@@ -142,7 +141,7 @@ func startControllerAsync(t *testing.T, ctrl *controller.ServiceController) <-ch
 	return errCh
 }
 
-func stopControllerAndWait(t *testing.T, ctrl *controller.ServiceController, errCh <-chan error) {
+func stopControllerAndWait(t *testing.T, ctrl *ServiceController, errCh <-chan error) {
 	t.Helper()
 	if err := ctrl.Stop(); err != nil {
 		t.Fatalf("stop: %v", err)

@@ -25,9 +25,10 @@ Default listen address: `127.0.0.1:4000`.
 - `internal/core/runtimeapi` is the stateless operation entry and type surface shared by server runtime and the C ABI.
   - operations: `Execute`, device-flow auth, user info, model fetch
   - shared types: request invocation, execute options/results, telemetry events, device-code payloads, user info, model DTOs
-- CLI/TUI own mutable app state (account selection, login session state, settings editing state, monitor state). `internal` consumes that state through callbacks/providers instead of holding long-lived auth/config services.
+- `cmd/copilot-proxy/app` owns mutable app state (account selection, login session state, settings editing state, monitor state) and application composition.
+- Model catalog state is caller-owned and injected explicitly; production runtime no longer falls back to a process-global default catalog.
 - CLI/TUI consume observability snapshots through `core/stats.Service.MonitorSnapshot()`.
-- Persistence and sink wiring stay inside `internal/core/observability`, while UI adapters remain in `internal/cli`.
+- Persistence and sink wiring stay inside `internal/core/observability`, while CLI/TUI adapters live under `cmd/copilot-proxy/app`.
 
 ## Install
 

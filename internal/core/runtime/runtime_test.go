@@ -60,6 +60,7 @@ func TestRuntimeStoresProvidedObservabilitySink(t *testing.T) {
 			}, nil
 		},
 		Observability: sink,
+		ModelCatalog:  &runtimeTestCatalog{},
 		ModelLoader:   testLoader{},
 	}
 
@@ -96,6 +97,24 @@ func TestRuntimeBuildSucceedsWithoutAccounts(t *testing.T) {
 	}
 	if got := catalog.GetModels(); len(got) != 0 {
 		t.Fatalf("expected empty model catalog without accounts, got %v", got)
+	}
+}
+
+func TestRuntimeBuildRequiresExplicitModelCatalog(t *testing.T) {
+	ctx := context.Background()
+	deps := RuntimeDeps{
+		SettingsFunc: func() (config.Settings, error) {
+			settings := config.DefaultSettings()
+			settings.ListenAddr = "127.0.0.1:0"
+			return settings, nil
+		},
+		AuthFunc: func() (config.AuthConfig, error) {
+			return config.AuthConfig{}, nil
+		},
+	}
+
+	if _, err := NewRuntimeWithContext(ctx, deps); err == nil {
+		t.Fatalf("expected runtime build to fail without explicit model catalog")
 	}
 }
 
@@ -164,7 +183,8 @@ func TestRuntimeUsesUpdatedExternalAuthAndSettingsState(t *testing.T) {
 			defer mu.Unlock()
 			return authConfig, nil
 		},
-		ModelLoader: testLoader{},
+		ModelCatalog: &runtimeTestCatalog{},
+		ModelLoader:  testLoader{},
 	})
 	if err != nil {
 		t.Fatalf("build runtime: %v", err)

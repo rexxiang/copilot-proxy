@@ -10,16 +10,16 @@ import (
 
 // Service provides cached model access.
 type Service struct {
-	catalog models.Catalog
+	catalog models.MutableCatalog
 	loader  models.Loader
 	client  *http.Client
 	proxy   string
 }
 
 // NewService builds a model service.
-func NewService(catalog models.Catalog, loader models.Loader, client *http.Client, proxy string) *Service {
+func NewService(catalog models.MutableCatalog, loader models.Loader, client *http.Client, proxy string) *Service {
 	if catalog == nil {
-		catalog = models.DefaultModelsManager()
+		catalog = models.NewManager()
 	}
 	if client == nil {
 		client = http.DefaultClient
@@ -42,17 +42,13 @@ func (s *Service) Refresh(ctx context.Context) ([]models.ModelInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		if setter, ok := s.catalog.(interface{ SetModels([]models.ModelInfo) }); ok {
-			setter.SetModels(data)
-		}
+		s.catalog.SetModels(data)
 		return data, nil
 	}
 	data, err := models.FetchViaProxy(ctx, s.client, s.proxy)
 	if err != nil {
 		return nil, err
 	}
-	if setter, ok := s.catalog.(interface{ SetModels([]models.ModelInfo) }); ok {
-		setter.SetModels(data)
-	}
+	s.catalog.SetModels(data)
 	return data, nil
 }

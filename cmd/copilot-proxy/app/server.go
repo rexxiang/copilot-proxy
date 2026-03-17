@@ -1,4 +1,4 @@
-package cli
+package app
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/core/controller"
 	coreRuntime "copilot-proxy/internal/core/runtime"
 	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/models"
@@ -19,11 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-var (
-	errModelCatalogRequired  = errors.New("model catalog is required")
-	errModelCatalogSetModels = errors.New("model catalog does not support SetModels")
-	errRuntimeServerRequired = errors.New("runtime server is required")
-)
+var errRuntimeServerRequired = errors.New("runtime server is required")
 
 // ServerDeps contains injectable dependencies for server construction.
 type ServerDeps struct {
@@ -33,7 +28,7 @@ type ServerDeps struct {
 	AuthFunc      func() (config.AuthConfig, error)
 	Observability middleware.ObservabilitySink
 	TokenManager  middleware.TokenProvider
-	ModelCatalog  models.Catalog
+	ModelCatalog  models.MutableCatalog
 	ModelLoader   models.Loader
 }
 
@@ -54,6 +49,7 @@ func DefaultServerDeps() ServerDeps {
 	return ServerDeps{
 		SettingsFunc: config.LoadSettings,
 		AuthFunc:     config.LoadAuth,
+		ModelCatalog: models.NewManager(),
 	}
 }
 
@@ -89,7 +85,7 @@ func runServerWithTUI(enableTUI bool) error {
 	useTUI := enableTUI && isTTY(os.Stdout.Fd())
 
 	deps := DefaultServerDeps()
-	ctrlDeps := controller.ControllerDeps{
+	ctrlDeps := ControllerDeps{
 		Runtime: coreRuntime.RuntimeDeps{
 			HTTPClient:   deps.HTTPClient,
 			Transport:    deps.Transport,
@@ -100,7 +96,7 @@ func runServerWithTUI(enableTUI bool) error {
 			ModelLoader:  deps.ModelLoader,
 		},
 	}
-	ctrl, err := controller.NewServiceController(ctx, ctrlDeps)
+	ctrl, err := NewServiceController(ctx, ctrlDeps)
 	if err != nil {
 		return err
 	}
@@ -133,7 +129,7 @@ func isExpectedShutdownError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, http.ErrServerClosed)
 }
 
-func runWithTUI(ctx context.Context, ctrl *controller.ServiceController) error {
+func runWithTUI(ctx context.Context, ctrl *ServiceController) error {
 	if ctrl == nil {
 		return errRuntimeServerRequired
 	}
@@ -142,7 +138,7 @@ func runWithTUI(ctx context.Context, ctrl *controller.ServiceController) error {
 		return errRuntimeServerRequired
 	}
 	serverErr := make(chan error, 1)
-	go func(localCtrl *controller.ServiceController) {
+	go func(localCtrl *ServiceController) {
 		if localCtrl == nil {
 			return
 		}

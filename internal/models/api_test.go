@@ -219,8 +219,8 @@ func TestFetchModelsViaDoerNilDoer(t *testing.T) {
 	}
 }
 
-func TestFetchModelsViaDoerDoesNotMutateDefaultManager(t *testing.T) {
-	manager := DefaultModelsManager()
+func TestFetchModelsViaDoerDoesNotMutateExplicitManager(t *testing.T) {
+	manager := NewManager()
 	original := manager.GetModels()
 	manager.SetModels([]ModelInfo{{ID: "existing-model"}})
 	t.Cleanup(func() {
