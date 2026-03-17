@@ -11,6 +11,7 @@ import (
 	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/runtime/config"
 	"copilot-proxy/internal/runtime/endpoint/transform"
+	protocolmessages "copilot-proxy/internal/runtime/protocol/messages"
 )
 
 const (
@@ -992,12 +993,12 @@ func TestEndpointTransformPassesThrough5xxErrorResponseUnchanged(t *testing.T) {
 
 func testEndpointCodec() transform.EndpointCodec {
 	return transform.EndpointCodec{
-		MessagesToChatRequest:       transform.MessagesToChatRequest,
-		ChatToMessagesResponse:      transform.ChatToMessagesResponse,
-		ChatSSEToMessages:           transform.TranslateChatSSEToMessages,
-		MessagesToResponsesRequest:  transform.MessagesToResponsesRequest,
-		ResponsesToMessagesResponse: transform.ResponsesToMessagesResponse,
-		ResponsesSSEToMessages:      transform.TranslateResponsesSSEToMessages,
+		MessagesToChatRequest:       protocolmessages.MessagesToChatRequest,
+		ChatToMessagesResponse:      protocolmessages.ChatToMessagesResponse,
+		ChatSSEToMessages:           protocolmessages.TranslateChatSSEToMessages,
+		MessagesToResponsesRequest:  protocolmessages.MessagesToResponsesRequest,
+		ResponsesToMessagesResponse: protocolmessages.ResponsesToMessagesResponse,
+		ResponsesSSEToMessages:      protocolmessages.TranslateResponsesSSEToMessages,
 	}
 }
 

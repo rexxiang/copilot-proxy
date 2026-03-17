@@ -8,6 +8,7 @@ import (
 	"copilot-proxy/internal/reasoning"
 	endpointtransform "copilot-proxy/internal/runtime/endpoint/transform"
 	models "copilot-proxy/internal/runtime/model"
+	protocolmessages "copilot-proxy/internal/runtime/protocol/messages"
 	requestctx "copilot-proxy/internal/runtime/request"
 )
 
@@ -87,21 +88,21 @@ func BuildEndpointCodec(
 	policyForResponses, _ := reasoning.MatchPolicy(policies, modelID, reasoning.TargetResponses)
 	return endpointtransform.EndpointCodec{
 		MessagesToChatRequest: func(body []byte) ([]byte, bool) {
-			return endpointtransform.MessagesToChatRequestWithOptions(body, endpointtransform.MessagesReasoningOptions{
+			return protocolmessages.MessagesToChatRequestWithOptions(body, protocolmessages.MessagesReasoningOptions{
 				PolicyEffort:             policyForChat,
 				SupportedReasoningEffort: CloneStrings(supportedEfforts),
 			})
 		},
-		ChatToMessagesResponse: endpointtransform.ChatToMessagesResponse,
-		ChatSSEToMessages:      endpointtransform.TranslateChatSSEToMessages,
+		ChatToMessagesResponse: protocolmessages.ChatToMessagesResponse,
+		ChatSSEToMessages:      protocolmessages.TranslateChatSSEToMessages,
 		MessagesToResponsesRequest: func(body []byte) ([]byte, bool) {
-			return endpointtransform.MessagesToResponsesRequestWithOptions(body, endpointtransform.MessagesReasoningOptions{
+			return protocolmessages.MessagesToResponsesRequestWithOptions(body, protocolmessages.MessagesReasoningOptions{
 				PolicyEffort:             policyForResponses,
 				SupportedReasoningEffort: CloneStrings(supportedEfforts),
 			})
 		},
-		ResponsesToMessagesResponse: endpointtransform.ResponsesToMessagesResponse,
-		ResponsesSSEToMessages:      endpointtransform.TranslateResponsesSSEToMessages,
+		ResponsesToMessagesResponse: protocolmessages.ResponsesToMessagesResponse,
+		ResponsesSSEToMessages:      protocolmessages.TranslateResponsesSSEToMessages,
 	}
 }
 
