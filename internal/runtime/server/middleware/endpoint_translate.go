@@ -7,6 +7,7 @@ import (
 	"copilot-proxy/internal/reasoning"
 	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
 	models "copilot-proxy/internal/runtime/model"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 // MessagesTranslateMiddleware atomically handles endpoint-related request processing.
@@ -58,7 +59,7 @@ func (m *MessagesTranslateMiddleware) Handle(ctx *transportmiddleware.Context, n
 		}
 	}
 
-	resp, err := endpointflow.ApplyCatalogEndpointTransform(req, rc, m.catalog, m.pathMapping, runtimeOptions, func(nextReq *http.Request, nextRC *transportmiddleware.RequestContext) (*http.Response, error) {
+	resp, err := endpointflow.ApplyCatalogEndpointTransform(req, rc, m.catalog, m.pathMapping, runtimeOptions, func(nextReq *http.Request, nextRC *requestctx.RequestContext) (*http.Response, error) {
 		ctx.Request = endpointflow.WithRequestContext(nextReq, nextRC)
 		return next()
 	})

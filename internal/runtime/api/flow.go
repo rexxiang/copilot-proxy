@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"net/http"
 
-	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/reasoning"
 	runtimeconfig "copilot-proxy/internal/runtime/config"
 	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
 	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 var defaultPathMapping = protocolpaths.DefaultPathMapping()
@@ -30,7 +30,7 @@ func (r *Engine) doExecuteUpstream(
 
 	sourceLocalPath := req.URL.Path
 	rc := endpointflow.EnsureRequestContext(req)
-	requestBody, info, err := endpointflow.ParseRequest(req, sourceLocalPath, middleware.ParseOptions{
+	requestBody, info, err := endpointflow.ParseRequest(req, sourceLocalPath, requestctx.ParseOptions{
 		MessagesAgentDetectionRequestMode: settings.MessagesAgentDetectionRequestMode,
 	})
 	if err != nil {
@@ -53,7 +53,7 @@ func (r *Engine) doExecuteUpstream(
 	endpointflow.ApplyDynamicHeaders(req.Header, info)
 
 	codec := endpointflow.BuildEndpointCodec(resolvedPolicies(settings), info.MappedModel, info.SupportedReasoningEffort)
-	return endpointflow.ExecuteEndpointTransform(req, rc, defaultPathMapping, codec, func(nextReq *http.Request, _ *middleware.RequestContext) (*http.Response, error) {
+	return endpointflow.ExecuteEndpointTransform(req, rc, defaultPathMapping, codec, func(nextReq *http.Request, _ *requestctx.RequestContext) (*http.Response, error) {
 		if r.upstreamDo != nil {
 			return r.upstreamDo(ctx, nextReq)
 		}

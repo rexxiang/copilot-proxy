@@ -6,13 +6,13 @@ import (
 	"io"
 	"net/http"
 
-	"copilot-proxy/internal/middleware"
 	models "copilot-proxy/internal/runtime/model"
 	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 // RewriteModel applies model mapping and stores selected endpoint metadata.
-func RewriteModel(req *http.Request, rc *middleware.RequestContext, catalog models.Catalog, selector *models.Selector) {
+func RewriteModel(req *http.Request, rc *requestctx.RequestContext, catalog models.Catalog, selector *models.Selector) {
 	path := resolveRewritePath(req, rc)
 	if shouldSkipModelRewrite(req, path) {
 		return
@@ -23,7 +23,7 @@ func RewriteModel(req *http.Request, rc *middleware.RequestContext, catalog mode
 		restoreModelRewriteBody(req, bodyBytes)
 		return
 	}
-	info := middleware.ParseRequestByPath(path, bodyBytes)
+	info := requestctx.ParseRequestByPath(path, bodyBytes)
 	if info.Model == "" {
 		info.Model = rawModelFromJSON(bodyBytes)
 	}
@@ -87,7 +87,7 @@ func shouldSkipModelRewrite(req *http.Request, path string) bool {
 	return !IsModelRewritePath(path)
 }
 
-func resolveRewritePath(req *http.Request, rc *middleware.RequestContext) string {
+func resolveRewritePath(req *http.Request, rc *requestctx.RequestContext) string {
 	if req == nil {
 		return ""
 	}

@@ -4,11 +4,11 @@ import (
 	"net/http"
 	"strings"
 
-	"copilot-proxy/internal/middleware"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 // SelectTargetEndpoint chooses final upstream endpoint based on model capability and source endpoint.
-func SelectTargetEndpoint(req *http.Request, rc *middleware.RequestContext) {
+func SelectTargetEndpoint(req *http.Request, rc *requestctx.RequestContext) {
 	if req == nil || rc == nil {
 		return
 	}

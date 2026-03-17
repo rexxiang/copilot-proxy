@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"copilot-proxy/internal/middleware"
 	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 // EndpointCodec provides message-protocol adapters implemented by the upstream package.
@@ -32,7 +32,7 @@ const (
 // ApplyEndpointTransform rewrites request/response payloads across endpoint protocols.
 func ApplyEndpointTransform(
 	req *http.Request,
-	rc *middleware.RequestContext,
+	rc *requestctx.RequestContext,
 	codec EndpointCodec,
 	forward func(*http.Request) (*http.Response, error),
 ) (*http.Response, error) {
@@ -43,7 +43,7 @@ func ApplyEndpointTransform(
 		return forward(req)
 	}
 	if rc == nil {
-		rc = new(middleware.RequestContext)
+		rc = new(requestctx.RequestContext)
 	}
 
 	sourceLocal := rc.SourceLocalPath
@@ -87,7 +87,7 @@ func ApplyEndpointTransform(
 	return convertedResp, nil
 }
 
-func applyTransformedRequestBody(req *http.Request, rc *middleware.RequestContext, body []byte) {
+func applyTransformedRequestBody(req *http.Request, rc *requestctx.RequestContext, body []byte) {
 	req.Body = io.NopCloser(bytes.NewReader(body))
 	req.ContentLength = int64(len(body))
 	req.GetBody = func() (io.ReadCloser, error) {

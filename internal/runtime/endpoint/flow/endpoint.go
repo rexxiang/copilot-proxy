@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"strings"
 
-	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/reasoning"
 	endpointtransform "copilot-proxy/internal/runtime/endpoint/transform"
 	models "copilot-proxy/internal/runtime/model"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 type RuntimeOptions struct {
@@ -24,11 +24,11 @@ type ResolvedModel struct {
 
 func ApplyCatalogEndpointTransform(
 	req *http.Request,
-	rc *middleware.RequestContext,
+	rc *requestctx.RequestContext,
 	catalog models.Catalog,
 	pathMapping map[string]string,
 	options RuntimeOptions,
-	forward func(*http.Request, *middleware.RequestContext) (*http.Response, error),
+	forward func(*http.Request, *requestctx.RequestContext) (*http.Response, error),
 ) (*http.Response, error) {
 	if req == nil {
 		return forward(req, rc)
@@ -58,13 +58,13 @@ func ApplyCatalogEndpointTransform(
 
 func ExecuteEndpointTransform(
 	req *http.Request,
-	rc *middleware.RequestContext,
+	rc *requestctx.RequestContext,
 	pathMapping map[string]string,
 	codec endpointtransform.EndpointCodec,
-	forward func(*http.Request, *middleware.RequestContext) (*http.Response, error),
+	forward func(*http.Request, *requestctx.RequestContext) (*http.Response, error),
 ) (*http.Response, error) {
 	resp, err := endpointtransform.ApplyEndpointTransform(req, rc, codec, func(nextReq *http.Request) (*http.Response, error) {
-		updatedRC, ok := middleware.RequestContextFrom(nextReq.Context())
+		updatedRC, ok := requestctx.RequestContextFrom(nextReq.Context())
 		if !ok || updatedRC == nil {
 			updatedRC = EnsureRequestContext(nextReq)
 			nextReq = WithRequestContext(nextReq, updatedRC)
@@ -116,12 +116,12 @@ func RewriteMappedModelBody(path string, body []byte, rawModelID, mappedModelID 
 }
 
 func ApplyResolvedModelInfo(
-	rc *middleware.RequestContext,
+	rc *requestctx.RequestContext,
 	sourceLocalPath string,
-	info middleware.RequestInfo,
+	info requestctx.RequestInfo,
 	rawModelID string,
 	resolved ResolvedModel,
-) middleware.RequestInfo {
+) requestctx.RequestInfo {
 	if rc == nil {
 		return info
 	}

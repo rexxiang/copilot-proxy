@@ -3,11 +3,11 @@ package transform
 import (
 	"net/http"
 
-	"copilot-proxy/internal/middleware"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 // ApplyUpstreamPath rewrites request path to chosen upstream endpoint.
-func ApplyUpstreamPath(req *http.Request, rc *middleware.RequestContext, mapping map[string]string) {
+func ApplyUpstreamPath(req *http.Request, rc *requestctx.RequestContext, mapping map[string]string) {
 	if req == nil {
 		return
 	}

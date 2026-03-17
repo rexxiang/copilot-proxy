@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"testing"
 
-	"copilot-proxy/internal/middleware"
 	models "copilot-proxy/internal/runtime/model"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 type stubCatalog struct {
@@ -84,7 +84,7 @@ func TestModelRewriteEmptyModelNoop(t *testing.T) {
 func TestModelRewriteSetsMappedModel(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "claude-sonnet-4.5", Family: "claude-sonnet-4.5"}}}
 	req := httptestRequest([]byte(`{"model":"claude-sonnet-4-20250514"}`))
-	rc := &middleware.RequestContext{}
+	rc := &requestctx.RequestContext{}
 
 	RewriteModel(req, rc, catalog, nil)
 
@@ -96,7 +96,7 @@ func TestModelRewriteSetsMappedModel(t *testing.T) {
 func TestModelRewriteSetsMappedModelOnExactMatch(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o"}}}
 	req := httptestRequest([]byte(`{"model":"gpt-4o"}`))
-	rc := &middleware.RequestContext{}
+	rc := &requestctx.RequestContext{}
 
 	RewriteModel(req, rc, catalog, nil)
 
@@ -111,7 +111,7 @@ func TestModelRewritePrefersExactClaudeHaikuOverFallback(t *testing.T) {
 		{ID: "claude-haiku-3.2", Endpoints: []string{"/v1/messages"}},
 	}}
 	req := httptestRequest([]byte(`{"model":"CLAUDE-HAIKU-3.2"}`))
-	rc := &middleware.RequestContext{}
+	rc := &requestctx.RequestContext{}
 
 	RewriteModel(req, rc, catalog, nil)
 
@@ -136,7 +136,7 @@ func TestModelRewriteStoresSelectedModelEndpoints(t *testing.T) {
 		Endpoints: []string{"/responses", "/chat/completions"},
 	}}}
 	req := httptestRequest([]byte(`{"model":"gpt-4o"}`))
-	rc := &middleware.RequestContext{}
+	rc := &requestctx.RequestContext{}
 
 	RewriteModel(req, rc, catalog, nil)
 

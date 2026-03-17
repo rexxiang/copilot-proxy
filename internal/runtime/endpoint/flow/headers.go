@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/reasoning"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 func StripClientXHeaders(headers http.Header) {
@@ -24,7 +24,7 @@ func ApplyStaticHeaders(headers http.Header, values map[string]string, overwrite
 	}
 }
 
-func ApplyDynamicHeaders(headers http.Header, info middleware.RequestInfo) {
+func ApplyDynamicHeaders(headers http.Header, info requestctx.RequestInfo) {
 	if info.IsAgent {
 		headers.Set("X-Initiator", "agent")
 	} else {

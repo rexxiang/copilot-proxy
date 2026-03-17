@@ -43,6 +43,26 @@ func TestPackageDependencies(t *testing.T) {
 			source:     "copilot-proxy/internal/runtime/",
 			disallowed: []string{"copilot-proxy/cmd/copilot-proxy/app/"},
 		},
+		{
+			name:       "runtime api must not depend on transport middleware package",
+			source:     "copilot-proxy/internal/runtime/api/",
+			disallowed: []string{"copilot-proxy/internal/middleware/"},
+		},
+		{
+			name:       "runtime endpoint must not depend on transport middleware package",
+			source:     "copilot-proxy/internal/runtime/endpoint/",
+			disallowed: []string{"copilot-proxy/internal/middleware/"},
+		},
+		{
+			name:       "runtime request package must stay middleware-neutral",
+			source:     "copilot-proxy/internal/runtime/request/",
+			disallowed: []string{"copilot-proxy/internal/middleware/"},
+		},
+		{
+			name:       "runtime protocol package must not depend on runtime config",
+			source:     "copilot-proxy/internal/runtime/protocol/",
+			disallowed: []string{"copilot-proxy/internal/runtime/config/"},
+		},
 	}
 
 	violations := checkRules(pkgs, rules)

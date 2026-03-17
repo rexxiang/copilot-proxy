@@ -5,16 +5,16 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/runtime/config"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 func TestEndpointSelectUsesSourcePathAndSelectedEndpoints(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost"+config.MessagesPath, http.NoBody)
-	rc := &middleware.RequestContext{
+	rc := &requestctx.RequestContext{
 		SourceLocalPath: config.MessagesPath,
 		LocalPath:       config.MessagesPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 			SelectedModelEndpoints: []string{
 				config.UpstreamResponsesPath,
@@ -31,10 +31,10 @@ func TestEndpointSelectUsesSourcePathAndSelectedEndpoints(t *testing.T) {
 
 func TestEndpointSelectFallsBackToChatWhenModelEndpointsMissing(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost"+config.ResponsesPath, http.NoBody)
-	rc := &middleware.RequestContext{
+	rc := &requestctx.RequestContext{
 		SourceLocalPath: config.ResponsesPath,
 		LocalPath:       config.ResponsesPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model:                  "gpt-4o",
 			SelectedModelEndpoints: nil,
 		},
@@ -48,10 +48,10 @@ func TestEndpointSelectFallsBackToChatWhenModelEndpointsMissing(t *testing.T) {
 
 func TestEndpointSelectKeepsChatCompletionsAtSameEndpoint(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost"+config.ChatCompletionsPath, http.NoBody)
-	rc := &middleware.RequestContext{
+	rc := &requestctx.RequestContext{
 		SourceLocalPath: config.ChatCompletionsPath,
 		LocalPath:       config.ChatCompletionsPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 			SelectedModelEndpoints: []string{
 				config.UpstreamResponsesPath,
@@ -68,10 +68,10 @@ func TestEndpointSelectKeepsChatCompletionsAtSameEndpoint(t *testing.T) {
 
 func TestEndpointSelectKeepsResponsesAtSameEndpointEvenIfOthersPreferred(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost"+config.ResponsesPath, http.NoBody)
-	rc := &middleware.RequestContext{
+	rc := &requestctx.RequestContext{
 		SourceLocalPath: config.ResponsesPath,
 		LocalPath:       config.ResponsesPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 			SelectedModelEndpoints: []string{
 				config.UpstreamMessagesPath,

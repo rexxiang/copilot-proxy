@@ -5,13 +5,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/runtime/config"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 func TestPathRewriteUsesTargetUpstreamPathFirst(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost"+config.ChatCompletionsPath, http.NoBody)
-	rc := &middleware.RequestContext{
+	rc := &requestctx.RequestContext{
 		SourceLocalPath:    config.ChatCompletionsPath,
 		LocalPath:          config.ChatCompletionsPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
@@ -25,7 +25,7 @@ func TestPathRewriteUsesTargetUpstreamPathFirst(t *testing.T) {
 
 func TestPathRewriteFallsBackToMappingWhenTargetEmpty(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost"+config.ResponsesPath, http.NoBody)
-	rc := &middleware.RequestContext{
+	rc := &requestctx.RequestContext{
 		SourceLocalPath: config.ResponsesPath,
 		LocalPath:       config.ResponsesPath,
 	}
