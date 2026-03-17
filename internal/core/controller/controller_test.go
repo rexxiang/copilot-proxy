@@ -56,12 +56,6 @@ func buildTestController(t *testing.T, modify func(*controller.ControllerDeps)) 
 
 func TestServiceControllerLifecycle(t *testing.T) {
 	ctrl := newTestController(t)
-	if ctrl.AccountService() == nil {
-		t.Fatal("account service missing")
-	}
-	if ctrl.ConfigService() == nil {
-		t.Fatal("config service missing")
-	}
 	if ctrl.ModelService() == nil {
 		t.Fatal("model service missing")
 	}

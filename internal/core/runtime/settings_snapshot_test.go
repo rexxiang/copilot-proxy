@@ -45,40 +45,21 @@ func TestCompileRuntimeSettingsSnapshot_RejectsInvalidRateLimit(t *testing.T) {
 	}
 }
 
-func TestSettingsStore_PublishUpdatesAndClones(t *testing.T) {
-	initial := config.DefaultSettings()
-	store, err := NewSettingsStore(initial)
+func TestCompileSnapshot_ReturnsClonedSlices(t *testing.T) {
+	settings := config.DefaultSettings()
+	settings.ClaudeHaikuFallbackModels = []string{"grok-code-fast-1"}
+
+	snapshot, err := CompileSnapshot(settings)
 	if err != nil {
-		t.Fatalf("NewSettingsStore error: %v", err)
+		t.Fatalf("CompileSnapshot error: %v", err)
 	}
+	snapshot.ClaudeHaikuFallbackModels[0] = "tampered"
 
-	next := initial
-	next.MessagesAgentDetectionRequestMode = false
-	next.RateLimitSeconds = 4
-	next.ClaudeHaikuFallbackModels = []string{"grok-code-fast-1"}
-	snapshot, err := compileRuntimeSettingsSnapshot(next)
+	snapshotAgain, err := CompileSnapshot(settings)
 	if err != nil {
-		t.Fatalf("compileRuntimeSettingsSnapshot error: %v", err)
+		t.Fatalf("CompileSnapshot error: %v", err)
 	}
-	store.Publish(next, snapshot)
-
-	current := store.Current()
-	if current.RateLimitSeconds != 4 {
-		t.Fatalf("expected current rate limit to update, got %d", current.RateLimitSeconds)
-	}
-	if current.MessagesAgentDetectionRequestMode {
-		t.Fatalf("expected current request mode false")
-	}
-	current.ClaudeHaikuFallbackModels[0] = "tampered"
-	currentAgain := store.Current()
-	if currentAgain.ClaudeHaikuFallbackModels[0] != "grok-code-fast-1" {
-		t.Fatalf("expected current settings to be cloned on read")
-	}
-
-	snap := store.Snapshot()
-	snap.ClaudeHaikuFallbackModels[0] = "tampered"
-	snapAgain := store.Snapshot()
-	if snapAgain.ClaudeHaikuFallbackModels[0] != "grok-code-fast-1" {
-		t.Fatalf("expected runtime snapshot to be cloned on read")
+	if snapshotAgain.ClaudeHaikuFallbackModels[0] != "grok-code-fast-1" {
+		t.Fatalf("expected compiled snapshot to clone fallback models, got %#v", snapshotAgain.ClaudeHaikuFallbackModels)
 	}
 }

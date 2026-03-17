@@ -47,7 +47,7 @@ func (s *Service) Refresh(ctx context.Context) ([]models.ModelInfo, error) {
 		}
 		return data, nil
 	}
-	data, err := models.FetchViaProxy(ctx, s.client, s.proxy+config.ModelsPath)
+	data, err := models.FetchViaProxy(ctx, s.client, s.proxy)
 	if err != nil {
 		return nil, err
 	}

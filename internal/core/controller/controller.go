@@ -7,8 +7,6 @@ import (
 
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
-	"copilot-proxy/internal/core/account"
-	coreconfig "copilot-proxy/internal/core/config"
 	"copilot-proxy/internal/core/kernel"
 	coremodel "copilot-proxy/internal/core/model"
 	"copilot-proxy/internal/core/observability"
@@ -34,8 +32,6 @@ type ServiceController struct {
 	kernel     *kernel.Kernel
 	collector  *observability.Collector
 	persistent *observability.PersistentCollector
-	account    *account.Service
-	config     *coreconfig.Service
 	model      *coremodel.Service
 	stats      *corestats.Service
 }
@@ -73,7 +69,7 @@ func NewServiceController(ctx context.Context, deps ControllerDeps) (*ServiceCon
 	}
 
 	kern := kernel.NewKernel(rt, obs)
-	proxyAddr := rt.Settings.ListenAddr
+	proxyAddr := rt.Server.Addr
 	if proxyAddr == "" {
 		proxyAddr = config.DefaultSettings().ListenAddr
 	}
@@ -84,9 +80,7 @@ func NewServiceController(ctx context.Context, deps ControllerDeps) (*ServiceCon
 		kernel:     kern,
 		collector:  collector,
 		persistent: deps.PersistentCollector,
-		account:    account.New(rt.Auth),
-		config:     coreconfig.NewService(rt.Settings),
-		model:      coremodel.NewService(rt.ModelCatalog, deps.Runtime.ModelLoader, deps.Runtime.HTTPClient, modelProxy),
+		model:      coremodel.NewService(deps.Runtime.ModelCatalog, deps.Runtime.ModelLoader, deps.Runtime.HTTPClient, modelProxy),
 		stats:      corestats.NewService(obs),
 	}, nil
 }
@@ -126,16 +120,6 @@ func (c *ServiceController) PersistentCollector() *observability.PersistentColle
 	return c.persistent
 }
 
-// AccountService returns the account service.
-func (c *ServiceController) AccountService() *account.Service {
-	return c.account
-}
-
-// ConfigService returns the config service.
-func (c *ServiceController) ConfigService() *coreconfig.Service {
-	return c.config
-}
-
 // ModelService returns the model service.
 func (c *ServiceController) ModelService() *coremodel.Service {
 	return c.model
@@ -144,14 +128,4 @@ func (c *ServiceController) ModelService() *coremodel.Service {
 // StatsService returns the stats service.
 func (c *ServiceController) StatsService() *corestats.Service {
 	return c.stats
-}
-
-// AuthConfig returns the current auth configuration snapshot.
-func (c *ServiceController) AuthConfig() config.AuthConfig {
-	return c.runtime.Auth
-}
-
-// Settings returns the current settings snapshot.
-func (c *ServiceController) Settings() config.Settings {
-	return c.runtime.Settings
 }

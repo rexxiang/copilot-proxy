@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"copilot-proxy/internal/config"
@@ -25,65 +24,6 @@ type Snapshot struct {
 	MessagesAgentDetectionRequestMode bool
 	ClaudeHaikuFallbackModels         []string
 	ReasoningPolicies                 []reasoning.Policy
-}
-
-// SettingsStore maintains a live copy of settings and its compiled runtime snapshot.
-type SettingsStore struct {
-	settings atomic.Value // config.Settings
-	snapshot atomic.Value // Snapshot
-}
-
-// NewSettingsStore creates a store backed by an initial settings snapshot.
-func NewSettingsStore(initial config.Settings) (*SettingsStore, error) {
-	snapshot, err := compileRuntimeSettingsSnapshot(initial)
-	if err != nil {
-		return nil, err
-	}
-
-	store := &SettingsStore{}
-	store.settings.Store(cloneRuntimeSettings(initial))
-	store.snapshot.Store(cloneRuntimeSettingsSnapshot(snapshot))
-	return store, nil
-}
-
-// Current returns a cloned copy of the active settings.
-func (s *SettingsStore) Current() config.Settings {
-	if s == nil {
-		return config.DefaultSettings()
-	}
-	current, ok := s.settings.Load().(config.Settings)
-	if !ok {
-		return config.DefaultSettings()
-	}
-	return cloneRuntimeSettings(current)
-}
-
-// Snapshot returns a cloned runtime snapshot.
-func (s *SettingsStore) Snapshot() Snapshot {
-	if s == nil {
-		snap, _ := compileRuntimeSettingsSnapshot(config.DefaultSettings())
-		return snap
-	}
-	current, ok := s.snapshot.Load().(Snapshot)
-	if !ok {
-		snap, _ := compileRuntimeSettingsSnapshot(config.DefaultSettings())
-		return snap
-	}
-	return cloneRuntimeSettingsSnapshot(current)
-}
-
-// Validate compiles the provided settings without mutating the store.
-func (s *SettingsStore) Validate(next config.Settings) (Snapshot, error) {
-	return compileRuntimeSettingsSnapshot(next)
-}
-
-// Publish replaces the active settings with the provided snapshot.
-func (s *SettingsStore) Publish(next config.Settings, snapshot Snapshot) {
-	if s == nil {
-		return
-	}
-	s.settings.Store(cloneRuntimeSettings(next))
-	s.snapshot.Store(cloneRuntimeSettingsSnapshot(snapshot))
 }
 
 func compileRuntimeSettingsSnapshot(settings config.Settings) (Snapshot, error) {
@@ -121,6 +61,11 @@ func compileRuntimeSettingsSnapshot(settings config.Settings) (Snapshot, error) 
 	}, nil
 }
 
+// CompileSnapshot validates settings and returns the derived runtime snapshot.
+func CompileSnapshot(settings config.Settings) (Snapshot, error) {
+	return compileRuntimeSettingsSnapshot(settings)
+}
+
 func cloneRuntimeSettings(input config.Settings) config.Settings {
 	clone := input
 	clone.RequiredHeaders = cloneStringMap(input.RequiredHeaders)
@@ -128,13 +73,6 @@ func cloneRuntimeSettings(input config.Settings) config.Settings {
 	clone.ReasoningPolicies = cloneReasoningPolicyRows(input.ReasoningPolicies)
 	clone.ClaudeHaikuFallbackModels = cloneStringSliceRuntime(input.ClaudeHaikuFallbackModels)
 	clone.ClaudeHaikuFallbackModelsUI = cloneHaikuFallbackUIRows(input.ClaudeHaikuFallbackModelsUI)
-	return clone
-}
-
-func cloneRuntimeSettingsSnapshot(input Snapshot) Snapshot {
-	clone := input
-	clone.ClaudeHaikuFallbackModels = cloneStringSliceRuntime(input.ClaudeHaikuFallbackModels)
-	clone.ReasoningPolicies = cloneReasoningPolicies(input.ReasoningPolicies)
 	return clone
 }
 

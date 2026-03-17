@@ -219,6 +219,52 @@ func TestFetchModelsViaDoerNilDoer(t *testing.T) {
 	}
 }
 
+func TestFetchModelsViaDoerDoesNotMutateDefaultManager(t *testing.T) {
+	manager := DefaultModelsManager()
+	original := manager.GetModels()
+	manager.SetModels([]ModelInfo{{ID: "existing-model"}})
+	t.Cleanup(func() {
+		manager.SetModels(original)
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{
+					"id":                   "fetched-model",
+					"name":                 "Fetched",
+					"vendor":               "OpenAI",
+					"model_picker_enabled": true,
+					"capabilities": map[string]any{
+						"type": "chat",
+						"limits": map[string]any{
+							"max_context_window_tokens": 16000,
+							"max_prompt_tokens":         16000,
+							"max_output_tokens":         4096,
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &http.Client{}
+	got, err := FetchModelsViaDoer(context.Background(), client, server.URL+"/copilot/models")
+	if err != nil {
+		t.Fatalf("fetch via doer: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "fetched-model" {
+		t.Fatalf("unexpected fetched models: %+v", got)
+	}
+
+	current := manager.GetModels()
+	if len(current) != 1 || current[0].ID != "existing-model" {
+		t.Fatalf("expected default manager unchanged, got %+v", current)
+	}
+}
+
 func findModel(items []ModelInfo, id string) *ModelInfo {
 	for i := range items {
 		if items[i].ID == id {

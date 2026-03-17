@@ -157,7 +157,6 @@ func FetchViaDoer(ctx context.Context, doer RequestDoer, requestURL string) ([]M
 	if err != nil {
 		return nil, err
 	}
-	DefaultModelsManager().SetModels(items)
 	return items, nil
 }
 
