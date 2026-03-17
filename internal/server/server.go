@@ -27,16 +27,7 @@ const (
 	retryBackoffFactor = 2
 )
 
-func New(settings *config.Settings, handler http.Handler) *Server {
-	if settings == nil {
-		settings = &config.Settings{
-			ListenAddr:      "",
-			UpstreamBase:    "",
-			RequiredHeaders: nil,
-			MaxRetries:      0,
-			RetryBackoff:    config.NewDuration(0),
-		}
-	}
+func New(addr string, handler http.Handler) *Server {
 	mux := http.NewServeMux()
 	for _, path := range config.AllowedPaths {
 		mux.Handle(path, handler)
@@ -49,7 +40,7 @@ func New(settings *config.Settings, handler http.Handler) *Server {
 	})
 
 	srv := &http.Server{
-		Addr:              settings.ListenAddr,
+		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}

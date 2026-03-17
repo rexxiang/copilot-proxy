@@ -14,6 +14,7 @@ import (
 	"copilot-proxy/internal/core"
 	coreaccount "copilot-proxy/internal/core/account"
 	execute "copilot-proxy/internal/core/execute"
+	"copilot-proxy/internal/core/runtimeconfig"
 	"copilot-proxy/internal/models"
 )
 
@@ -46,7 +47,7 @@ type TelemetryFunc func(ctx context.Context, event TelemetryEvent)
 type UpstreamDoFunc func(ctx context.Context, req *http.Request) (*http.Response, error)
 
 type Options struct {
-	SettingsProvider  func(ctx context.Context) (config.Settings, error)
+	SettingsProvider  func(ctx context.Context) (runtimeconfig.Config, error)
 	HTTPClientFactory func() *http.Client
 	ResolveToken      ResolveTokenFunc
 	ResolveModel      ResolveModelFunc
@@ -56,7 +57,7 @@ type Options struct {
 }
 
 type Runtime struct {
-	settingsProvider  func(ctx context.Context) (config.Settings, error)
+	settingsProvider  func(ctx context.Context) (runtimeconfig.Config, error)
 	httpClientFactory func() *http.Client
 	resolveToken      ResolveTokenFunc
 	resolveModel      ResolveModelFunc
@@ -68,8 +69,8 @@ type Runtime struct {
 func NewRuntime(opts Options) *Runtime {
 	settingsProvider := opts.SettingsProvider
 	if settingsProvider == nil {
-		settingsProvider = func(context.Context) (config.Settings, error) {
-			return config.DefaultSettings(), nil
+		settingsProvider = func(context.Context) (runtimeconfig.Config, error) {
+			return runtimeconfig.Default(), nil
 		}
 	}
 	httpClientFactory := opts.HTTPClientFactory
@@ -205,20 +206,20 @@ func (r *Runtime) FetchModels(ctx context.Context, tokenValue string) ([]models.
 	}
 	modelsAPIBase := strings.TrimSpace(settings.UpstreamBase)
 	if modelsAPIBase == "" {
-		modelsAPIBase = config.DefaultSettings().UpstreamBase
+		modelsAPIBase = runtimeconfig.Default().UpstreamBase
 	}
 	client := r.httpClientFactory()
 	return models.FetchModels(ctx, client, modelsAPIBase, tokenValue, settings.RequiredHeadersWithDefaults())
 }
 
-func (r *Runtime) doUpstreamRequest(ctx context.Context, upstreamReq *http.Request, settings config.Settings) (*http.Response, error) {
+func (r *Runtime) doUpstreamRequest(ctx context.Context, upstreamReq *http.Request, settings runtimeconfig.Config) (*http.Response, error) {
 	if upstreamReq == nil {
 		return nil, errors.New("upstream request is required")
 	}
 
 	base := strings.TrimSuffix(settings.UpstreamBase, "/")
 	if base == "" {
-		base = strings.TrimSuffix(config.DefaultSettings().UpstreamBase, "/")
+		base = strings.TrimSuffix(runtimeconfig.Default().UpstreamBase, "/")
 	}
 	targetPath := upstreamReq.URL.Path
 	if targetPath == "" {

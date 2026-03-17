@@ -38,7 +38,7 @@ func runAuthLogin() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	svc := newRuntimeAccountManager(config.LoadAuth, config.SaveAuth, config.LoadSettings, nil)
+	svc := newRuntimeAccountManager(config.LoadAuth, config.SaveAuth, loadRuntimeConfigFromAppSettings, nil)
 
 	challenge, err := svc.BeginLogin(ctx)
 	if err != nil {
@@ -71,7 +71,7 @@ func runAuthLogin() error {
 }
 
 func runAuthRemove(user string) error {
-	svc := newRuntimeAccountManager(config.LoadAuth, config.SaveAuth, config.LoadSettings, nil)
+	svc := newRuntimeAccountManager(config.LoadAuth, config.SaveAuth, loadRuntimeConfigFromAppSettings, nil)
 	if err := svc.Remove(user); err != nil {
 		if errors.Is(err, config.ErrAccountNotFound) {
 			return errAuthAccountNotFound
@@ -82,6 +82,6 @@ func runAuthRemove(user string) error {
 }
 
 func runAuthList() error {
-	svc := newRuntimeAccountManager(config.LoadAuth, config.SaveAuth, config.LoadSettings, nil)
+	svc := newRuntimeAccountManager(config.LoadAuth, config.SaveAuth, loadRuntimeConfigFromAppSettings, nil)
 	return runAuthListTUI(svc)
 }

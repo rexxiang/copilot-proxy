@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core/runtimeconfig"
 	"copilot-proxy/internal/models"
 )
 
@@ -25,7 +25,7 @@ func NewService(catalog models.MutableCatalog, loader models.Loader, client *htt
 		client = http.DefaultClient
 	}
 	if proxy == "" {
-		proxy = "http://" + config.DefaultSettings().ListenAddr
+		proxy = "http://" + runtimeconfig.Default().ListenAddr
 	}
 	return &Service{catalog: catalog, loader: loader, client: client, proxy: proxy}
 }

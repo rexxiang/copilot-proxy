@@ -13,6 +13,7 @@ import (
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
 	execute "copilot-proxy/internal/core/execute"
+	"copilot-proxy/internal/core/runtimeconfig"
 	"copilot-proxy/internal/core/runtimeapi"
 	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/middleware/upstream"
@@ -34,7 +35,7 @@ var errModelCatalogRequired = errors.New("model catalog is required")
 type RuntimeDeps struct {
 	HTTPClient    *http.Client
 	Transport     http.RoundTripper
-	SettingsFunc  func() (config.Settings, error)
+	SettingsFunc  func() (runtimeconfig.Config, error)
 	AuthFunc      func() (config.AuthConfig, error)
 	Observability middleware.ObservabilitySink
 	TokenManager  middleware.TokenProvider
@@ -54,7 +55,9 @@ type Runtime struct {
 // DefaultRuntimeDeps returns production dependencies.
 func DefaultRuntimeDeps() RuntimeDeps {
 	return RuntimeDeps{
-		SettingsFunc: config.LoadSettings,
+		SettingsFunc: func() (runtimeconfig.Config, error) {
+			return runtimeconfig.Default(), nil
+		},
 		AuthFunc:     config.LoadAuth,
 	}
 }
@@ -67,7 +70,9 @@ func NewRuntime(deps RuntimeDeps) (*Runtime, error) {
 // NewRuntimeWithContext builds the runtime with the provided context.
 func NewRuntimeWithContext(ctx context.Context, deps RuntimeDeps) (*Runtime, error) {
 	if deps.SettingsFunc == nil {
-		deps.SettingsFunc = config.LoadSettings
+		deps.SettingsFunc = func() (runtimeconfig.Config, error) {
+			return runtimeconfig.Default(), nil
+		}
 	}
 	if deps.AuthFunc == nil {
 		deps.AuthFunc = config.LoadAuth
@@ -148,7 +153,7 @@ func NewRuntimeWithContext(ctx context.Context, deps RuntimeDeps) (*Runtime, err
 		Observability: deps.Observability,
 	}
 	rt.executor = runtimeapi.NewRuntime(runtimeapi.Options{
-		SettingsProvider: func(context.Context) (config.Settings, error) {
+		SettingsProvider: func(context.Context) (runtimeconfig.Config, error) {
 			return deps.SettingsFunc()
 		},
 		ResolveToken: func(callCtx context.Context, accountRef string) (string, error) {
@@ -162,13 +167,13 @@ func NewRuntimeWithContext(ctx context.Context, deps RuntimeDeps) (*Runtime, err
 		},
 	})
 
-	rt.Server = server.New(&settings, rt.buildExecuteHandler(proxyHandler))
+	rt.Server = server.New(settings.ListenAddr, rt.buildExecuteHandler(proxyHandler))
 	rt.RequestCloser = requestCloser
 
 	return rt, nil
 }
 
-func loadRuntimeSnapshot(settingsFunc func() (config.Settings, error), fallback config.Settings) Snapshot {
+func loadRuntimeSnapshot(settingsFunc func() (runtimeconfig.Config, error), fallback runtimeconfig.Config) Snapshot {
 	settings, err := settingsFunc()
 	if err != nil {
 		settings = fallback
@@ -218,7 +223,7 @@ func resolveRuntimeAccount(auth config.AuthConfig, accountRef string) (config.Ac
 }
 
 func resolveRuntimeModel(
-	loadSettings func() (config.Settings, error),
+	loadSettings func() (runtimeconfig.Config, error),
 	catalog models.MutableCatalog,
 	modelID string,
 ) (runtimeapi.ModelInfo, error) {
@@ -249,7 +254,7 @@ func resolveRuntimeModel(
 
 func preloadModels(
 	ctx context.Context,
-	settings *config.Settings,
+	settings *runtimeconfig.Config,
 	auth *config.AuthConfig,
 	tokens middleware.TokenProvider,
 	client *http.Client,

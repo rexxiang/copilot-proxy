@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"copilot-proxy/internal/config"
+	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
 )
 
 var (
@@ -15,28 +15,28 @@ var (
 )
 
 func TestSettingsRuntimeCoordinator_ApplySuccess(t *testing.T) {
-	initial := config.DefaultSettings()
+	initial := appsettings.DefaultSettings()
 	candidate := initial
 	candidate.MaxRetries = initial.MaxRetries + 2
 
 	calls := make([]string, 0, 3)
 	coordinator := NewSettingsRuntimeCoordinator(&RuntimeCoordinatorConfig{
 		InitialSettings: initial,
-		ValidateRuntime: func(next config.Settings) (RuntimeValidationResult, error) {
+		ValidateRuntime: func(next appsettings.Settings) (RuntimeValidationResult, error) {
 			calls = append(calls, "validate")
 			if next.MaxRetries != candidate.MaxRetries {
 				t.Fatalf("unexpected candidate in validate: got %d want %d", next.MaxRetries, candidate.MaxRetries)
 			}
 			return "snapshot-ok", nil
 		},
-		PersistSettings: func(settings config.Settings) error {
+		PersistSettings: func(settings appsettings.Settings) error {
 			calls = append(calls, "persist")
 			if settings.MaxRetries != candidate.MaxRetries {
 				t.Fatalf("unexpected candidate in persist: got %d want %d", settings.MaxRetries, candidate.MaxRetries)
 			}
 			return nil
 		},
-		PublishRuntime: func(next config.Settings, validated RuntimeValidationResult) error {
+		PublishRuntime: func(next appsettings.Settings, validated RuntimeValidationResult) error {
 			calls = append(calls, "publish")
 			if next.MaxRetries != candidate.MaxRetries {
 				t.Fatalf("unexpected candidate in publish: got %d want %d", next.MaxRetries, candidate.MaxRetries)
@@ -65,7 +65,7 @@ func TestSettingsRuntimeCoordinator_ApplySuccess(t *testing.T) {
 }
 
 func TestSettingsRuntimeCoordinator_ApplyValidateFailure(t *testing.T) {
-	initial := config.DefaultSettings()
+	initial := appsettings.DefaultSettings()
 	candidate := initial
 	candidate.MaxRetries = initial.MaxRetries + 1
 
@@ -73,14 +73,14 @@ func TestSettingsRuntimeCoordinator_ApplyValidateFailure(t *testing.T) {
 	publishCalled := false
 	coordinator := NewSettingsRuntimeCoordinator(&RuntimeCoordinatorConfig{
 		InitialSettings: initial,
-		ValidateRuntime: func(next config.Settings) (RuntimeValidationResult, error) {
+		ValidateRuntime: func(next appsettings.Settings) (RuntimeValidationResult, error) {
 			return nil, errValidateFailed
 		},
-		PersistSettings: func(settings config.Settings) error {
+		PersistSettings: func(settings appsettings.Settings) error {
 			persistCalled = true
 			return nil
 		},
-		PublishRuntime: func(next config.Settings, validated RuntimeValidationResult) error {
+		PublishRuntime: func(next appsettings.Settings, validated RuntimeValidationResult) error {
 			publishCalled = true
 			return nil
 		},
@@ -102,20 +102,20 @@ func TestSettingsRuntimeCoordinator_ApplyValidateFailure(t *testing.T) {
 }
 
 func TestSettingsRuntimeCoordinator_ApplyPersistFailure(t *testing.T) {
-	initial := config.DefaultSettings()
+	initial := appsettings.DefaultSettings()
 	candidate := initial
 	candidate.MaxRetries = initial.MaxRetries + 1
 
 	publishCalled := false
 	coordinator := NewSettingsRuntimeCoordinator(&RuntimeCoordinatorConfig{
 		InitialSettings: initial,
-		ValidateRuntime: func(next config.Settings) (RuntimeValidationResult, error) {
+		ValidateRuntime: func(next appsettings.Settings) (RuntimeValidationResult, error) {
 			return "validated", nil
 		},
-		PersistSettings: func(settings config.Settings) error {
+		PersistSettings: func(settings appsettings.Settings) error {
 			return errPersistFailed
 		},
-		PublishRuntime: func(next config.Settings, validated RuntimeValidationResult) error {
+		PublishRuntime: func(next appsettings.Settings, validated RuntimeValidationResult) error {
 			publishCalled = true
 			return nil
 		},
@@ -134,19 +134,19 @@ func TestSettingsRuntimeCoordinator_ApplyPersistFailure(t *testing.T) {
 }
 
 func TestSettingsRuntimeCoordinator_ApplyPublishFailure(t *testing.T) {
-	initial := config.DefaultSettings()
+	initial := appsettings.DefaultSettings()
 	candidate := initial
 	candidate.MaxRetries = initial.MaxRetries + 1
 
 	coordinator := NewSettingsRuntimeCoordinator(&RuntimeCoordinatorConfig{
 		InitialSettings: initial,
-		ValidateRuntime: func(next config.Settings) (RuntimeValidationResult, error) {
+		ValidateRuntime: func(next appsettings.Settings) (RuntimeValidationResult, error) {
 			return "validated", nil
 		},
-		PersistSettings: func(settings config.Settings) error {
+		PersistSettings: func(settings appsettings.Settings) error {
 			return nil
 		},
-		PublishRuntime: func(next config.Settings, validated RuntimeValidationResult) error {
+		PublishRuntime: func(next appsettings.Settings, validated RuntimeValidationResult) error {
 			return errPublishFailed
 		},
 	})

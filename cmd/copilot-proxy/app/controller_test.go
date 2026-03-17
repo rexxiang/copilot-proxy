@@ -7,10 +7,12 @@ import (
 	"testing"
 	"time"
 
+	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
 	"copilot-proxy/internal/core/observability"
 	"copilot-proxy/internal/core/runtime"
+	"copilot-proxy/internal/core/runtimeconfig"
 	"copilot-proxy/internal/models"
 )
 
@@ -31,8 +33,8 @@ func buildTestController(t *testing.T, modify func(*ControllerDeps)) *ServiceCon
 	ctx := context.Background()
 	deps := ControllerDeps{
 		Runtime: runtime.RuntimeDeps{
-			SettingsFunc: func() (config.Settings, error) {
-				settings := config.DefaultSettings()
+			SettingsFunc: func() (runtimeconfig.Config, error) {
+				settings := appsettings.ToRuntimeConfig(appsettings.DefaultSettings())
 				settings.ListenAddr = "127.0.0.1:0"
 				return settings, nil
 			},

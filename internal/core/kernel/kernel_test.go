@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
 	"copilot-proxy/internal/core/observability"
+	"copilot-proxy/internal/core/runtimeconfig"
 	coreRuntime "copilot-proxy/internal/core/runtime"
 	"copilot-proxy/internal/server"
 )
@@ -90,12 +90,12 @@ func TestKernelInvokeFlow(t *testing.T) {
 
 func newTestRuntime(t *testing.T) *coreRuntime.Runtime {
 	t.Helper()
-	settings := config.DefaultSettings()
+	settings := runtimeconfig.Default()
 	settings.ListenAddr = "127.0.0.1:0"
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	srv := server.New(&settings, handler)
+	srv := server.New(settings.ListenAddr, handler)
 	return &coreRuntime.Runtime{Server: srv}
 }
 

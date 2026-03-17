@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
 	"copilot-proxy/cmd/copilot-proxy/app/tui"
 	"copilot-proxy/internal/config"
 	core "copilot-proxy/internal/core"
@@ -1061,10 +1062,10 @@ func TestMonitorModel_ConfigModalOpenAndClose(t *testing.T) {
 	collector := observability.NewCollector(100)
 	deps := MonitorDeps{
 		Collector: collector,
-		LoadSettings: func() (config.Settings, error) {
-			return config.DefaultSettings(), nil
+		LoadSettings: func() (appsettings.Settings, error) {
+			return appsettings.DefaultSettings(), nil
 		},
-		ApplySettings: func(settings config.Settings) (config.Settings, error) {
+		ApplySettings: func(settings appsettings.Settings) (appsettings.Settings, error) {
 			return settings, nil
 		},
 	}
@@ -1098,10 +1099,10 @@ func TestMonitorModel_ConfigModalSaveAppliesSettings(t *testing.T) {
 	applied := false
 	deps := MonitorDeps{
 		Collector: collector,
-		LoadSettings: func() (config.Settings, error) {
-			return config.DefaultSettings(), nil
+		LoadSettings: func() (appsettings.Settings, error) {
+			return appsettings.DefaultSettings(), nil
 		},
-		ApplySettings: func(settings config.Settings) (config.Settings, error) {
+		ApplySettings: func(settings appsettings.Settings) (appsettings.Settings, error) {
 			applied = true
 			settings.ListenAddr = "127.0.0.1:5111"
 			return settings, nil
@@ -1148,14 +1149,14 @@ func TestMonitorModel_ConfigModalSaveAppliesSettings(t *testing.T) {
 func TestMonitorModel_ApplySettingsUsesCallbacks(t *testing.T) {
 	collector := observability.NewCollector(100)
 	statsSvc := stats.NewService(collector.Observability())
-	current := config.DefaultSettings()
+	current := appsettings.DefaultSettings()
 	deps := MonitorDeps{
 		Collector:    collector,
 		StatsService: statsSvc,
-		LoadSettings: func() (config.Settings, error) {
+		LoadSettings: func() (appsettings.Settings, error) {
 			return current, nil
 		},
-		ApplySettings: func(next config.Settings) (config.Settings, error) {
+		ApplySettings: func(next appsettings.Settings) (appsettings.Settings, error) {
 			current = next
 			return current, nil
 		},

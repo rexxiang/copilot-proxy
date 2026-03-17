@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"sync"
 
-	"copilot-proxy/internal/config"
+	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
 )
 
 var (
@@ -19,22 +19,22 @@ var (
 type RuntimeValidationResult any
 
 type RuntimeCoordinatorConfig struct {
-	InitialSettings config.Settings
-	ValidateRuntime func(next config.Settings) (RuntimeValidationResult, error)
-	PersistSettings func(settings config.Settings) error
-	PublishRuntime  func(next config.Settings, validated RuntimeValidationResult) error
+	InitialSettings appsettings.Settings
+	ValidateRuntime func(next appsettings.Settings) (RuntimeValidationResult, error)
+	PersistSettings func(settings appsettings.Settings) error
+	PublishRuntime  func(next appsettings.Settings, validated RuntimeValidationResult) error
 }
 
 type SettingsRuntimeCoordinator struct {
 	mu              sync.Mutex
-	current         config.Settings
-	validateRuntime func(next config.Settings) (RuntimeValidationResult, error)
-	persistSettings func(settings config.Settings) error
-	publishRuntime  func(next config.Settings, validated RuntimeValidationResult) error
+	current         appsettings.Settings
+	validateRuntime func(next appsettings.Settings) (RuntimeValidationResult, error)
+	persistSettings func(settings appsettings.Settings) error
+	publishRuntime  func(next appsettings.Settings, validated RuntimeValidationResult) error
 }
 
 func NewSettingsRuntimeCoordinator(cfg *RuntimeCoordinatorConfig) *SettingsRuntimeCoordinator {
-	defaultSettings := config.DefaultSettings()
+	defaultSettings := appsettings.DefaultSettings()
 	if cfg == nil {
 		return &SettingsRuntimeCoordinator{
 			mu:              sync.Mutex{},
@@ -53,13 +53,13 @@ func NewSettingsRuntimeCoordinator(cfg *RuntimeCoordinatorConfig) *SettingsRunti
 	}
 }
 
-func (c *SettingsRuntimeCoordinator) Current() config.Settings {
+func (c *SettingsRuntimeCoordinator) Current() appsettings.Settings {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.current
 }
 
-func (c *SettingsRuntimeCoordinator) Apply(candidate *config.Settings) (config.Settings, error) {
+func (c *SettingsRuntimeCoordinator) Apply(candidate *appsettings.Settings) (appsettings.Settings, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

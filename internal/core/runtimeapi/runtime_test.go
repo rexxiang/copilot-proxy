@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core/runtimeconfig"
 )
 
 func TestRuntimeExecuteMapsChatCompletionsPath(t *testing.T) {
@@ -336,9 +337,9 @@ func TestRuntimeFetchLoginUsesGitHubAPIBase(t *testing.T) {
 	}
 }
 
-func settingsProviderForTests(baseURL string) func(context.Context) (config.Settings, error) {
-	return func(context.Context) (config.Settings, error) {
-		settings := config.DefaultSettings()
+func settingsProviderForTests(baseURL string) func(context.Context) (runtimeconfig.Config, error) {
+	return func(context.Context) (runtimeconfig.Config, error) {
+		settings := runtimeconfig.Default()
 		settings.UpstreamBase = baseURL
 		settings.RequiredHeaders = map[string]string{
 			"X-Test-Header": "test-value",

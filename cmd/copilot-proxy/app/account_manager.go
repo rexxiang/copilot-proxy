@@ -12,6 +12,7 @@ import (
 	core "copilot-proxy/internal/core"
 	accountcore "copilot-proxy/internal/core/account"
 	"copilot-proxy/internal/core/runtimeapi"
+	"copilot-proxy/internal/core/runtimeconfig"
 )
 
 const defaultPremiumTTL = 30 * time.Second
@@ -335,15 +336,15 @@ func newHTTPClient(timeout time.Duration) *http.Client {
 func newRuntimeAccountManager(
 	loadAuth func() (config.AuthConfig, error),
 	saveAuth func(config.AuthConfig) error,
-	loadSettings func() (config.Settings, error),
+	loadSettings func() (runtimeconfig.Config, error),
 	httpClient *http.Client,
 ) *AccountManager {
 	settingsLoader := loadSettings
 	if settingsLoader == nil {
-		settingsLoader = config.LoadSettings
+		settingsLoader = loadRuntimeConfigFromAppSettings
 	}
 	api := runtimeapi.NewRuntime(runtimeapi.Options{
-		SettingsProvider: func(context.Context) (config.Settings, error) {
+		SettingsProvider: func(context.Context) (runtimeconfig.Config, error) {
 			return settingsLoader()
 		},
 		HTTPClientFactory: func() *http.Client {

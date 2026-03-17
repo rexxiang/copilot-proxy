@@ -10,7 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"copilot-proxy/internal/config"
+	config "copilot-proxy/cmd/copilot-proxy/app/settings"
+	"copilot-proxy/cmd/copilot-proxy/app/tui/settingsform"
 )
 
 type ModalAction int
@@ -63,9 +64,9 @@ type arrayInputRow struct {
 
 type ConfigModal struct {
 	open           bool
-	specs          []config.FieldSpec
-	form           config.SettingsForm
-	baseForm       config.SettingsForm
+	specs          []settingsform.FieldSpec
+	form           settingsform.SettingsForm
+	baseForm       settingsform.SettingsForm
 	kvCursors      map[string]kvCursor
 	arrayCursors   map[string]arrayCursor
 	scalarInputs   map[string]*textinput.Model
@@ -105,14 +106,14 @@ func NewConfigModal() *ConfigModal {
 	return &ConfigModal{
 		open:  false,
 		specs: nil,
-		form: config.SettingsForm{
+		form: settingsform.SettingsForm{
 			ScalarValues:      make(map[string]string),
-			KeyValueValues:    make(map[string][]config.HeaderKV),
+			KeyValueValues:    make(map[string][]settingsform.HeaderKV),
 			ObjectArrayValues: make(map[string][]map[string]string),
 		},
-		baseForm: config.SettingsForm{
+		baseForm: settingsform.SettingsForm{
 			ScalarValues:      make(map[string]string),
-			KeyValueValues:    make(map[string][]config.HeaderKV),
+			KeyValueValues:    make(map[string][]settingsform.HeaderKV),
 			ObjectArrayValues: make(map[string][]map[string]string),
 		},
 		kvCursors:      make(map[string]kvCursor),
@@ -127,16 +128,16 @@ func NewConfigModal() *ConfigModal {
 }
 
 func (m *ConfigModal) Open(settings *config.Settings) error {
-	specs, err := config.SettingsFieldSpecs()
+	specs, err := settingsform.SettingsFieldSpecs()
 	if err != nil {
 		return fmt.Errorf("load settings field specs: %w", err)
 	}
-	form, err := config.EncodeSettingsToForm(settings, specs)
+	form, err := settingsform.EncodeSettingsToForm(settings, specs)
 	if err != nil {
 		return fmt.Errorf("encode settings form: %w", err)
 	}
 
-	visibleSpecs := make([]config.FieldSpec, 0, len(specs))
+	visibleSpecs := make([]settingsform.FieldSpec, 0, len(specs))
 	kvCursors := make(map[string]kvCursor)
 	arrayCursors := make(map[string]arrayCursor)
 	scalarInputs := make(map[string]*textinput.Model)
@@ -149,10 +150,10 @@ func (m *ConfigModal) Open(settings *config.Settings) error {
 		}
 		visibleSpecs = append(visibleSpecs, spec)
 
-		if spec.Widget == config.WidgetKeyValue {
+		if spec.Widget == settingsform.WidgetKeyValue {
 			rows := form.KeyValueValues[spec.Key]
 			if len(rows) == 0 {
-				rows = []config.HeaderKV{{Key: "", Value: ""}}
+				rows = []settingsform.HeaderKV{{Key: "", Value: ""}}
 				form.KeyValueValues[spec.Key] = rows
 			}
 			kvRows := make([]kvInputRow, 0, len(rows))
@@ -167,7 +168,7 @@ func (m *ConfigModal) Open(settings *config.Settings) error {
 			kvCursors[spec.Key] = kvCursor{row: 0, col: kvCursorColKey}
 			continue
 		}
-		if spec.Widget == config.WidgetArray {
+		if spec.Widget == settingsform.WidgetArray {
 			rows := form.ObjectArrayValues[spec.Key]
 			columns := visibleArrayColumns(&spec)
 			if len(rows) == 0 {
@@ -208,7 +209,7 @@ func (m *ConfigModal) Open(settings *config.Settings) error {
 	m.errorMsg = ""
 	for i := range m.specs {
 		spec := &m.specs[i]
-		if spec.Widget == config.WidgetArray {
+		if spec.Widget == settingsform.WidgetArray {
 			m.normalizeArrayRows(spec)
 		}
 	}
@@ -265,7 +266,7 @@ func (m *ConfigModal) SetError(message string) {
 
 func (m *ConfigModal) BuildCandidate(base *config.Settings) (config.Settings, error) {
 	sanitizedForm := sanitizeFormForSave(m.specs, m.form)
-	settings, err := config.DecodeFormToSettings(base, m.specs, sanitizedForm)
+	settings, err := settingsform.DecodeFormToSettings(base, m.specs, sanitizedForm)
 	if err != nil {
 		return config.Settings{}, fmt.Errorf("decode settings from form: %w", err)
 	}
@@ -484,13 +485,13 @@ func (m *ConfigModal) handleVerticalMove(step int) {
 	if spec == nil {
 		return
 	}
-	if spec.Widget != config.WidgetKeyValue && spec.Widget != config.WidgetArray {
+	if spec.Widget != settingsform.WidgetKeyValue && spec.Widget != settingsform.WidgetArray {
 		m.moveFocus(step)
 		m.syncInputFocus()
 		return
 	}
 
-	if spec.Widget == config.WidgetArray {
+	if spec.Widget == settingsform.WidgetArray {
 		rows := m.form.ObjectArrayValues[spec.Key]
 		if len(rows) == 0 {
 			m.moveFocus(step)
@@ -534,7 +535,7 @@ func (m *ConfigModal) handleColumnTab(step int) bool {
 	if spec == nil || spec.ReadOnly {
 		return false
 	}
-	if spec.Widget == config.WidgetArray {
+	if spec.Widget == settingsform.WidgetArray {
 		columns := visibleArrayColumns(spec)
 		if len(columns) == 0 {
 			return false
@@ -558,7 +559,7 @@ func (m *ConfigModal) handleColumnTab(step int) bool {
 		}
 		return false
 	}
-	if spec.Widget != config.WidgetKeyValue {
+	if spec.Widget != settingsform.WidgetKeyValue {
 		return false
 	}
 
@@ -587,7 +588,7 @@ func (m *ConfigModal) handleCollectionAdd() {
 	if spec == nil || spec.ReadOnly {
 		return
 	}
-	if spec.Widget == config.WidgetArray {
+	if spec.Widget == settingsform.WidgetArray {
 		columns := visibleArrayColumns(spec)
 		if len(columns) == 0 {
 			return
@@ -620,12 +621,12 @@ func (m *ConfigModal) handleCollectionAdd() {
 		m.syncInputFocus()
 		return
 	}
-	if spec.Widget != config.WidgetKeyValue {
+	if spec.Widget != settingsform.WidgetKeyValue {
 		return
 	}
 
 	rows := m.form.KeyValueValues[spec.Key]
-	rows = append(rows, config.HeaderKV{Key: "", Value: ""})
+	rows = append(rows, settingsform.HeaderKV{Key: "", Value: ""})
 	m.form.KeyValueValues[spec.Key] = rows
 
 	inputRows := m.keyValueInputs[spec.Key]
@@ -647,7 +648,7 @@ func (m *ConfigModal) handleCollectionDelete() {
 	if spec == nil || spec.ReadOnly {
 		return
 	}
-	if spec.Widget == config.WidgetArray {
+	if spec.Widget == settingsform.WidgetArray {
 		m.normalizeArrayRows(spec)
 		rows := m.form.ObjectArrayValues[spec.Key]
 		if len(rows) == 0 {
@@ -671,7 +672,7 @@ func (m *ConfigModal) handleCollectionDelete() {
 		m.syncInputFocus()
 		return
 	}
-	if spec.Widget != config.WidgetKeyValue {
+	if spec.Widget != settingsform.WidgetKeyValue {
 		return
 	}
 
@@ -705,7 +706,7 @@ func (m *ConfigModal) handleCollectionColMove(step int) {
 	if spec == nil {
 		return
 	}
-	if spec.Widget == config.WidgetArray {
+	if spec.Widget == settingsform.WidgetArray {
 		columns := visibleArrayColumns(spec)
 		if len(columns) == 0 {
 			return
@@ -722,7 +723,7 @@ func (m *ConfigModal) handleCollectionColMove(step int) {
 		m.syncInputFocus()
 		return
 	}
-	if spec.Widget != config.WidgetKeyValue {
+	if spec.Widget != settingsform.WidgetKeyValue {
 		return
 	}
 	cursor := m.kvCursors[spec.Key]
@@ -739,7 +740,7 @@ func (m *ConfigModal) handleCollectionColMove(step int) {
 
 func (m *ConfigModal) handleCollectionRowMove(step int) {
 	spec := m.currentSpec()
-	if spec == nil || spec.ReadOnly || spec.Widget != config.WidgetArray {
+	if spec == nil || spec.ReadOnly || spec.Widget != settingsform.WidgetArray {
 		return
 	}
 
@@ -784,22 +785,22 @@ func (m *ConfigModal) handleInputKey(msg tea.KeyMsg) {
 		return
 	}
 
-	if spec.Widget == config.WidgetKeyValue {
+	if spec.Widget == settingsform.WidgetKeyValue {
 		m.updateKeyValueInput(msg, spec)
 		return
 	}
-	if spec.Widget == config.WidgetArray {
+	if spec.Widget == settingsform.WidgetArray {
 		m.updateArrayInput(msg, spec)
 		return
 	}
 	m.updateScalarInput(msg, spec)
 }
 
-func (m *ConfigModal) updateScalarInput(msg tea.KeyMsg, spec *config.FieldSpec) {
+func (m *ConfigModal) updateScalarInput(msg tea.KeyMsg, spec *settingsform.FieldSpec) {
 	if spec == nil {
 		return
 	}
-	if spec.Widget == config.WidgetBool {
+	if spec.Widget == settingsform.WidgetBool {
 		if keyMatches(msg, tea.KeySpace, "space") || isSpaceRuneKey(msg) {
 			m.toggleBoolField(spec)
 		}
@@ -824,7 +825,7 @@ func (m *ConfigModal) updateScalarInput(msg tea.KeyMsg, spec *config.FieldSpec) 
 	m.form.ScalarValues[spec.Key] = input.Value()
 }
 
-func (m *ConfigModal) updateKeyValueInput(msg tea.KeyMsg, spec *config.FieldSpec) {
+func (m *ConfigModal) updateKeyValueInput(msg tea.KeyMsg, spec *settingsform.FieldSpec) {
 	if spec == nil {
 		return
 	}
@@ -866,7 +867,7 @@ func (m *ConfigModal) updateKeyValueInput(msg tea.KeyMsg, spec *config.FieldSpec
 	m.form.KeyValueValues[spec.Key] = rows
 }
 
-func (m *ConfigModal) updateArrayInput(msg tea.KeyMsg, spec *config.FieldSpec) {
+func (m *ConfigModal) updateArrayInput(msg tea.KeyMsg, spec *settingsform.FieldSpec) {
 	if spec == nil {
 		return
 	}
@@ -925,7 +926,7 @@ func (m *ConfigModal) updateArrayInput(msg tea.KeyMsg, spec *config.FieldSpec) {
 	m.normalizeArrayRows(spec)
 }
 
-func (m *ConfigModal) currentSpec() *config.FieldSpec {
+func (m *ConfigModal) currentSpec() *settingsform.FieldSpec {
 	if len(m.specs) == 0 || m.focus < 0 || m.focus >= len(m.specs) {
 		return nil
 	}
@@ -984,21 +985,21 @@ func (m *ConfigModal) renderFieldBlock(index int) string {
 		label = configModalReadOnlyStyle.Render(label)
 	}
 
-	if spec.Widget == config.WidgetKeyValue {
+	if spec.Widget == settingsform.WidgetKeyValue {
 		return m.renderKeyValueFieldBlock(spec, label, focused)
 	}
-	if spec.Widget == config.WidgetArray {
+	if spec.Widget == settingsform.WidgetArray {
 		return m.renderObjectArrayFieldBlock(spec, label, focused)
 	}
 	value := m.renderScalarFieldValue(spec, focused)
 	return fmt.Sprintf("%-*s : %s", configModalLabelW, label, value)
 }
 
-func (m *ConfigModal) renderScalarFieldValue(spec *config.FieldSpec, focused bool) string {
+func (m *ConfigModal) renderScalarFieldValue(spec *settingsform.FieldSpec, focused bool) string {
 	if spec == nil {
 		return ""
 	}
-	if spec.Widget == config.WidgetBool {
+	if spec.Widget == settingsform.WidgetBool {
 		return renderBoolValue(spec.Key, parseBoolScalarValue(m.form.ScalarValues[spec.Key]), focused, spec.ReadOnly)
 	}
 	if spec.ReadOnly {
@@ -1015,7 +1016,7 @@ func (m *ConfigModal) renderScalarFieldValue(spec *config.FieldSpec, focused boo
 	return configModalInputStyle.Render(wrapInputValue(input.Value()))
 }
 
-func (m *ConfigModal) renderKeyValueFieldBlock(spec *config.FieldSpec, label string, focused bool) string {
+func (m *ConfigModal) renderKeyValueFieldBlock(spec *settingsform.FieldSpec, label string, focused bool) string {
 	if spec == nil {
 		return ""
 	}
@@ -1054,7 +1055,7 @@ func (m *ConfigModal) renderKeyValueFieldBlock(spec *config.FieldSpec, label str
 	return sb.String()
 }
 
-func (m *ConfigModal) renderObjectArrayFieldBlock(spec *config.FieldSpec, label string, focused bool) string {
+func (m *ConfigModal) renderObjectArrayFieldBlock(spec *settingsform.FieldSpec, label string, focused bool) string {
 	if spec == nil {
 		return ""
 	}
@@ -1206,8 +1207,8 @@ func parseBoolScalarValue(raw string) bool {
 	return strings.EqualFold(strings.TrimSpace(raw), "true")
 }
 
-func (m *ConfigModal) toggleBoolField(spec *config.FieldSpec) {
-	if spec == nil || spec.Widget != config.WidgetBool || spec.ReadOnly {
+func (m *ConfigModal) toggleBoolField(spec *settingsform.FieldSpec) {
+	if spec == nil || spec.Widget != settingsform.WidgetBool || spec.ReadOnly {
 		return
 	}
 	next := !parseBoolScalarValue(m.form.ScalarValues[spec.Key])
@@ -1230,7 +1231,7 @@ func (m *ConfigModal) syncInputFocus() {
 		return
 	}
 
-	if spec.Widget != config.WidgetKeyValue && spec.Widget != config.WidgetArray {
+	if spec.Widget != settingsform.WidgetKeyValue && spec.Widget != settingsform.WidgetArray {
 		input, ok := m.scalarInputs[spec.Key]
 		if !ok || input == nil {
 			return
@@ -1238,7 +1239,7 @@ func (m *ConfigModal) syncInputFocus() {
 		_ = input.Focus()
 		return
 	}
-	if spec.Widget == config.WidgetArray {
+	if spec.Widget == settingsform.WidgetArray {
 		rows := m.arrayInputs[spec.Key]
 		if len(rows) == 0 {
 			return
@@ -1370,7 +1371,7 @@ func computeAdaptiveInputWidth(value, placeholder string) int {
 	return width
 }
 
-func (m *ConfigModal) buildEmptyArrayRow(spec *config.FieldSpec) map[string]string {
+func (m *ConfigModal) buildEmptyArrayRow(spec *settingsform.FieldSpec) map[string]string {
 	columns := visibleArrayColumns(spec)
 	row := make(map[string]string, len(columns))
 	for _, col := range columns {
@@ -1379,7 +1380,7 @@ func (m *ConfigModal) buildEmptyArrayRow(spec *config.FieldSpec) map[string]stri
 	return row
 }
 
-func (m *ConfigModal) buildArrayInputRow(spec *config.FieldSpec, row map[string]string) arrayInputRow {
+func (m *ConfigModal) buildArrayInputRow(spec *settingsform.FieldSpec, row map[string]string) arrayInputRow {
 	columns := visibleArrayColumns(spec)
 	inputs := make(map[string]*textinput.Model, len(columns))
 	for _, col := range columns {
@@ -1392,7 +1393,7 @@ func (m *ConfigModal) buildArrayInputRow(spec *config.FieldSpec, row map[string]
 	return arrayInputRow{fields: inputs}
 }
 
-func (m *ConfigModal) isArrayRowEmpty(spec *config.FieldSpec, row map[string]string) bool {
+func (m *ConfigModal) isArrayRowEmpty(spec *settingsform.FieldSpec, row map[string]string) bool {
 	if spec == nil {
 		return true
 	}
@@ -1408,8 +1409,8 @@ func (m *ConfigModal) isArrayRowEmpty(spec *config.FieldSpec, row map[string]str
 	return true
 }
 
-func (m *ConfigModal) appendTrailingBlankIfNeeded(spec *config.FieldSpec) {
-	if spec == nil || spec.Widget != config.WidgetArray {
+func (m *ConfigModal) appendTrailingBlankIfNeeded(spec *settingsform.FieldSpec) {
+	if spec == nil || spec.Widget != settingsform.WidgetArray {
 		return
 	}
 	rows := m.form.ObjectArrayValues[spec.Key]
@@ -1422,8 +1423,8 @@ func (m *ConfigModal) appendTrailingBlankIfNeeded(spec *config.FieldSpec) {
 	}
 }
 
-func (m *ConfigModal) normalizeArrayRows(spec *config.FieldSpec) {
-	if spec == nil || spec.Widget != config.WidgetArray {
+func (m *ConfigModal) normalizeArrayRows(spec *settingsform.FieldSpec) {
+	if spec == nil || spec.Widget != settingsform.WidgetArray {
 		return
 	}
 	columns := visibleArrayColumns(spec)
@@ -1504,12 +1505,12 @@ func (m *ConfigModal) normalizeArrayRows(spec *config.FieldSpec) {
 	m.arrayCursors[spec.Key] = cursor
 }
 
-func sanitizeFormForSave(specs []config.FieldSpec, form config.SettingsForm) config.SettingsForm {
+func sanitizeFormForSave(specs []settingsform.FieldSpec, form settingsform.SettingsForm) settingsform.SettingsForm {
 	sanitized := form.Clone()
 	for i := range specs {
 		spec := specs[i]
-		if spec.Widget != config.WidgetKeyValue {
-			if spec.Widget == config.WidgetArray {
+		if spec.Widget != settingsform.WidgetKeyValue {
+			if spec.Widget == settingsform.WidgetArray {
 				rows := sanitized.ObjectArrayValues[spec.Key]
 				columns := visibleArrayColumns(&spec)
 				filteredRows := make([]map[string]string, 0, len(rows))
@@ -1535,14 +1536,14 @@ func sanitizeFormForSave(specs []config.FieldSpec, form config.SettingsForm) con
 			continue
 		}
 		rows := sanitized.KeyValueValues[spec.Key]
-		filteredRows := make([]config.HeaderKV, 0, len(rows))
+		filteredRows := make([]settingsform.HeaderKV, 0, len(rows))
 		for j := range rows {
 			key := strings.TrimSpace(rows[j].Key)
 			value := strings.TrimSpace(rows[j].Value)
 			if key == "" || value == "" {
 				continue
 			}
-			filteredRows = append(filteredRows, config.HeaderKV{
+			filteredRows = append(filteredRows, settingsform.HeaderKV{
 				Key:   key,
 				Value: value,
 			})
@@ -1552,14 +1553,14 @@ func sanitizeFormForSave(specs []config.FieldSpec, form config.SettingsForm) con
 	return sanitized
 }
 
-func clearEmptyKeyValueMaps(settings *config.Settings, specs []config.FieldSpec, form config.SettingsForm) {
+func clearEmptyKeyValueMaps(settings *config.Settings, specs []settingsform.FieldSpec, form settingsform.SettingsForm) {
 	if settings == nil {
 		return
 	}
 	settingsValue := reflect.ValueOf(settings).Elem()
 	for i := range specs {
 		spec := specs[i]
-		if spec.Widget != config.WidgetKeyValue {
+		if spec.Widget != settingsform.WidgetKeyValue {
 			continue
 		}
 		if len(form.KeyValueValues[spec.Key]) > 0 {
@@ -1573,11 +1574,11 @@ func clearEmptyKeyValueMaps(settings *config.Settings, specs []config.FieldSpec,
 	}
 }
 
-func visibleArrayColumns(spec *config.FieldSpec) []config.FieldSpec {
+func visibleArrayColumns(spec *settingsform.FieldSpec) []settingsform.FieldSpec {
 	if spec == nil {
 		return nil
 	}
-	columns := make([]config.FieldSpec, 0, len(spec.ElementSpec))
+	columns := make([]settingsform.FieldSpec, 0, len(spec.ElementSpec))
 	for _, col := range spec.ElementSpec {
 		if !col.Visible {
 			continue

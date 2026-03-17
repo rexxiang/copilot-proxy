@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 
-	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
 	"copilot-proxy/internal/core/kernel"
 	coremodel "copilot-proxy/internal/core/model"
 	"copilot-proxy/internal/core/observability"
 	"copilot-proxy/internal/core/runtime"
+	"copilot-proxy/internal/core/runtimeconfig"
 	corestats "copilot-proxy/internal/core/stats"
+	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/models"
 )
 
@@ -48,7 +49,7 @@ func NewServiceController(ctx context.Context, deps ControllerDeps) (*ServiceCon
 	}
 
 	if deps.Runtime.SettingsFunc == nil {
-		deps.Runtime.SettingsFunc = config.LoadSettings
+		deps.Runtime.SettingsFunc = loadRuntimeConfigFromAppSettings
 	}
 	if deps.Runtime.AuthFunc == nil {
 		deps.Runtime.AuthFunc = config.LoadAuth
@@ -71,7 +72,7 @@ func NewServiceController(ctx context.Context, deps ControllerDeps) (*ServiceCon
 	kern := kernel.NewKernel(rt, obs)
 	proxyAddr := rt.Server.Addr
 	if proxyAddr == "" {
-		proxyAddr = config.DefaultSettings().ListenAddr
+		proxyAddr = runtimeconfig.Default().ListenAddr
 	}
 	modelProxy := "http://" + proxyAddr
 

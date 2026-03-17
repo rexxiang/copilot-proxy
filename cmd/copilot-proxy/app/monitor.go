@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
 	"copilot-proxy/cmd/copilot-proxy/app/tui"
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
@@ -40,8 +41,8 @@ type MonitorDeps struct {
 	AuthConfig     *config.AuthConfig
 	HTTPClient     *http.Client
 	ProxyInvoker   models.RequestDoer
-	LoadSettings   func() (config.Settings, error)
-	ApplySettings  func(config.Settings) (config.Settings, error)
+	LoadSettings   func() (appsettings.Settings, error)
+	ApplySettings  func(appsettings.Settings) (appsettings.Settings, error)
 }
 
 // monitorKeyMap defines keybindings for the monitor TUI.
@@ -152,7 +153,7 @@ type accountLoginResultMsg struct {
 }
 
 type settingsAppliedMsg struct {
-	settings *config.Settings
+	settings *appsettings.Settings
 	err      error
 }
 
@@ -170,9 +171,9 @@ type MonitorModel struct {
 	quitting                     bool
 	loading                      bool
 	lastRefresh                  time.Time
-	loadSettings                 func() (config.Settings, error)
-	applySettings                func(config.Settings) (config.Settings, error)
-	currentSettings              config.Settings
+	loadSettings                 func() (appsettings.Settings, error)
+	applySettings                func(appsettings.Settings) (appsettings.Settings, error)
+	currentSettings              appsettings.Settings
 	statusMsg                    string
 	statusView                   tui.ViewState
 	snapshot                     core.Snapshot
@@ -206,17 +207,17 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 	modelSvc := resolveModelService(deps, serverAddr)
 	accountSvc := resolveAccountService(deps)
 	loadSettings := deps.LoadSettings
-	currentSettings := config.DefaultSettings()
+	currentSettings := appsettings.DefaultSettings()
 	if loadSettings == nil {
 		settingsMu := sync.Mutex{}
-		loadSettings = func() (config.Settings, error) {
+		loadSettings = func() (appsettings.Settings, error) {
 			settingsMu.Lock()
 			defer settingsMu.Unlock()
 			return currentSettings, nil
 		}
 		applySettings := deps.ApplySettings
 		if applySettings == nil {
-			applySettings = func(settings config.Settings) (config.Settings, error) {
+			applySettings = func(settings appsettings.Settings) (appsettings.Settings, error) {
 				settingsMu.Lock()
 				defer settingsMu.Unlock()
 				currentSettings = settings
@@ -228,10 +229,10 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 	applySettings := deps.ApplySettings
 	currentSettings, err := loadSettings()
 	if err != nil {
-		currentSettings = config.DefaultSettings()
+		currentSettings = appsettings.DefaultSettings()
 	}
 	if applySettings == nil {
-		applySettings = func(settings config.Settings) (config.Settings, error) {
+		applySettings = func(settings appsettings.Settings) (appsettings.Settings, error) {
 			return settings, nil
 		}
 	}
@@ -837,7 +838,7 @@ func (m *MonitorModel) refreshActiveAccount() {
 	}
 }
 
-func (m *MonitorModel) applySettingsCmd(candidate *config.Settings) tea.Cmd {
+func (m *MonitorModel) applySettingsCmd(candidate *appsettings.Settings) tea.Cmd {
 	return func() tea.Msg {
 		if candidate == nil {
 			return settingsAppliedMsg{

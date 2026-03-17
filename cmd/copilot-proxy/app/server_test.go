@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
 	"copilot-proxy/internal/config"
 	accountcore "copilot-proxy/internal/core/account"
 	"copilot-proxy/internal/models"
@@ -57,7 +58,7 @@ func TestBuildServerUsesDefaultSettings(t *testing.T) {
 	if runtime.runtime == nil || runtime.runtime.Server == nil {
 		t.Fatalf("runtime server should be initialized")
 	}
-	if runtime.runtime.Server.Addr != config.DefaultSettings().ListenAddr {
+	if runtime.runtime.Server.Addr != appsettings.DefaultSettings().ListenAddr {
 		t.Fatalf("unexpected addr: %s", runtime.runtime.Server.Addr)
 	}
 }

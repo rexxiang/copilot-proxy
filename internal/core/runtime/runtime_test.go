@@ -12,6 +12,7 @@ import (
 
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
+	"copilot-proxy/internal/core/runtimeconfig"
 	"copilot-proxy/internal/models"
 )
 
@@ -48,8 +49,8 @@ func TestRuntimeStoresProvidedObservabilitySink(t *testing.T) {
 	ctx := context.Background()
 	sink := &testObservabilitySink{}
 	deps := RuntimeDeps{
-		SettingsFunc: func() (config.Settings, error) {
-			settings := config.DefaultSettings()
+		SettingsFunc: func() (runtimeconfig.Config, error) {
+			settings := runtimeconfig.Default()
 			settings.ListenAddr = "127.0.0.1:0"
 			return settings, nil
 		},
@@ -77,8 +78,8 @@ func TestRuntimeBuildSucceedsWithoutAccounts(t *testing.T) {
 	ctx := context.Background()
 	catalog := &runtimeTestCatalog{}
 	deps := RuntimeDeps{
-		SettingsFunc: func() (config.Settings, error) {
-			settings := config.DefaultSettings()
+		SettingsFunc: func() (runtimeconfig.Config, error) {
+			settings := runtimeconfig.Default()
 			settings.ListenAddr = "127.0.0.1:0"
 			return settings, nil
 		},
@@ -103,8 +104,8 @@ func TestRuntimeBuildSucceedsWithoutAccounts(t *testing.T) {
 func TestRuntimeBuildRequiresExplicitModelCatalog(t *testing.T) {
 	ctx := context.Background()
 	deps := RuntimeDeps{
-		SettingsFunc: func() (config.Settings, error) {
-			settings := config.DefaultSettings()
+		SettingsFunc: func() (runtimeconfig.Config, error) {
+			settings := runtimeconfig.Default()
 			settings.ListenAddr = "127.0.0.1:0"
 			return settings, nil
 		},
@@ -127,7 +128,7 @@ func TestRuntimeUsesUpdatedExternalAuthAndSettingsState(t *testing.T) {
 
 	var (
 		mu          sync.Mutex
-		settings    = config.DefaultSettings()
+		settings    = runtimeconfig.Default()
 		authConfig  = config.AuthConfig{}
 		server1Hits []capturedRequest
 		server2Hits []capturedRequest
@@ -173,7 +174,7 @@ func TestRuntimeUsesUpdatedExternalAuthAndSettingsState(t *testing.T) {
 	}
 
 	rt, err := NewRuntimeWithContext(context.Background(), RuntimeDeps{
-		SettingsFunc: func() (config.Settings, error) {
+		SettingsFunc: func() (runtimeconfig.Config, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			return settings, nil

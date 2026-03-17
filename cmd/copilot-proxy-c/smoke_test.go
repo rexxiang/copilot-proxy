@@ -15,6 +15,7 @@ import (
 
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
+	"copilot-proxy/internal/core/runtimeconfig"
 )
 
 func TestExecuteRequestNonStream(t *testing.T) {
@@ -303,8 +304,8 @@ func withCAPISettings(baseURL string, client *http.Client) func() {
 	previousClientMaker := httpClientMaker
 	previousSettingsProvider := settingsProvider
 	httpClientMaker = func() *http.Client { return client }
-	settingsProvider = func() config.Settings {
-		settings := config.DefaultSettings()
+	settingsProvider = func() runtimeconfig.Config {
+		settings := runtimeconfig.Default()
 		settings.UpstreamBase = baseURL
 		settings.RequiredHeaders = nil
 		return settings

@@ -11,6 +11,7 @@ import (
 	"copilot-proxy/internal/auth"
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core/runtimeapi"
+	"copilot-proxy/internal/core/runtimeconfig"
 )
 
 type resolveToken func(ctx context.Context, accountRef string) (string, error)
@@ -37,8 +38,8 @@ type modelInfo struct {
 var (
 	githubAPIBase    = config.GitHubAPIURL
 	httpClientMaker  = func() *http.Client { return &http.Client{Timeout: 90 * time.Second} }
-	settingsProvider = func() config.Settings {
-		return config.DefaultSettings()
+	settingsProvider = func() runtimeconfig.Config {
+		return runtimeconfig.Default()
 	}
 )
 
@@ -68,7 +69,7 @@ func executeRequest(ctx context.Context, requestJSON string, deps executeDeps, o
 
 func newRuntime(resolveTokenFn resolveToken, resolveModelFn resolveModel) *runtimeapi.Runtime {
 	opts := runtimeapi.Options{
-		SettingsProvider: func(context.Context) (config.Settings, error) {
+		SettingsProvider: func(context.Context) (runtimeconfig.Config, error) {
 			return settingsProvider(), nil
 		},
 		HTTPClientFactory: httpClientMaker,

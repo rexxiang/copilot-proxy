@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core/runtimeconfig"
 	"copilot-proxy/internal/reasoning"
 )
 
@@ -26,9 +26,9 @@ type Snapshot struct {
 	ReasoningPolicies                 []reasoning.Policy
 }
 
-func compileRuntimeSettingsSnapshot(settings config.Settings) (Snapshot, error) {
+func compileRuntimeSettingsSnapshot(settings runtimeconfig.Config) (Snapshot, error) {
 	normalized := cloneRuntimeSettings(settings)
-	defaults := config.DefaultSettings()
+	defaults := runtimeconfig.Default()
 
 	if normalized.MaxRetries <= 0 {
 		return Snapshot{}, errInvalidMaxRetries
@@ -62,17 +62,15 @@ func compileRuntimeSettingsSnapshot(settings config.Settings) (Snapshot, error) 
 }
 
 // CompileSnapshot validates settings and returns the derived runtime snapshot.
-func CompileSnapshot(settings config.Settings) (Snapshot, error) {
+func CompileSnapshot(settings runtimeconfig.Config) (Snapshot, error) {
 	return compileRuntimeSettingsSnapshot(settings)
 }
 
-func cloneRuntimeSettings(input config.Settings) config.Settings {
+func cloneRuntimeSettings(input runtimeconfig.Config) runtimeconfig.Config {
 	clone := input
 	clone.RequiredHeaders = cloneStringMap(input.RequiredHeaders)
 	clone.ReasoningPoliciesMap = cloneStringMap(input.ReasoningPoliciesMap)
-	clone.ReasoningPolicies = cloneReasoningPolicyRows(input.ReasoningPolicies)
 	clone.ClaudeHaikuFallbackModels = cloneStringSliceRuntime(input.ClaudeHaikuFallbackModels)
-	clone.ClaudeHaikuFallbackModelsUI = cloneHaikuFallbackUIRows(input.ClaudeHaikuFallbackModelsUI)
 	return clone
 }
 
@@ -84,24 +82,6 @@ func cloneStringMap(input map[string]string) map[string]string {
 	for key, value := range input {
 		out[key] = value
 	}
-	return out
-}
-
-func cloneReasoningPolicyRows(input []config.ReasoningPolicy) []config.ReasoningPolicy {
-	if input == nil {
-		return nil
-	}
-	out := make([]config.ReasoningPolicy, len(input))
-	copy(out, input)
-	return out
-}
-
-func cloneHaikuFallbackUIRows(input []config.HaikuFallbackModel) []config.HaikuFallbackModel {
-	if input == nil {
-		return nil
-	}
-	out := make([]config.HaikuFallbackModel, len(input))
-	copy(out, input)
 	return out
 }
 

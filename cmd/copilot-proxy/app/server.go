@@ -10,8 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
 	"copilot-proxy/internal/config"
 	coreRuntime "copilot-proxy/internal/core/runtime"
+	"copilot-proxy/internal/core/runtimeconfig"
 	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/models"
 
@@ -24,7 +26,7 @@ var errRuntimeServerRequired = errors.New("runtime server is required")
 type ServerDeps struct {
 	HTTPClient    *http.Client
 	Transport     http.RoundTripper
-	SettingsFunc  func() (config.Settings, error)
+	SettingsFunc  func() (runtimeconfig.Config, error)
 	AuthFunc      func() (config.AuthConfig, error)
 	Observability middleware.ObservabilitySink
 	TokenManager  middleware.TokenProvider
@@ -47,7 +49,7 @@ func newTimeoutHTTPClient(timeout time.Duration) *http.Client {
 // DefaultServerDeps returns production dependencies.
 func DefaultServerDeps() ServerDeps {
 	return ServerDeps{
-		SettingsFunc: config.LoadSettings,
+		SettingsFunc: loadRuntimeConfigFromAppSettings,
 		AuthFunc:     config.LoadAuth,
 		ModelCatalog: models.NewManager(),
 	}
@@ -154,7 +156,7 @@ func runWithTUI(ctx context.Context, ctrl *ServiceController) error {
 		_ = ctrl.Stop()
 	}()
 
-	currentSettings, err := config.LoadSettings()
+	currentSettings, err := appsettings.LoadSettings()
 	if err != nil {
 		return fmt.Errorf("load settings: %w", err)
 	}
@@ -162,13 +164,13 @@ func runWithTUI(ctx context.Context, ctrl *ServiceController) error {
 
 	coordinator := NewSettingsRuntimeCoordinator(&RuntimeCoordinatorConfig{
 		InitialSettings: currentSettings,
-		ValidateRuntime: func(next config.Settings) (RuntimeValidationResult, error) {
-			return coreRuntime.CompileSnapshot(next)
+		ValidateRuntime: func(next appsettings.Settings) (RuntimeValidationResult, error) {
+			return coreRuntime.CompileSnapshot(appsettings.ToRuntimeConfig(next))
 		},
-		PersistSettings: func(settings config.Settings) error {
-			return config.SaveSettings(&settings)
+		PersistSettings: func(settings appsettings.Settings) error {
+			return appsettings.SaveSettings(&settings)
 		},
-		PublishRuntime: func(next config.Settings, validated RuntimeValidationResult) error {
+		PublishRuntime: func(next appsettings.Settings, validated RuntimeValidationResult) error {
 			return nil
 		},
 	})
@@ -177,7 +179,7 @@ func runWithTUI(ctx context.Context, ctrl *ServiceController) error {
 	accountSvc := newRuntimeAccountManager(
 		config.LoadAuth,
 		config.SaveAuth,
-		config.LoadSettings,
+		loadRuntimeConfigFromAppSettings,
 		newTimeoutHTTPClient(defaultMonitorTimeout),
 	)
 	monitorDeps := MonitorDeps{
@@ -186,13 +188,13 @@ func runWithTUI(ctx context.Context, ctrl *ServiceController) error {
 		AccountService: accountSvc,
 		Models:         nil,
 		HTTPClient:     newTimeoutHTTPClient(defaultMonitorTimeout),
-		LoadSettings: func() (config.Settings, error) {
+		LoadSettings: func() (appsettings.Settings, error) {
 			return coordinator.Current(), nil
 		},
-		ApplySettings: func(settings config.Settings) (config.Settings, error) {
+		ApplySettings: func(settings appsettings.Settings) (appsettings.Settings, error) {
 			applied, applyErr := coordinator.Apply(&settings)
 			if applyErr != nil {
-				return config.Settings{}, applyErr
+				return appsettings.Settings{}, applyErr
 			}
 			return applied, nil
 		},

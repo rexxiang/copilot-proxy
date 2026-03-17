@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/config"
+	config "copilot-proxy/cmd/copilot-proxy/app/settings"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

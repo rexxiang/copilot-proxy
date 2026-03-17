@@ -3,11 +3,11 @@ package runtime
 import (
 	"testing"
 
-	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core/runtimeconfig"
 )
 
 func TestCompileRuntimeSettingsSnapshot_ValidatesAndBuilds(t *testing.T) {
-	settings := config.DefaultSettings()
+	settings := runtimeconfig.Default()
 	settings.RateLimitSeconds = 2
 	settings.MessagesAgentDetectionRequestMode = false
 	settings.ClaudeHaikuFallbackModels = []string{" gpt-5-mini ", "", "grok-code-fast-1"}
@@ -37,7 +37,7 @@ func TestCompileRuntimeSettingsSnapshot_ValidatesAndBuilds(t *testing.T) {
 }
 
 func TestCompileRuntimeSettingsSnapshot_RejectsInvalidRateLimit(t *testing.T) {
-	settings := config.DefaultSettings()
+	settings := runtimeconfig.Default()
 	settings.RateLimitSeconds = -1
 
 	if _, err := compileRuntimeSettingsSnapshot(settings); err == nil {
@@ -46,7 +46,7 @@ func TestCompileRuntimeSettingsSnapshot_RejectsInvalidRateLimit(t *testing.T) {
 }
 
 func TestCompileSnapshot_ReturnsClonedSlices(t *testing.T) {
-	settings := config.DefaultSettings()
+	settings := runtimeconfig.Default()
 	settings.ClaudeHaikuFallbackModels = []string{"grok-code-fast-1"}
 
 	snapshot, err := CompileSnapshot(settings)
