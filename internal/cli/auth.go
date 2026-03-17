@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/core/controller"
 )
 
 var (
@@ -39,16 +38,7 @@ func runAuthLogin() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ctrl, err := controller.NewServiceController(ctx, controller.ControllerDeps{})
-	if err != nil {
-		return fmt.Errorf("init controller: %w", err)
-	}
-	defer ctrl.Stop()
-
-	svc := ctrl.AccountService()
-	if svc == nil {
-		return errors.New("account service unavailable")
-	}
+	svc := newRuntimeAccountManager(config.LoadAuth, config.SaveAuth, config.LoadSettings, nil)
 
 	challenge, err := svc.BeginLogin(ctx)
 	if err != nil {
@@ -81,16 +71,7 @@ func runAuthLogin() error {
 }
 
 func runAuthRemove(user string) error {
-	ctrl, err := controller.NewServiceController(context.Background(), controller.ControllerDeps{})
-	if err != nil {
-		return fmt.Errorf("init controller: %w", err)
-	}
-	defer ctrl.Stop()
-
-	svc := ctrl.AccountService()
-	if svc == nil {
-		return errors.New("account service unavailable")
-	}
+	svc := newRuntimeAccountManager(config.LoadAuth, config.SaveAuth, config.LoadSettings, nil)
 	if err := svc.Remove(user); err != nil {
 		if errors.Is(err, config.ErrAccountNotFound) {
 			return errAuthAccountNotFound
@@ -101,15 +82,6 @@ func runAuthRemove(user string) error {
 }
 
 func runAuthList() error {
-	ctrl, err := controller.NewServiceController(context.Background(), controller.ControllerDeps{})
-	if err != nil {
-		return fmt.Errorf("init controller: %w", err)
-	}
-	defer ctrl.Stop()
-
-	svc := ctrl.AccountService()
-	if svc == nil {
-		return errors.New("account service unavailable")
-	}
+	svc := newRuntimeAccountManager(config.LoadAuth, config.SaveAuth, config.LoadSettings, nil)
 	return runAuthListTUI(svc)
 }

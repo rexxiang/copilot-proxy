@@ -12,19 +12,19 @@ import (
 	"copilot-proxy/internal/config"
 	core "copilot-proxy/internal/core"
 	"copilot-proxy/internal/core/account"
-	coreconfig "copilot-proxy/internal/core/config"
+	"copilot-proxy/internal/core/observability"
 	"copilot-proxy/internal/core/stats"
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/models"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestNewMonitorModel(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	deps := MonitorDeps{
 		Collector:  collector,
-		Models:     []monitor.ModelInfo{{ID: "gpt-4o", Name: "GPT-4o", Endpoints: []string{"/chat/completions"}}},
-		UserInfo:   &monitor.UserInfo{Plan: "business", Organization: "TestOrg"},
+		Models:     []models.ModelInfo{{ID: "gpt-4o", Name: "GPT-4o", Endpoints: []string{"/chat/completions"}}},
+		UserInfo:   &core.UserInfo{Plan: "business", Organization: "TestOrg"},
 		AuthConfig: &config.AuthConfig{Default: "user1", Accounts: []config.Account{{User: "user1"}}},
 	}
 
@@ -39,7 +39,7 @@ func TestNewMonitorModel(t *testing.T) {
 }
 
 func TestMonitorModel_ViewSwitching(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	deps := MonitorDeps{Collector: collector}
 	model := NewMonitorModel(&deps, "")
 
@@ -70,7 +70,7 @@ func TestMonitorModel_ViewSwitching(t *testing.T) {
 }
 
 func TestMonitorModel_ArrowKeyNavigation(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	deps := MonitorDeps{Collector: collector}
 	model := NewMonitorModel(&deps, "")
 
@@ -129,7 +129,7 @@ func TestMonitorModel_ArrowKeyNavigation(t *testing.T) {
 }
 
 func TestMonitorModel_QuitKey(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	deps := MonitorDeps{Collector: collector}
 	model := NewMonitorModel(&deps, "")
 
@@ -150,7 +150,7 @@ func TestMonitorModel_QuitKey(t *testing.T) {
 }
 
 func TestMonitorModel_TickUpdatesSnapshot(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:  time.Now(),
 		Model:      "gpt-4o",
@@ -180,7 +180,7 @@ func TestMonitorModel_TickUpdatesSnapshot(t *testing.T) {
 }
 
 func TestMonitorModel_TickUpdatesSnapshotInLogs(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:  time.Now(),
 		Model:      "gpt-4o",
@@ -205,7 +205,7 @@ func TestMonitorModel_TickUpdatesSnapshotInLogs(t *testing.T) {
 }
 
 func TestMonitorModel_TickTogglesLogsBlinkAndKeepsSnapshotRefresh(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:  time.Now(),
 		Model:      "gpt-4o",
@@ -238,7 +238,7 @@ func TestMonitorModel_TickTogglesLogsBlinkAndKeepsSnapshotRefresh(t *testing.T) 
 }
 
 func TestMonitorModel_ClearLogsResetsOffset(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	for range 50 {
 		collector.RecordLocal(&core.RequestRecord{
 			Timestamp:  time.Now(),
@@ -284,7 +284,7 @@ func TestMonitorModel_ClearLogsResetsOffset(t *testing.T) {
 }
 
 func TestMonitorModel_ClearStatsResetsCountersOnly(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	now := time.Now()
 	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:  now,
@@ -341,7 +341,7 @@ func TestMonitorModel_ClearStatsResetsCountersOnly(t *testing.T) {
 func buildLogsMonitorModelForMouseTests(t *testing.T) MonitorModel {
 	t.Helper()
 
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	now := time.Now()
 	for i := range 20 {
 		collector.RecordLocal(&core.RequestRecord{
@@ -452,7 +452,7 @@ func TestMonitorModel_LogsViewMouseWheelRemainsCtrlGatedAfterBlurFocus(t *testin
 }
 
 func TestMonitorModel_InitLoadsUserInfo(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	deps := MonitorDeps{Collector: collector}
 	model := NewMonitorModel(&deps, "")
 	cmd := model.Init()
@@ -465,7 +465,7 @@ func TestMonitorModel_InitLoadsUserInfo(t *testing.T) {
 }
 
 func TestMonitorModel_InitQueuesUserInfoRefresh(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
 
 	cmd := model.Init()
@@ -489,7 +489,7 @@ func TestMonitorModel_InitQueuesUserInfoRefresh(t *testing.T) {
 }
 
 func TestMonitorModel_ManualRefreshQueuesUserInfoRefresh(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
 	model.state = tui.ViewStats
 
@@ -512,10 +512,10 @@ func TestMonitorModel_ManualRefreshQueuesUserInfoRefresh(t *testing.T) {
 }
 
 func TestMonitorModel_AgentPremiumEventQueuesRefresh(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	deps := MonitorDeps{
 		Collector: collector,
-		Models: []monitor.ModelInfo{
+		Models: []models.ModelInfo{
 			{ID: "gpt-4o", IsPremium: true},
 		},
 	}
@@ -539,10 +539,10 @@ func TestMonitorModel_AgentPremiumEventQueuesRefresh(t *testing.T) {
 }
 
 func TestMonitorModel_FirstTriggerDebounceDoesNotResetOnBurst(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	deps := MonitorDeps{
 		Collector: collector,
-		Models: []monitor.ModelInfo{
+		Models: []models.ModelInfo{
 			{ID: "gpt-4o", IsPremium: true},
 		},
 	}
@@ -583,7 +583,7 @@ func TestMonitorModel_FirstTriggerDebounceDoesNotResetOnBurst(t *testing.T) {
 }
 
 func TestMonitorModel_DueMsgStartsUserInfoRefresh(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
 	model.state = tui.ViewStats
 
@@ -607,7 +607,7 @@ func TestMonitorModel_DueMsgStartsUserInfoRefresh(t *testing.T) {
 }
 
 func TestMonitorModel_UserInfoLoadFailureClearsQueue(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
 	model.state = tui.ViewStats
 
@@ -637,7 +637,7 @@ func TestMonitorModel_UserInfoLoadFailureClearsQueue(t *testing.T) {
 }
 
 func TestMonitorModel_ManualRefreshDuringInFlightDefersFollowUp(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
 	model.state = tui.ViewStats
 
@@ -668,7 +668,7 @@ func TestMonitorModel_ManualRefreshDuringInFlightDefersFollowUp(t *testing.T) {
 	}
 
 	updated, cmd = model.Update(userInfoLoadedMsg{
-		info: &monitor.UserInfo{Plan: "business", Organization: "old"},
+		info: &core.UserInfo{Plan: "business", Organization: "old"},
 	})
 	model = *mustMonitorModelFromUpdate(t, updated)
 
@@ -681,7 +681,7 @@ func TestMonitorModel_ManualRefreshDuringInFlightDefersFollowUp(t *testing.T) {
 }
 
 func TestMonitorModel_ViewEnterDuringInFlightDoesNotDeferRefresh(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "")
 	model.state = tui.ViewStats
 
@@ -706,7 +706,7 @@ func TestMonitorModel_ViewEnterDuringInFlightDoesNotDeferRefresh(t *testing.T) {
 	}
 
 	updated, cmd = model.Update(userInfoLoadedMsg{
-		info: &monitor.UserInfo{Plan: "business", Organization: "current"},
+		info: &core.UserInfo{Plan: "business", Organization: "current"},
 	})
 	model = *mustMonitorModelFromUpdate(t, updated)
 	if cmd != nil {
@@ -721,7 +721,7 @@ func TestMonitorModel_ViewEnterDuringInFlightDoesNotDeferRefresh(t *testing.T) {
 }
 
 func TestMonitorModel_WindowResize(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	deps := MonitorDeps{Collector: collector}
 	model := NewMonitorModel(&deps, "")
 
@@ -739,7 +739,7 @@ func TestMonitorModel_WindowResize(t *testing.T) {
 }
 
 func TestMonitorModel_ViewRendering(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:  time.Now(),
 		Path:       "/v1/chat/completions",
@@ -749,8 +749,8 @@ func TestMonitorModel_ViewRendering(t *testing.T) {
 
 	deps := MonitorDeps{
 		Collector:  collector,
-		Models:     []monitor.ModelInfo{{ID: "gpt-4o", Name: "GPT-4o", Endpoints: []string{"/chat/completions"}}},
-		UserInfo:   &monitor.UserInfo{Plan: "business", Organization: "TestOrg"},
+		Models:     []models.ModelInfo{{ID: "gpt-4o", Name: "GPT-4o", Endpoints: []string{"/chat/completions"}}},
+		UserInfo:   &core.UserInfo{Plan: "business", Organization: "TestOrg"},
 		AuthConfig: &config.AuthConfig{Default: "user1", Accounts: []config.Account{{User: "user1"}}},
 	}
 	model := NewMonitorModel(&deps, "127.0.0.1:4000")
@@ -788,7 +788,7 @@ func TestMonitorModel_ViewRendering(t *testing.T) {
 }
 
 func TestMonitorModel_LogsViewRenderingFitsWindowAndKeepsHeader(t *testing.T) {
-	collector := monitor.NewCollector(200)
+	collector := observability.NewCollector(200)
 	now := time.Now()
 	for i := range 120 {
 		collector.RecordLocal(&core.RequestRecord{
@@ -825,7 +825,7 @@ func TestMonitorModel_LogsViewRenderingFitsWindowAndKeepsHeader(t *testing.T) {
 }
 
 func TestMonitorModel_LogsViewSmallWindowRendersAndPages(t *testing.T) {
-	collector := monitor.NewCollector(50)
+	collector := observability.NewCollector(50)
 	now := time.Now()
 	for i := range 12 {
 		collector.RecordLocal(&core.RequestRecord{
@@ -871,7 +871,7 @@ func TestMonitorModel_LogsViewSmallWindowRendersAndPages(t *testing.T) {
 }
 
 func TestMonitorModel_FooterHelpShowsAccountsOnlyInStats(t *testing.T) {
-	collector := monitor.NewCollector(10)
+	collector := observability.NewCollector(10)
 	model := NewMonitorModel(&MonitorDeps{Collector: collector}, "127.0.0.1:4000")
 	model.width = 200
 	model.height = 20
@@ -1005,7 +1005,7 @@ func TestFormatPromptOutputContext(t *testing.T) {
 }
 
 func TestMonitorModel_LogsViewRendering(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	collector.RecordLocal(&core.RequestRecord{
 		Timestamp:    time.Now(),
 		Method:       "POST",
@@ -1058,7 +1058,7 @@ func TestMonitorModel_LogsViewRendering(t *testing.T) {
 }
 
 func TestMonitorModel_ConfigModalOpenAndClose(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	deps := MonitorDeps{
 		Collector: collector,
 		LoadSettings: func() (config.Settings, error) {
@@ -1094,7 +1094,7 @@ func TestMonitorModel_ConfigModalOpenAndClose(t *testing.T) {
 }
 
 func TestMonitorModel_ConfigModalSaveAppliesSettings(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	applied := false
 	deps := MonitorDeps{
 		Collector: collector,
@@ -1145,19 +1145,23 @@ func TestMonitorModel_ConfigModalSaveAppliesSettings(t *testing.T) {
 	}
 }
 
-func TestMonitorModel_ApplySettingsUpdatesConfigService(t *testing.T) {
-	collector := monitor.NewCollector(100)
-	// Isolate config writes so SaveSettings updates a temp directory instead of the real home directory.
-	t.Setenv("HOME", t.TempDir())
+func TestMonitorModel_ApplySettingsUsesCallbacks(t *testing.T) {
+	collector := observability.NewCollector(100)
 	statsSvc := stats.NewService(collector.Observability())
-	configSvc := coreconfig.NewService(config.DefaultSettings())
+	current := config.DefaultSettings()
 	deps := MonitorDeps{
-		Collector:     collector,
-		StatsService:  statsSvc,
-		ConfigService: configSvc,
+		Collector:    collector,
+		StatsService: statsSvc,
+		LoadSettings: func() (config.Settings, error) {
+			return current, nil
+		},
+		ApplySettings: func(next config.Settings) (config.Settings, error) {
+			current = next
+			return current, nil
+		},
 	}
 	model := NewMonitorModel(&deps, "127.0.0.1:4000")
-	candidate := configSvc.Current()
+	candidate := current
 	candidate.ListenAddr = "127.0.0.1:51234"
 
 	cmd := model.applySettingsCmd(&candidate)
@@ -1171,13 +1175,13 @@ func TestMonitorModel_ApplySettingsUpdatesConfigService(t *testing.T) {
 	}
 	model.handleSettingsApplied(&settingsMsg)
 
-	if configSvc.Current().ListenAddr != candidate.ListenAddr {
-		t.Fatalf("expected config service listen addr to update, got %q", configSvc.Current().ListenAddr)
+	if current.ListenAddr != candidate.ListenAddr {
+		t.Fatalf("expected callback-backed settings listen addr to update, got %q", current.ListenAddr)
 	}
 }
 
 func TestMonitorModel_AccountModalOpenOnlyInStats(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	auth := &config.AuthConfig{
 		Default: "u1",
 		Accounts: []config.Account{
@@ -1215,7 +1219,7 @@ func TestMonitorModel_AccountModalOpenOnlyInStats(t *testing.T) {
 }
 
 func TestMonitorModel_AccountModalActivateSuccessRefreshes(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	svc := newTestAccountService([]account.AccountDTO{
 		{User: "u1", IsDefault: true},
 		{User: "u2"},
@@ -1223,11 +1227,11 @@ func TestMonitorModel_AccountModalActivateSuccessRefreshes(t *testing.T) {
 	deps := MonitorDeps{
 		Collector:      collector,
 		AccountService: svc,
-		UserInfo:       &monitor.UserInfo{Plan: "business"},
+		UserInfo:       &core.UserInfo{Plan: "business"},
 	}
 	model := NewMonitorModel(&deps, "")
 	model.loadedUserInfo = true
-	model.userInfo = &monitor.UserInfo{Plan: "business"}
+	model.userInfo = &core.UserInfo{Plan: "business"}
 	model.sharedState.UserInfo = model.userInfo
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
@@ -1269,22 +1273,15 @@ func TestMonitorModel_AccountModalActivateSuccessRefreshes(t *testing.T) {
 }
 
 func TestMonitorModel_AccountModalActivateDefersRefreshWhenInFlight(t *testing.T) {
-	collector := monitor.NewCollector(100)
-	auth := &config.AuthConfig{
-		Default: "u1",
-		Accounts: []config.Account{
-			{User: "u1", GhToken: "ghu-1"},
-			{User: "u2", GhToken: "ghu-2"},
-		},
-	}
+	collector := observability.NewCollector(100)
+	svc := newTestAccountService([]account.AccountDTO{
+		{User: "u1", HasToken: true, IsDefault: true},
+		{User: "u2", HasToken: true},
+	}, "u1")
 	deps := MonitorDeps{
-		Collector:  collector,
-		AuthConfig: auth,
-		UserInfo:   &monitor.UserInfo{Plan: "business"},
-		ActivateAccount: func(user string) error {
-			auth.Default = user
-			return nil
-		},
+		Collector:      collector,
+		AccountService: svc,
+		UserInfo:       &core.UserInfo{Plan: "business"},
 	}
 	model := NewMonitorModel(&deps, "")
 	model.state = tui.ViewStats
@@ -1316,7 +1313,7 @@ func TestMonitorModel_AccountModalActivateDefersRefreshWhenInFlight(t *testing.T
 	}
 
 	updated, cmd = model.Update(userInfoLoadedMsg{
-		info: &monitor.UserInfo{Plan: "business", Organization: "stale"},
+		info: &core.UserInfo{Plan: "business", Organization: "stale"},
 	})
 	model = *mustMonitorModelFromUpdate(t, updated)
 
@@ -1332,20 +1329,15 @@ func TestMonitorModel_AccountModalActivateDefersRefreshWhenInFlight(t *testing.T
 }
 
 func TestMonitorModel_AccountModalActivateFailureKeepsModalOpen(t *testing.T) {
-	collector := monitor.NewCollector(100)
-	auth := &config.AuthConfig{
-		Default: "u1",
-		Accounts: []config.Account{
-			{User: "u1"},
-			{User: "u2"},
-		},
-	}
+	collector := observability.NewCollector(100)
+	svc := newTestAccountService([]account.AccountDTO{
+		{User: "u1", IsDefault: true},
+		{User: "u2"},
+	}, "u1")
+	svc.switchErr = errors.New("activate failed")
 	deps := MonitorDeps{
-		Collector:  collector,
-		AuthConfig: auth,
-		ActivateAccount: func(user string) error {
-			return errors.New("activate failed")
-		},
+		Collector:      collector,
+		AccountService: svc,
 	}
 	model := NewMonitorModel(&deps, "")
 
@@ -1375,10 +1367,10 @@ func TestMonitorModel_AccountModalActivateFailureKeepsModalOpen(t *testing.T) {
 }
 
 func TestMonitorModel_AccountModalOpenWithoutAccountsShowsAddRow(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	deps := MonitorDeps{
-		Collector:  collector,
-		AuthConfig: &config.AuthConfig{},
+		Collector:      collector,
+		AccountService: newTestAccountService(nil, ""),
 	}
 	model := NewMonitorModel(&deps, "")
 
@@ -1398,7 +1390,7 @@ func TestMonitorModel_AccountModalOpenWithoutAccountsShowsAddRow(t *testing.T) {
 }
 
 func TestMonitorModel_AddAccountSuccessKeepsDefaultAndRefreshesModalList(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	svc := newTestAccountService([]account.AccountDTO{
 		{User: "u1", IsDefault: true},
 	}, "u1")
@@ -1465,7 +1457,7 @@ func TestMonitorModel_AddAccountSuccessKeepsDefaultAndRefreshesModalList(t *test
 }
 
 func TestMonitorModel_AddAccountFirstAccountTriggersUserRefresh(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	svc := newTestAccountService(nil, "")
 	deps := MonitorDeps{
 		Collector:      collector,
@@ -1515,7 +1507,7 @@ func TestMonitorModel_AddAccountFirstAccountTriggersUserRefresh(t *testing.T) {
 }
 
 func TestMonitorModel_AddAccountCancelIgnoresLateMessages(t *testing.T) {
-	collector := monitor.NewCollector(100)
+	collector := observability.NewCollector(100)
 	svc := newTestAccountService([]account.AccountDTO{{User: "u1", HasToken: true, IsDefault: true}}, "u1")
 	deps := MonitorDeps{
 		Collector:      collector,
@@ -1570,6 +1562,7 @@ type testAccountService struct {
 	defaultUser string
 	added       []config.Account
 	switches    []string
+	switchErr   error
 }
 
 func newTestAccountService(accounts []account.AccountDTO, defaultUser string) *testAccountService {
@@ -1601,6 +1594,9 @@ func (s *testAccountService) Current() (config.Account, bool, error) {
 }
 
 func (s *testAccountService) SwitchDefault(user string) error {
+	if s.switchErr != nil {
+		return s.switchErr
+	}
 	for _, acct := range s.accounts {
 		if acct.User == user {
 			s.defaultUser = user
@@ -1637,8 +1633,8 @@ func (s *testAccountService) PollLogin(ctx context.Context, seq int64) (account.
 
 func (s *testAccountService) CancelLogin(seq int64) {}
 
-func (s *testAccountService) PremiumInfo(ctx context.Context, force bool) (monitor.UserInfo, error) {
-	return monitor.UserInfo{}, nil
+func (s *testAccountService) PremiumInfo(ctx context.Context, force bool) (core.UserInfo, error) {
+	return core.UserInfo{}, nil
 }
 
 func (s *testAccountService) InvalidatePremium(user string) {}

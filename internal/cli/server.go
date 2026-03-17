@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -21,11 +20,9 @@ import (
 )
 
 var (
-	errModelCatalogRequired     = errors.New("model catalog is required")
-	errModelCatalogSetModels    = errors.New("model catalog does not support SetModels")
-	errRuntimeServerRequired    = errors.New("runtime server is required")
-	errRuntimeAuthStoreRequired = errors.New("runtime auth store is required")
-	errRuntimeSettingsRequired  = errors.New("runtime settings store is required")
+	errModelCatalogRequired  = errors.New("model catalog is required")
+	errModelCatalogSetModels = errors.New("model catalog does not support SetModels")
+	errRuntimeServerRequired = errors.New("runtime server is required")
 )
 
 // ServerDeps contains injectable dependencies for server construction.
@@ -83,66 +80,6 @@ func buildServerWithDepsWithContext(ctx context.Context, deps *ServerDeps) (*ser
 		return nil, err
 	}
 	return &serverRuntime{runtime: rt}, nil
-}
-
-func activateDefaultAccount(
-	auth *config.AuthConfig,
-	user string,
-	save func(config.AuthConfig) error,
-) error {
-	if auth == nil {
-		return config.ErrNoAccountsConfigured
-	}
-	previousDefault := auth.Default
-	if err := auth.SetDefault(user); err != nil {
-		return err
-	}
-	if save == nil {
-		return nil
-	}
-	if err := save(*auth); err != nil {
-		auth.Default = previousDefault
-		return fmt.Errorf("save auth config: %w", err)
-	}
-	return nil
-}
-
-func upsertAccountPreserveDefault(
-	auth *config.AuthConfig,
-	account config.Account,
-	save func(config.AuthConfig) error,
-) error {
-	if auth == nil {
-		return config.ErrNoAccountsConfigured
-	}
-
-	previous := cloneAuth(*auth)
-	hadAccounts := len(auth.Accounts) > 0
-	previousDefault := auth.Default
-
-	auth.UpsertAccount(account)
-	if hadAccounts && previousDefault != "" && previousDefault != account.User {
-		if err := auth.SetDefault(previousDefault); err != nil {
-			*auth = previous
-			return err
-		}
-	}
-
-	if save == nil {
-		return nil
-	}
-	if err := save(*auth); err != nil {
-		*auth = previous
-		return fmt.Errorf("save auth config: %w", err)
-	}
-	return nil
-}
-
-func cloneAuth(auth config.AuthConfig) config.AuthConfig {
-	accounts := make([]config.Account, len(auth.Accounts))
-	copy(accounts, auth.Accounts)
-	auth.Accounts = accounts
-	return auth
 }
 
 func runServerWithTUI(enableTUI bool) error {
@@ -204,90 +141,55 @@ func runWithTUI(ctx context.Context, ctrl *controller.ServiceController) error {
 	if runtime == nil || runtime.Server == nil {
 		return errRuntimeServerRequired
 	}
-	if runtime.SettingsStore == nil {
-		return errRuntimeSettingsRequired
-	}
-	configSvc := ctrl.ConfigService()
-	if configSvc == nil {
-		return errors.New("config service is required")
-	}
-	runtimeMu := sync.Mutex{}
 	serverErr := make(chan error, 1)
-	runCtx, activeCancel := context.WithCancel(ctx)
-	go func(localRuntime *coreRuntime.Runtime, localCtx context.Context) {
-		if localRuntime == nil || localRuntime.Server == nil {
+	go func(localCtrl *controller.ServiceController) {
+		if localCtrl == nil {
 			return
 		}
-		err := localRuntime.Server.Start(localCtx)
-		if isExpectedShutdownError(err) || localCtx.Err() != nil {
+		err := localCtrl.Start()
+		if isExpectedShutdownError(err) {
 			return
 		}
-		serverErr <- err
-	}(runtime, runCtx)
+		if err != nil {
+			serverErr <- err
+		}
+	}(ctrl)
 	defer func() {
-		runtimeMu.Lock()
-		defer runtimeMu.Unlock()
-		if runtime.RequestCloser != nil {
-			_ = runtime.RequestCloser.Close()
-		}
-		activeCancel()
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), config.ShutdownTimeout)
-		defer shutdownCancel()
-		if runtime.Server != nil {
-			_ = runtime.Server.Shutdown(shutdownCtx)
-			_ = runtime.Server.Close()
-		}
+		_ = ctrl.Stop()
 	}()
 
-	currentSettings := runtime.SettingsStore.Current()
+	currentSettings, err := config.LoadSettings()
+	if err != nil {
+		return fmt.Errorf("load settings: %w", err)
+	}
 	currentSettings.ListenAddr = runtime.Server.Addr
 
 	coordinator := NewSettingsRuntimeCoordinator(&RuntimeCoordinatorConfig{
 		InitialSettings: currentSettings,
 		ValidateRuntime: func(next config.Settings) (RuntimeValidationResult, error) {
-			return runtime.SettingsStore.Validate(next)
+			return coreRuntime.CompileSnapshot(next)
 		},
 		PersistSettings: func(settings config.Settings) error {
-			if _, err := configSvc.Update(settings); err != nil {
-				return fmt.Errorf("persist settings: %w", err)
-			}
-			return nil
+			return config.SaveSettings(&settings)
 		},
 		PublishRuntime: func(next config.Settings, validated RuntimeValidationResult) error {
-			snapshot, ok := validated.(coreRuntime.Snapshot)
-			if !ok {
-				return fmt.Errorf("unexpected runtime snapshot type %T", validated)
-			}
-			runtime.SettingsStore.Publish(next, snapshot)
 			return nil
 		},
 	})
 
 	modelSvc := ctrl.ModelService()
+	accountSvc := newRuntimeAccountManager(
+		config.LoadAuth,
+		config.SaveAuth,
+		config.LoadSettings,
+		newTimeoutHTTPClient(defaultMonitorTimeout),
+	)
 	monitorDeps := MonitorDeps{
 		StatsService:   ctrl.StatsService(),
 		ModelService:   modelSvc,
-		AccountService: ctrl.AccountService(),
-		ConfigService:  ctrl.ConfigService(),
+		AccountService: accountSvc,
 		Models:         nil,
-		AuthConfig:     &runtime.Auth,
-		ActivateAccount: func(user string) error {
-			runtimeMu.Lock()
-			defer runtimeMu.Unlock()
-			if runtime.AuthStore == nil {
-				return errRuntimeAuthStoreRequired
-			}
-			return activateDefaultAccount(&runtime.Auth, user, runtime.AuthStore.SaveAuth)
-		},
-		AddAccount: func(account config.Account) error {
-			runtimeMu.Lock()
-			defer runtimeMu.Unlock()
-			if runtime.AuthStore == nil {
-				return errRuntimeAuthStoreRequired
-			}
-			return upsertAccountPreserveDefault(&runtime.Auth, account, runtime.AuthStore.SaveAuth)
-		},
-		HTTPClient: newTimeoutHTTPClient(defaultMonitorTimeout),
+		HTTPClient:     newTimeoutHTTPClient(defaultMonitorTimeout),
 		LoadSettings: func() (config.Settings, error) {
 			return coordinator.Current(), nil
 		},

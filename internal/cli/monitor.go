@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"copilot-proxy/internal/cli/tui"
 	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/core"
 	"copilot-proxy/internal/core/account"
-	coreconfig "copilot-proxy/internal/core/config"
 	"copilot-proxy/internal/core/model"
 	"copilot-proxy/internal/core/observability"
 	"copilot-proxy/internal/core/stats"
@@ -35,12 +35,9 @@ type MonitorDeps struct {
 	StatsService    statsService
 	ModelService    modelService
 	AccountService  accountService
-	ConfigService   *coreconfig.Service
 	Models          []models.ModelInfo
 	UserInfo        *core.UserInfo
 	AuthConfig      *config.AuthConfig
-	ActivateAccount func(user string) error
-	AddAccount      func(account config.Account) error
 	HTTPClient      *http.Client
 	ProxyInvoker    models.RequestDoer
 	LoadSettings    func() (config.Settings, error)
@@ -165,7 +162,6 @@ type MonitorModel struct {
 	statsService                 statsService
 	modelService                 modelService
 	accountService               accountService
-	configService                *coreconfig.Service
 	width                        int
 	height                       int
 	help                         help.Model
@@ -195,8 +191,6 @@ type MonitorModel struct {
 	accountModal    *tui.AccountModal
 	sharedState     *tui.SharedState
 	userInfo        *core.UserInfo
-	activateAccount func(user string) error
-	addAccount      func(account config.Account) error
 	accountAuthSeq  int64
 	accountAuthDone context.CancelFunc
 	accountAuthCtx  context.Context
@@ -211,21 +205,34 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 	statsSvc := resolveStatsService(deps)
 	modelSvc := resolveModelService(deps, serverAddr)
 	accountSvc := resolveAccountService(deps)
-	configSvc := deps.ConfigService
-	if configSvc == nil {
-		configSvc = coreconfig.NewService(config.DefaultSettings())
-	}
-
 	loadSettings := deps.LoadSettings
+	currentSettings := config.DefaultSettings()
 	if loadSettings == nil {
+		settingsMu := sync.Mutex{}
 		loadSettings = func() (config.Settings, error) {
-			return configSvc.Current(), nil
+			settingsMu.Lock()
+			defer settingsMu.Unlock()
+			return currentSettings, nil
 		}
+		applySettings := deps.ApplySettings
+		if applySettings == nil {
+			applySettings = func(settings config.Settings) (config.Settings, error) {
+				settingsMu.Lock()
+				defer settingsMu.Unlock()
+				currentSettings = settings
+				return currentSettings, nil
+			}
+		}
+		deps.ApplySettings = applySettings
 	}
 	applySettings := deps.ApplySettings
+	currentSettings, err := loadSettings()
+	if err != nil {
+		currentSettings = config.DefaultSettings()
+	}
 	if applySettings == nil {
 		applySettings = func(settings config.Settings) (config.Settings, error) {
-			return configSvc.Update(settings)
+			return settings, nil
 		}
 	}
 
@@ -253,20 +260,17 @@ func NewMonitorModel(deps *MonitorDeps, serverAddr string) MonitorModel {
 		statsService:    statsSvc,
 		modelService:    modelSvc,
 		accountService:  accountSvc,
-		configService:   configSvc,
 		help:            help.New(),
 		keys:            newMonitorKeyMap(),
 		serverAddr:      serverAddr,
 		loadSettings:    loadSettings,
 		applySettings:   applySettings,
-		currentSettings: configSvc.Current(),
+		currentSettings: currentSettings,
 		statusView:      tui.ViewStats,
 		snapshot:        emptySnapshot(),
 		sharedState:     sharedState,
 		userInfoQueue:   debounce.New(userInfoRefreshDebounceDelay, debounce.ModeLeading),
 		premiumDetector: newAgentPremiumRefreshDetector(),
-		activateAccount: deps.ActivateAccount,
-		addAccount:      deps.AddAccount,
 		statsView:       tui.NewStatsView(),
 		modelsView:      tui.NewModelsView(),
 		logsView:        tui.NewLogsView(),
@@ -320,18 +324,25 @@ func resolveAccountService(deps *MonitorDeps) accountService {
 	if deps != nil && deps.AuthConfig != nil {
 		authCfg = *deps.AuthConfig
 	}
-	options := []account.Option{}
-	if deps != nil && deps.HTTPClient != nil {
-		options = append(options, account.WithHTTPClient(deps.HTTPClient))
-	} else {
-		options = append(options, account.WithHTTPClient(newMonitorHTTPClient()))
+	var mu sync.Mutex
+	loadAuth := func() (config.AuthConfig, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		cloned := authCfg
+		cloned.Accounts = append([]config.Account(nil), authCfg.Accounts...)
+		return cloned, nil
 	}
-	if deps != nil && (deps.ActivateAccount != nil || deps.AddAccount != nil) {
-		options = append(options, account.WithSaveAuthFunc(func(config.AuthConfig) error {
-			return nil
-		}))
+	saveAuth := func(next config.AuthConfig) error {
+		mu.Lock()
+		defer mu.Unlock()
+		authCfg = next
+		authCfg.Accounts = append([]config.Account(nil), next.Accounts...)
+		return nil
 	}
-	return account.New(authCfg, options...)
+	return NewAccountManager(AccountManagerDeps{
+		LoadAuth: loadAuth,
+		SaveAuth: saveAuth,
+	})
 }
 
 // Init initializes the model.
@@ -626,18 +637,8 @@ func (m *MonitorModel) activateSelectedAccount(user string) error {
 	if m.accountService == nil {
 		return errNoAuthConfigured
 	}
-	current, _, _ := m.accountService.Current()
-	prev := current.User
 	if err := m.accountService.SwitchDefault(user); err != nil {
 		return err
-	}
-	if m.activateAccount != nil {
-		if err := m.activateAccount(user); err != nil {
-			if prev != "" {
-				_ = m.accountService.SwitchDefault(prev)
-			}
-			return err
-		}
 	}
 	if m.sharedState != nil {
 		m.sharedState.ActiveAccount = user
@@ -813,16 +814,7 @@ func (m *MonitorModel) addAuthorizedAccount(account config.Account) error {
 	if m.accountService == nil {
 		return errNoAuthConfigured
 	}
-	if err := m.accountService.Add(account); err != nil {
-		return err
-	}
-	if m.addAccount != nil {
-		if err := m.addAccount(account); err != nil {
-			_ = m.accountService.Remove(account.User)
-			return err
-		}
-	}
-	return nil
+	return m.accountService.Add(account)
 }
 
 func (m *MonitorModel) accountDTOsForModal() ([]account.AccountDTO, string) {

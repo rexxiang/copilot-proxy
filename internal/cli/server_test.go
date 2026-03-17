@@ -60,9 +60,6 @@ func TestBuildServerUsesDefaultSettings(t *testing.T) {
 	if runtime.runtime.Server.Addr != config.DefaultSettings().ListenAddr {
 		t.Fatalf("unexpected addr: %s", runtime.runtime.Server.Addr)
 	}
-	if runtime.runtime.AuthStore == nil {
-		t.Fatalf("expected runtime authStore to be initialized")
-	}
 }
 
 func TestBuildServerFailsWhenModelLoadFails(t *testing.T) {
@@ -256,81 +253,5 @@ func TestIsExpectedShutdownError(t *testing.T) {
 				t.Fatalf("isExpectedShutdownError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestActivateDefaultAccountHelperPersistsAndRollsBackOnFailure(t *testing.T) {
-	auth := &config.AuthConfig{
-		Default: "alice",
-		Accounts: []config.Account{
-			{User: "alice"},
-			{User: "bob"},
-		},
-	}
-
-	var saved config.AuthConfig
-	if err := activateDefaultAccount(auth, "bob", func(next config.AuthConfig) error {
-		saved = next
-		return nil
-	}); err != nil {
-		t.Fatalf("activate default: %v", err)
-	}
-	if auth.Default != "bob" {
-		t.Fatalf("expected auth default to update, got %q", auth.Default)
-	}
-	if saved.Default != "bob" {
-		t.Fatalf("expected saved default to be bob, got %q", saved.Default)
-	}
-
-	err := activateDefaultAccount(auth, "alice", func(next config.AuthConfig) error {
-		return errors.New("persist fails")
-	})
-	if err == nil {
-		t.Fatalf("expected error when save fails")
-	}
-	if auth.Default != "bob" {
-		t.Fatalf("expected default to remain bob after persist failure, got %q", auth.Default)
-	}
-}
-
-func TestUpsertAccountPreserveDefaultHelperAddsAccountAndRollsBack(t *testing.T) {
-	auth := &config.AuthConfig{
-		Default: "alpha",
-		Accounts: []config.Account{
-			{User: "alpha", GhToken: "old"},
-		},
-	}
-
-	var saved config.AuthConfig
-	if err := upsertAccountPreserveDefault(auth, config.Account{User: "beta", GhToken: "new"}, func(next config.AuthConfig) error {
-		saved = next
-		return nil
-	}); err != nil {
-		t.Fatalf("upsert account: %v", err)
-	}
-	if len(auth.Accounts) != 2 {
-		t.Fatalf("expected two accounts after upsert, got %d", len(auth.Accounts))
-	}
-	if auth.Default != "alpha" {
-		t.Fatalf("expected default to remain alpha, got %q", auth.Default)
-	}
-	if len(saved.Accounts) != 2 || saved.Default != "alpha" {
-		t.Fatalf("expected saved snapshot to preserve state, got %+v", saved)
-	}
-
-	auth.Accounts = auth.Accounts[:1]
-	if err := upsertAccountPreserveDefault(auth, config.Account{User: "gamma"}, func(next config.AuthConfig) error {
-		return errors.New("persist fails")
-	}); err == nil {
-		t.Fatalf("expected error when persist fails")
-	}
-	if len(auth.Accounts) != 1 {
-		t.Fatalf("expected rollback to single account, got %d", len(auth.Accounts))
-	}
-	if auth.Accounts[0].User != "alpha" {
-		t.Fatalf("expected remaining account to be alpha, got %q", auth.Accounts[0].User)
-	}
-	if auth.Default != "alpha" {
-		t.Fatalf("expected default to remain alpha after rollback, got %q", auth.Default)
 	}
 }
