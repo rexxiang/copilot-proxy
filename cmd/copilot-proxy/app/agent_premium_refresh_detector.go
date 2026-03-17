@@ -3,8 +3,8 @@ package app
 import (
 	"fmt"
 
-	"copilot-proxy/internal/core"
-	"copilot-proxy/internal/models"
+	models "copilot-proxy/internal/runtime/model"
+	core "copilot-proxy/internal/runtime/types"
 )
 
 const statusHTTPErrorMin = 400

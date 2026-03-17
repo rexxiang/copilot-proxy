@@ -5,23 +5,21 @@ import (
 	"errors"
 	"testing"
 
-	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/runtime/config"
 )
 
-func TestDirectProviderReturnsGitHubToken(t *testing.T) {
-	provider := NewDirectProvider()
-	tokenValue, err := provider.GetToken(context.Background(), config.Account{User: "u1", GhToken: "gho_xxx"})
+func TestResolveReturnsGitHubToken(t *testing.T) {
+	tokenValue, err := Resolve(context.Background(), config.Account{User: "u1", GhToken: "gho_xxx"})
 	if err != nil {
-		t.Fatalf("GetToken returned error: %v", err)
+		t.Fatalf("Resolve returned error: %v", err)
 	}
 	if tokenValue != "gho_xxx" {
 		t.Fatalf("unexpected token: %q", tokenValue)
 	}
 }
 
-func TestDirectProviderRejectsMissingToken(t *testing.T) {
-	provider := NewDirectProvider()
-	_, err := provider.GetToken(context.Background(), config.Account{User: "u1"})
+func TestResolveRejectsMissingToken(t *testing.T) {
+	_, err := Resolve(context.Background(), config.Account{User: "u1"})
 	if !errors.Is(err, ErrMissingGitHubToken) {
 		t.Fatalf("expected ErrMissingGitHubToken, got %v", err)
 	}

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/core/runtimeconfig"
+	runtimeconfig "copilot-proxy/internal/runtime/config"
 )
 
 var (

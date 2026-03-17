@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/core"
 	"copilot-proxy/internal/middleware"
+	"copilot-proxy/internal/runtime/config"
+	core "copilot-proxy/internal/runtime/types"
 )
 
 type eventSink struct {

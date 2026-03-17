@@ -1,17 +1,10 @@
 package middleware
 
 import (
-	"context"
 	"time"
 
-	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/core"
+	core "copilot-proxy/internal/runtime/types"
 )
-
-// TokenProvider retrieves Copilot API tokens for accounts.
-type TokenProvider interface {
-	GetToken(ctx context.Context, account config.Account) (string, error)
-}
 
 // ObservabilitySink records request lifecycle events and exposes snapshots.
 type ObservabilitySink interface {

@@ -7,14 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/core"
-	coremodel "copilot-proxy/internal/core/model"
-	"copilot-proxy/internal/core/observability"
-	"copilot-proxy/internal/core/runtime"
-	"copilot-proxy/internal/core/runtimeconfig"
-	corestats "copilot-proxy/internal/core/stats"
-	"copilot-proxy/internal/models"
+	runtimeconfig "copilot-proxy/internal/runtime/config"
+	model "copilot-proxy/internal/runtime/model"
+	"copilot-proxy/internal/runtime/observability"
+	runtime "copilot-proxy/internal/runtime/server"
+	corestats "copilot-proxy/internal/runtime/stats"
+	core "copilot-proxy/internal/runtime/types"
 )
 
 const (
@@ -37,7 +35,7 @@ type ServiceController struct {
 	runtime           *runtime.Runtime
 	collector         *observability.Collector
 	persistent        *observability.PersistentCollector
-	model             *coremodel.Service
+	model             *model.Service
 	stats             *corestats.Service
 	obs               *observability.Observability
 	stopEventReported bool
@@ -51,14 +49,14 @@ func NewServiceController(ctx context.Context, deps ControllerDeps) (*ServiceCon
 	}
 
 	if deps.Runtime.ModelCatalog == nil {
-		deps.Runtime.ModelCatalog = models.NewManager()
+		deps.Runtime.ModelCatalog = model.NewManager()
 	}
 
 	if deps.Runtime.SettingsFunc == nil {
 		deps.Runtime.SettingsFunc = loadRuntimeConfigFromAppSettings
 	}
 	if deps.Runtime.AuthFunc == nil {
-		deps.Runtime.AuthFunc = config.LoadAuth
+		deps.Runtime.AuthFunc = runtimeconfig.LoadAuth
 	}
 
 	if deps.Runtime.Observability == nil {
@@ -98,7 +96,7 @@ func NewServiceController(ctx context.Context, deps ControllerDeps) (*ServiceCon
 		runtime:    rt,
 		collector:  collector,
 		persistent: deps.PersistentCollector,
-		model:      coremodel.NewService(deps.Runtime.ModelCatalog, modelLoader, deps.Runtime.HTTPClient, ""),
+		model:      model.NewService(deps.Runtime.ModelCatalog, modelLoader, deps.Runtime.HTTPClient, ""),
 		stats:      corestats.NewService(obs),
 		obs:        obs,
 	}, nil
@@ -152,7 +150,7 @@ func (c *ServiceController) Stop() error {
 	c.mu.Unlock()
 
 	if host != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), config.ShutdownTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), runtimeconfig.ShutdownTimeout)
 		defer cancel()
 		_ = host.Shutdown(ctx)
 		_ = host.Close()
@@ -191,7 +189,7 @@ func (c *ServiceController) PersistentCollector() *observability.PersistentColle
 }
 
 // ModelService returns the model service.
-func (c *ServiceController) ModelService() *coremodel.Service {
+func (c *ServiceController) ModelService() *model.Service {
 	return c.model
 }
 
@@ -219,7 +217,7 @@ type runtimeModelLoader struct {
 	runtime *runtime.Runtime
 }
 
-func (l runtimeModelLoader) Load(ctx context.Context) ([]models.ModelInfo, error) {
+func (l runtimeModelLoader) Load(ctx context.Context) ([]model.ModelInfo, error) {
 	if l.runtime == nil {
 		return nil, errors.New("runtime model loader is not configured")
 	}

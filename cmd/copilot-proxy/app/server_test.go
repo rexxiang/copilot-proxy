@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
-	"copilot-proxy/internal/config"
-	accountcore "copilot-proxy/internal/core/account"
-	"copilot-proxy/internal/models"
+	"copilot-proxy/internal/runtime/config"
+	accountcore "copilot-proxy/internal/runtime/identity/account"
+	models "copilot-proxy/internal/runtime/model"
 )
 
 type stubCatalog struct {

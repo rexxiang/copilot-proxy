@@ -2,13 +2,13 @@ package app
 
 import (
 	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
-	"copilot-proxy/internal/core/runtimeconfig"
+	runtimeconfig "copilot-proxy/internal/runtime/config"
 )
 
-func loadRuntimeConfigFromAppSettings() (runtimeconfig.Config, error) {
+func loadRuntimeConfigFromAppSettings() (runtimeconfig.RuntimeSettings, error) {
 	current, err := appsettings.LoadSettings()
 	if err != nil {
-		return runtimeconfig.Config{}, err
+		return runtimeconfig.RuntimeSettings{}, err
 	}
 	return appsettings.ToRuntimeConfig(current), nil
 }

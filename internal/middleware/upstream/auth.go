@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/middleware"
+	"copilot-proxy/internal/runtime/config"
 )
 
 // AuthStore combines loading and saving authentication configuration.

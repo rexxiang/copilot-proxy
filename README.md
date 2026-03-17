@@ -19,16 +19,16 @@
 
 Default listen address: `127.0.0.1:4000`.
 
-## Core boundary
+## Runtime boundary
 
-- `internal/core` is split by capability domain (`execute`, `runtimeapi`, `observability`, `stats`, `model`, `account`).
-- `internal/core/runtimeapi` is the stateless operation entry and type surface shared by server runtime and the C ABI.
+- `internal/runtime` is split by capability domain (`api`, `server`, `execute`, `endpoint`, `observability`, `stats`, `model`, `identity`, `config`, `types`).
+- `internal/runtime/api` is the stateless operation entry and type surface shared by server runtime and the C ABI.
   - operations: `Execute`, device-flow auth, user info, model fetch
   - shared types: request invocation, execute options/results, telemetry events, device-code payloads, user info, model DTOs
 - `cmd/copilot-proxy/app` owns mutable app state (account selection, login session state, settings editing state, monitor state) and application composition.
 - Model catalog state is caller-owned and injected explicitly; production runtime no longer falls back to a process-global default catalog.
-- CLI/TUI consume observability snapshots through `core/stats.Service.MonitorSnapshot()`.
-- Persistence and sink wiring stay inside `internal/core/observability`, while CLI/TUI adapters live under `cmd/copilot-proxy/app`.
+- CLI/TUI consume observability snapshots through `runtime/stats.Service.MonitorSnapshot()`.
+- Persistence and sink wiring stay inside `internal/runtime/observability`, while CLI/TUI adapters live under `cmd/copilot-proxy/app`.
 
 ## Install
 
@@ -130,7 +130,7 @@ Map-style settings (for example `required_headers` and `reasoning_policies`) are
 
 ## C ABI
 
-`cmd/copilot-proxy-c` now exposes a **stateless** C ABI. The library does not keep runtime handles, queues, account state, login sessions, settings state, model-selection state, or observability aggregates. Callers provide token/model resolution callbacks and own all state. The exported execution path uses the same stateless `runtimeapi` flow as the server runtime, including model rewrite, endpoint selection, and `/v1/messages` protocol translation. Building the shared workflow produces `./bin/copilot-proxy`, `./bin/copilot-proxy-c.so`, and the generated header `./bin/copilot-proxy-c.h`. Use `mise x -- build` for the combined CLI + shared library or `mise x -- build:c-shared` for the library alone.
+`cmd/copilot-proxy-c` now exposes a **stateless** C ABI. The library does not keep runtime handles, queues, account state, login sessions, settings state, model-selection state, or observability aggregates. Callers provide token/model resolution callbacks and own all state. The exported execution path uses the same stateless `runtime/api` engine flow as the server runtime, including model rewrite, endpoint selection, and `/v1/messages` protocol translation. Building the shared workflow produces `./bin/copilot-proxy`, `./bin/copilot-proxy-c.so`, and the generated header `./bin/copilot-proxy-c.h`. Use `mise x -- build` for the combined CLI + shared library or `mise x -- build:c-shared` for the library alone.
 
 ### Entry points
 
@@ -161,7 +161,7 @@ typedef void (*CopilotProxyResultCallback)(int status_code, const char *headers_
 typedef void (*CopilotProxyTelemetryCallback)(const char *event_json, void *user_data);
 ```
 
-`request_json` is the JSON encoding of `core.RequestInvocation` (`Method`, `Path`, optional `Header`, and `Body` as base64).
+`request_json` is the JSON encoding of `types.RequestInvocation` (`Method`, `Path`, optional `Header`, and `Body` as base64).
 
 ### Execution semantics
 

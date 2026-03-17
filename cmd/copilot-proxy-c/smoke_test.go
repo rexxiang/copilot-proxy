@@ -13,9 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/core"
-	"copilot-proxy/internal/core/runtimeconfig"
+	config "copilot-proxy/internal/runtime/config"
+	core "copilot-proxy/internal/runtime/types"
 )
 
 func TestExecuteRequestNonStream(t *testing.T) {
@@ -304,8 +303,8 @@ func withCAPISettings(baseURL string, client *http.Client) func() {
 	previousClientMaker := httpClientMaker
 	previousSettingsProvider := settingsProvider
 	httpClientMaker = func() *http.Client { return client }
-	settingsProvider = func() runtimeconfig.Config {
-		settings := runtimeconfig.Default()
+	settingsProvider = func() config.RuntimeSettings {
+		settings := config.Default()
 		settings.UpstreamBase = baseURL
 		settings.RequiredHeaders = nil
 		return settings

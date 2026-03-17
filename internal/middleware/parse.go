@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/runtime/config"
 )
 
 // RequestParser extracts request information from request body.

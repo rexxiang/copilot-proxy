@@ -3,8 +3,8 @@ package upstream
 import (
 	"net/http"
 
-	endpointflow "copilot-proxy/internal/core/endpoint/flow"
 	"copilot-proxy/internal/middleware"
+	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
 )
 
 // ParseRequestBodyMiddleware reads request body and stores info for downstream middleware.

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"copilot-proxy/internal/core/account"
+	"copilot-proxy/internal/runtime/identity/account"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"

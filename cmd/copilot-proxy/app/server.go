@@ -11,11 +11,10 @@ import (
 	"time"
 
 	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
-	"copilot-proxy/internal/config"
-	coreRuntime "copilot-proxy/internal/core/runtime"
-	"copilot-proxy/internal/core/runtimeconfig"
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/models"
+	runtimeconfig "copilot-proxy/internal/runtime/config"
+	models "copilot-proxy/internal/runtime/model"
+	coreRuntime "copilot-proxy/internal/runtime/server"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -26,10 +25,9 @@ var errRuntimeServerRequired = errors.New("runtime server is required")
 type ServerDeps struct {
 	HTTPClient    *http.Client
 	Transport     http.RoundTripper
-	SettingsFunc  func() (runtimeconfig.Config, error)
-	AuthFunc      func() (config.AuthConfig, error)
+	SettingsFunc  func() (runtimeconfig.RuntimeSettings, error)
+	AuthFunc      func() (runtimeconfig.AuthConfig, error)
 	Observability middleware.ObservabilitySink
-	TokenManager  middleware.TokenProvider
 	ModelCatalog  models.MutableCatalog
 	ModelLoader   models.Loader
 }
@@ -50,7 +48,7 @@ func newTimeoutHTTPClient(timeout time.Duration) *http.Client {
 func DefaultServerDeps() ServerDeps {
 	return ServerDeps{
 		SettingsFunc: loadRuntimeConfigFromAppSettings,
-		AuthFunc:     config.LoadAuth,
+		AuthFunc:     runtimeconfig.LoadAuth,
 		ModelCatalog: models.NewManager(),
 	}
 }
@@ -69,7 +67,6 @@ func buildServerWithDepsWithContext(ctx context.Context, deps *ServerDeps) (*ser
 		SettingsFunc:  deps.SettingsFunc,
 		AuthFunc:      deps.AuthFunc,
 		Observability: deps.Observability,
-		TokenManager:  deps.TokenManager,
 		ModelCatalog:  deps.ModelCatalog,
 		ModelLoader:   deps.ModelLoader,
 	}
@@ -93,7 +90,6 @@ func runServerWithTUI(enableTUI bool) error {
 			Transport:    deps.Transport,
 			SettingsFunc: deps.SettingsFunc,
 			AuthFunc:     deps.AuthFunc,
-			TokenManager: deps.TokenManager,
 			ModelCatalog: deps.ModelCatalog,
 			ModelLoader:  deps.ModelLoader,
 		},
@@ -184,8 +180,8 @@ func runWithTUI(ctx context.Context, ctrl *ServiceController) error {
 
 	modelSvc := ctrl.ModelService()
 	accountSvc := newRuntimeAccountManager(
-		config.LoadAuth,
-		config.SaveAuth,
+		runtimeconfig.LoadAuth,
+		runtimeconfig.SaveAuth,
 		loadRuntimeConfigFromAppSettings,
 		newTimeoutHTTPClient(defaultMonitorTimeout),
 	)

@@ -8,10 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"copilot-proxy/internal/auth"
-	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/core/runtimeapi"
-	"copilot-proxy/internal/core/runtimeconfig"
+	runtimeapi "copilot-proxy/internal/runtime/api"
+	config "copilot-proxy/internal/runtime/config"
+	auth "copilot-proxy/internal/runtime/identity/oauth"
 )
 
 type resolveToken func(ctx context.Context, accountRef string) (string, error)
@@ -38,8 +37,8 @@ type modelInfo struct {
 var (
 	githubAPIBase    = config.GitHubAPIURL
 	httpClientMaker  = func() *http.Client { return &http.Client{Timeout: 90 * time.Second} }
-	settingsProvider = func() runtimeconfig.Config {
-		return runtimeconfig.Default()
+	settingsProvider = func() config.RuntimeSettings {
+		return config.Default()
 	}
 )
 
@@ -67,9 +66,9 @@ func executeRequest(ctx context.Context, requestJSON string, deps executeDeps, o
 	return runtime.Execute(ctx, req, execOpts)
 }
 
-func newRuntime(resolveTokenFn resolveToken, resolveModelFn resolveModel) *runtimeapi.Runtime {
+func newRuntime(resolveTokenFn resolveToken, resolveModelFn resolveModel) *runtimeapi.Engine {
 	opts := runtimeapi.Options{
-		SettingsProvider: func(context.Context) (runtimeconfig.Config, error) {
+		SettingsProvider: func(context.Context) (config.RuntimeSettings, error) {
 			return settingsProvider(), nil
 		},
 		HTTPClientFactory: httpClientMaker,
@@ -93,7 +92,7 @@ func newRuntime(resolveTokenFn resolveToken, resolveModelFn resolveModel) *runti
 			}, nil
 		}
 	}
-	return runtimeapi.NewRuntime(opts)
+	return runtimeapi.NewEngine(opts)
 }
 
 func telemetryEventMap(event runtimeapi.TelemetryEvent) map[string]any {

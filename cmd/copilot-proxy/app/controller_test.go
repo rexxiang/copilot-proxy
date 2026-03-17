@@ -11,12 +11,11 @@ import (
 	"time"
 
 	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
-	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/core"
-	"copilot-proxy/internal/core/observability"
-	"copilot-proxy/internal/core/runtime"
-	"copilot-proxy/internal/core/runtimeconfig"
-	"copilot-proxy/internal/models"
+	runtimeconfig "copilot-proxy/internal/runtime/config"
+	models "copilot-proxy/internal/runtime/model"
+	"copilot-proxy/internal/runtime/observability"
+	runtime "copilot-proxy/internal/runtime/server"
+	core "copilot-proxy/internal/runtime/types"
 )
 
 type testLoader struct {
@@ -36,13 +35,13 @@ func buildTestController(t *testing.T, modify func(*ControllerDeps)) *ServiceCon
 	ctx := context.Background()
 	deps := ControllerDeps{
 		Runtime: runtime.RuntimeDeps{
-			SettingsFunc: func() (runtimeconfig.Config, error) {
+			SettingsFunc: func() (runtimeconfig.RuntimeSettings, error) {
 				settings := appsettings.ToRuntimeConfig(appsettings.DefaultSettings())
 				settings.ListenAddr = "127.0.0.1:0"
 				return settings, nil
 			},
-			AuthFunc: func() (config.AuthConfig, error) {
-				return config.AuthConfig{}, nil
+			AuthFunc: func() (runtimeconfig.AuthConfig, error) {
+				return runtimeconfig.AuthConfig{}, nil
 			},
 			ModelCatalog: models.NewManager(),
 			ModelLoader:  testLoader{models: []models.ModelInfo{{ID: "test-model"}}},
@@ -138,7 +137,7 @@ func TestServiceControllerModelRefreshUsesCorePathWithoutLocalServer(t *testing.
 					"version":              "1",
 					"preview":              false,
 					"model_picker_enabled": true,
-					"supported_endpoints":  []string{config.UpstreamChatCompletionsPath},
+					"supported_endpoints":  []string{runtimeconfig.UpstreamChatCompletionsPath},
 					"billing": map[string]any{
 						"is_premium": false,
 						"multiplier": 1.0,
@@ -162,16 +161,16 @@ func TestServiceControllerModelRefreshUsesCorePathWithoutLocalServer(t *testing.
 	defer upstream.Close()
 
 	ctrl := buildTestController(t, func(deps *ControllerDeps) {
-		deps.Runtime.SettingsFunc = func() (runtimeconfig.Config, error) {
+		deps.Runtime.SettingsFunc = func() (runtimeconfig.RuntimeSettings, error) {
 			settings := runtimeconfig.Default()
 			settings.ListenAddr = "127.0.0.1:0"
 			settings.UpstreamBase = upstream.URL
 			return settings, nil
 		}
-		deps.Runtime.AuthFunc = func() (config.AuthConfig, error) {
-			return config.AuthConfig{
+		deps.Runtime.AuthFunc = func() (runtimeconfig.AuthConfig, error) {
+			return runtimeconfig.AuthConfig{
 				Default:  "alice",
-				Accounts: []config.Account{{User: "alice", GhToken: "token-alice"}},
+				Accounts: []runtimeconfig.Account{{User: "alice", GhToken: "token-alice"}},
 			}, nil
 		}
 		deps.Runtime.ModelLoader = nil
@@ -185,7 +184,7 @@ func TestServiceControllerModelRefreshUsesCorePathWithoutLocalServer(t *testing.
 	if len(got) != 1 || got[0].ID != "gpt-5-mini" {
 		t.Fatalf("unexpected models: %+v", got)
 	}
-	if path != config.UpstreamModelsPath {
+	if path != runtimeconfig.UpstreamModelsPath {
 		t.Fatalf("expected upstream /models path, got %q", path)
 	}
 	if authHeader != "Bearer token-alice" {
@@ -197,7 +196,7 @@ func TestServiceControllerModelRefreshUsesUpdatedDefaultAccount(t *testing.T) {
 	var (
 		mu         sync.Mutex
 		authHeader string
-		authConfig = config.AuthConfig{Default: "alice", Accounts: []config.Account{{User: "alice", GhToken: "token-alice"}, {User: "bob", GhToken: "token-bob"}}}
+		authConfig = runtimeconfig.AuthConfig{Default: "alice", Accounts: []runtimeconfig.Account{{User: "alice", GhToken: "token-alice"}, {User: "bob", GhToken: "token-bob"}}}
 	)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -213,7 +212,7 @@ func TestServiceControllerModelRefreshUsesUpdatedDefaultAccount(t *testing.T) {
 					"version":              "1",
 					"preview":              false,
 					"model_picker_enabled": true,
-					"supported_endpoints":  []string{config.UpstreamChatCompletionsPath},
+					"supported_endpoints":  []string{runtimeconfig.UpstreamChatCompletionsPath},
 					"billing": map[string]any{
 						"is_premium": false,
 						"multiplier": 1.0,
@@ -237,13 +236,13 @@ func TestServiceControllerModelRefreshUsesUpdatedDefaultAccount(t *testing.T) {
 	defer upstream.Close()
 
 	ctrl := buildTestController(t, func(deps *ControllerDeps) {
-		deps.Runtime.SettingsFunc = func() (runtimeconfig.Config, error) {
+		deps.Runtime.SettingsFunc = func() (runtimeconfig.RuntimeSettings, error) {
 			settings := runtimeconfig.Default()
 			settings.ListenAddr = "127.0.0.1:0"
 			settings.UpstreamBase = upstream.URL
 			return settings, nil
 		}
-		deps.Runtime.AuthFunc = func() (config.AuthConfig, error) {
+		deps.Runtime.AuthFunc = func() (runtimeconfig.AuthConfig, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			return authConfig, nil

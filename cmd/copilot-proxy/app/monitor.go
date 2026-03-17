@@ -12,13 +12,12 @@ import (
 	"copilot-proxy/cmd/copilot-proxy/app/debounce"
 	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
 	"copilot-proxy/cmd/copilot-proxy/app/tui"
-	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/core"
-	"copilot-proxy/internal/core/account"
-	"copilot-proxy/internal/core/model"
-	"copilot-proxy/internal/core/observability"
-	"copilot-proxy/internal/core/stats"
-	"copilot-proxy/internal/models"
+	"copilot-proxy/internal/runtime/config"
+	"copilot-proxy/internal/runtime/identity/account"
+	models "copilot-proxy/internal/runtime/model"
+	"copilot-proxy/internal/runtime/observability"
+	"copilot-proxy/internal/runtime/stats"
+	core "copilot-proxy/internal/runtime/types"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -313,7 +312,7 @@ func resolveModelService(deps *MonitorDeps, serverAddr string) modelService {
 	if !strings.HasPrefix(proxyURL, "http") {
 		proxyURL = "http://" + proxyURL
 	}
-	return model.NewService(models.NewManager(), nil, client, proxyURL)
+	return models.NewService(models.NewManager(), nil, client, proxyURL)
 }
 
 func resolveAccountService(deps *MonitorDeps) accountService {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/runtime/config"
 )
 
 // RequestInfo contains metadata extracted from the request body.

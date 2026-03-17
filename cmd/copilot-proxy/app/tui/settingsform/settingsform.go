@@ -12,7 +12,7 @@ import (
 	"time"
 
 	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
-	"copilot-proxy/internal/core/runtimeconfig"
+	runtimeconfig "copilot-proxy/internal/runtime/config"
 )
 
 type FieldWidget string
@@ -44,11 +44,11 @@ var (
 type Duration = runtimeconfig.Duration
 
 var (
-	NewDuration            = runtimeconfig.NewDuration
-	ErrDurationEmpty       = runtimeconfig.ErrDurationEmpty
-	ErrDurationNegative    = runtimeconfig.ErrDurationNegative
+	NewDuration             = runtimeconfig.NewDuration
+	ErrDurationEmpty        = runtimeconfig.ErrDurationEmpty
+	ErrDurationNegative     = runtimeconfig.ErrDurationNegative
 	ErrDurationWholeSeconds = runtimeconfig.ErrDurationWholeSeconds
-	ErrInvalidDuration     = runtimeconfig.ErrInvalidDuration
+	ErrInvalidDuration      = runtimeconfig.ErrInvalidDuration
 )
 
 type FieldSpec struct {
@@ -129,37 +129,37 @@ func SettingsFieldSpecs() ([]FieldSpec, error) {
 			Order:     20,
 		},
 		{
-			FieldName: "MaxRetries",
-			Key:       "max_retries",
-			Label:     "Retries",
-			Widget:    WidgetInt,
-			Visible:   true,
-			ReadOnly:  false,
-			Order:     40,
-			Min:       "1",
+			FieldName:   "MaxRetries",
+			Key:         "max_retries",
+			Label:       "Retries",
+			Widget:      WidgetInt,
+			Visible:     true,
+			ReadOnly:    false,
+			Order:       40,
+			Min:         "1",
 			Description: "Max upstream retry attempts.",
 		},
 		{
-			FieldName: "RetryBackoff",
-			Key:       "retry_backoff",
-			Label:     "Backoff",
-			Widget:    WidgetDuration,
-			Visible:   true,
-			ReadOnly:  false,
-			Order:     50,
+			FieldName:   "RetryBackoff",
+			Key:         "retry_backoff",
+			Label:       "Backoff",
+			Widget:      WidgetDuration,
+			Visible:     true,
+			ReadOnly:    false,
+			Order:       50,
 			Description: "Initial retry delay.",
 		},
 		{
-			FieldName: "RateLimitSeconds",
-			Key:       "rate_limit_seconds",
-			Label:     "Rate Limit (sec)",
-			Widget:    WidgetInt,
-			Visible:   true,
-			ReadOnly:  false,
-			Order:     52,
-			Min:       "0",
+			FieldName:   "RateLimitSeconds",
+			Key:         "rate_limit_seconds",
+			Label:       "Rate Limit (sec)",
+			Widget:      WidgetInt,
+			Visible:     true,
+			ReadOnly:    false,
+			Order:       52,
+			Min:         "0",
 			Placeholder: "0",
-			EmptyZero: true,
+			EmptyZero:   true,
 			Description: "Cooldown seconds between completed requests. 0 or empty disables it.",
 		},
 		{
@@ -190,13 +190,13 @@ func SettingsFieldSpecs() ([]FieldSpec, error) {
 			Order:     65,
 		},
 		{
-			FieldName: "ReasoningPolicies",
-			Key:       "reasoning_policies_ui",
-			Label:     "Reasoning Policies",
-			Widget:    WidgetArray,
-			Visible:   true,
-			ReadOnly:  false,
-			Order:     66,
+			FieldName:   "ReasoningPolicies",
+			Key:         "reasoning_policies_ui",
+			Label:       "Reasoning Policies",
+			Widget:      WidgetArray,
+			Visible:     true,
+			ReadOnly:    false,
+			Order:       66,
 			Description: "Per-model reasoning policies.",
 			ElementType: reflect.TypeOf(appsettings.ReasoningPolicy{}),
 			ElementSpec: []FieldSpec{
@@ -206,13 +206,13 @@ func SettingsFieldSpecs() ([]FieldSpec, error) {
 			},
 		},
 		{
-			FieldName: "ClaudeHaikuFallbackModelsUI",
-			Key:       "claude_haiku_fallback_models_ui",
-			Label:     "Haiku Fallbacks",
-			Widget:    WidgetArray,
-			Visible:   true,
-			ReadOnly:  false,
-			Order:     67,
+			FieldName:   "ClaudeHaikuFallbackModelsUI",
+			Key:         "claude_haiku_fallback_models_ui",
+			Label:       "Haiku Fallbacks",
+			Widget:      WidgetArray,
+			Visible:     true,
+			ReadOnly:    false,
+			Order:       67,
 			Description: "Ordered replacements for claude-haiku-*.",
 			ElementType: reflect.TypeOf(appsettings.HaikuFallbackModel{}),
 			ElementSpec: []FieldSpec{

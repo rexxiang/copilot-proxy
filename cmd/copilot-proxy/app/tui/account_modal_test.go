@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"copilot-proxy/internal/core/account"
+	"copilot-proxy/internal/runtime/identity/account"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

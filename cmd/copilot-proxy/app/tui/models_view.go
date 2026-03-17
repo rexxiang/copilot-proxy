@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"copilot-proxy/internal/models"
+	models "copilot-proxy/internal/runtime/model"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"

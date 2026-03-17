@@ -3,10 +3,10 @@ package upstream
 import (
 	"net/http"
 
-	endpointflow "copilot-proxy/internal/core/endpoint/flow"
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/models"
 	"copilot-proxy/internal/reasoning"
+	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
+	models "copilot-proxy/internal/runtime/model"
 )
 
 // MessagesTranslateMiddleware atomically handles endpoint-related request processing.

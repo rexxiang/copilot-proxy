@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/core"
 	"copilot-proxy/internal/middleware"
+	"copilot-proxy/internal/runtime/config"
+	core "copilot-proxy/internal/runtime/types"
 )
 
 type upstreamStubAuthStore struct {
@@ -33,16 +33,6 @@ func (s *upstreamStubAuthStore) LoadAuth() (config.AuthConfig, error) {
 func (s *upstreamStubAuthStore) SaveAuth(auth config.AuthConfig) error {
 	s.saved = auth
 	return s.saveErr
-}
-
-type upstreamStubTokenProvider struct {
-	token string
-	err   error
-}
-
-//goland:noinspection GoUnusedParameter
-func (s upstreamStubTokenProvider) GetToken(ctx context.Context, account config.Account) (string, error) {
-	return s.token, s.err
 }
 
 type timeoutNetError struct{}
@@ -87,7 +77,6 @@ func (c *canceledAfterFirstRead) Close() error {
 
 var (
 	errUnexpectedNextCall = errors.New("unexpected next call")
-	errTokenBoom          = errors.New("boom")
 )
 
 func TestContextInitSetsSourceAndLocalPath(t *testing.T) {
@@ -167,28 +156,35 @@ func TestResolveAccountNoAccountsReturnsUnauthorized(t *testing.T) {
 	}
 }
 
-func TestTokenTimeoutReturnsGatewayTimeout(t *testing.T) {
+func TestTokenUsesGitHubTokenFromAccount(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
-		Account: config.Account{User: "u1", GhToken: "gh"},
+		Account: config.Account{User: "u1", GhToken: "gho_token"},
 	}))
 	ctx := &middleware.Context{Request: req}
-	mw := NewToken(TokenConfig{Provider: upstreamStubTokenProvider{err: timeoutNetError{}}})
+	mw := NewToken()
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
-		t.Fatal("next should not be called")
-		return nil, errUnexpectedNextCall
+		rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+		if !ok || rc == nil {
+			t.Fatalf("expected request context")
+		}
+		if rc.Token != "gho_token" {
+			t.Fatalf("token: got %q, want %q", rc.Token, "gho_token")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    ctx.Request,
+		}, nil
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	defer closeResponse(resp)
-	if resp.StatusCode != http.StatusGatewayTimeout {
-		t.Fatalf("status: got %d, want %d", resp.StatusCode, http.StatusGatewayTimeout)
-	}
-	body := decodeErrorBody(t, resp)
-	if body != "request timed out" {
-		t.Fatalf("error body: got %q, want %q", body, "request timed out")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }
 
@@ -479,13 +475,35 @@ func TestRequestTimeoutKeepsShorterDeadline(t *testing.T) {
 	closeResponse(resp)
 }
 
-func TestTokenReturnsBadGatewayForGenericError(t *testing.T) {
+func TestTokenReturnsBadGatewayWhenGitHubTokenMissing(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
-		Account: config.Account{User: "u1", GhToken: "gh"},
+		Account: config.Account{User: "u1"},
 	}))
 	ctx := &middleware.Context{Request: req}
-	mw := NewToken(TokenConfig{Provider: upstreamStubTokenProvider{err: errTokenBoom}})
+	mw := NewToken()
+
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		t.Fatal("next should not be called")
+		return nil, errUnexpectedNextCall
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer closeResponse(resp)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status: got %d, want %d", resp.StatusCode, http.StatusBadGateway)
+	}
+	body := decodeErrorBody(t, resp)
+	if body != "failed to get token" {
+		t.Fatalf("error body: got %q, want %q", body, "failed to get token")
+	}
+}
+
+func TestTokenReturnsBadGatewayWhenAccountMissing(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
+	ctx := &middleware.Context{Request: req}
+	mw := NewToken()
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
 		t.Fatal("next should not be called")

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"copilot-proxy/internal/models"
+	models "copilot-proxy/internal/runtime/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

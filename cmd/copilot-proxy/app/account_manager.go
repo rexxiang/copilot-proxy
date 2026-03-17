@@ -7,12 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"copilot-proxy/internal/auth"
-	"copilot-proxy/internal/config"
-	core "copilot-proxy/internal/core"
-	accountcore "copilot-proxy/internal/core/account"
-	"copilot-proxy/internal/core/runtimeapi"
-	"copilot-proxy/internal/core/runtimeconfig"
+	runtimeapi "copilot-proxy/internal/runtime/api"
+	runtimeconfig "copilot-proxy/internal/runtime/config"
+	accountcore "copilot-proxy/internal/runtime/identity/account"
+	auth "copilot-proxy/internal/runtime/identity/oauth"
+	core "copilot-proxy/internal/runtime/types"
 )
 
 const defaultPremiumTTL = 30 * time.Second
@@ -23,8 +22,8 @@ var (
 )
 
 type AccountManagerDeps struct {
-	LoadAuth      func() (config.AuthConfig, error)
-	SaveAuth      func(config.AuthConfig) error
+	LoadAuth      func() (runtimeconfig.AuthConfig, error)
+	SaveAuth      func(runtimeconfig.AuthConfig) error
 	RequestCode   func(ctx context.Context) (auth.DeviceCodeResponse, error)
 	PollToken     func(ctx context.Context, device auth.DeviceCodeResponse) (string, error)
 	FetchLogin    func(ctx context.Context, token string) (string, error)
@@ -35,8 +34,8 @@ type AccountManagerDeps struct {
 
 type AccountManager struct {
 	mu            sync.Mutex
-	loadAuth      func() (config.AuthConfig, error)
-	saveAuth      func(config.AuthConfig) error
+	loadAuth      func() (runtimeconfig.AuthConfig, error)
+	saveAuth      func(runtimeconfig.AuthConfig) error
 	requestCode   func(ctx context.Context) (auth.DeviceCodeResponse, error)
 	pollToken     func(ctx context.Context, device auth.DeviceCodeResponse) (string, error)
 	fetchLogin    func(ctx context.Context, token string) (string, error)
@@ -99,10 +98,10 @@ func (m *AccountManager) List() []accountcore.AccountDTO {
 	return accounts
 }
 
-func (m *AccountManager) Current() (config.Account, bool, error) {
+func (m *AccountManager) Current() (runtimeconfig.Account, bool, error) {
 	authConfig, err := m.loadCurrentAuth()
 	if err != nil {
-		return config.Account{}, false, err
+		return runtimeconfig.Account{}, false, err
 	}
 	return authConfig.DefaultAccount()
 }
@@ -119,7 +118,7 @@ func (m *AccountManager) SwitchDefault(user string) error {
 	return nil
 }
 
-func (m *AccountManager) Add(account config.Account) error {
+func (m *AccountManager) Add(account runtimeconfig.Account) error {
 	authConfig, err := m.loadCurrentAuth()
 	if err != nil {
 		return err
@@ -133,7 +132,7 @@ func (m *AccountManager) Remove(user string) error {
 		return err
 	}
 	if removed := authConfig.RemoveAccount(user); !removed {
-		return config.ErrAccountNotFound
+		return runtimeconfig.ErrAccountNotFound
 	}
 	if err := m.saveAuth(authConfig); err != nil {
 		return err
@@ -227,7 +226,7 @@ func (m *AccountManager) PremiumInfo(ctx context.Context, force bool) (core.User
 		return core.UserInfo{}, err
 	}
 	if account.User == "" {
-		return core.UserInfo{}, config.ErrAccountNotFound
+		return core.UserInfo{}, runtimeconfig.ErrAccountNotFound
 	}
 
 	now := m.now()
@@ -263,13 +262,13 @@ func (m *AccountManager) InvalidatePremium(user string) {
 	m.mu.Unlock()
 }
 
-func (m *AccountManager) loadCurrentAuth() (config.AuthConfig, error) {
+func (m *AccountManager) loadCurrentAuth() (runtimeconfig.AuthConfig, error) {
 	if m.loadAuth == nil {
-		return config.AuthConfig{}, errors.New("load auth callback is required")
+		return runtimeconfig.AuthConfig{}, errors.New("load auth callback is required")
 	}
 	authConfig, err := m.loadAuth()
 	if err != nil {
-		return config.AuthConfig{}, err
+		return runtimeconfig.AuthConfig{}, err
 	}
 	return authConfig, nil
 }
@@ -334,17 +333,17 @@ func newHTTPClient(timeout time.Duration) *http.Client {
 }
 
 func newRuntimeAccountManager(
-	loadAuth func() (config.AuthConfig, error),
-	saveAuth func(config.AuthConfig) error,
-	loadSettings func() (runtimeconfig.Config, error),
+	loadAuth func() (runtimeconfig.AuthConfig, error),
+	saveAuth func(runtimeconfig.AuthConfig) error,
+	loadSettings func() (runtimeconfig.RuntimeSettings, error),
 	httpClient *http.Client,
 ) *AccountManager {
 	settingsLoader := loadSettings
 	if settingsLoader == nil {
 		settingsLoader = loadRuntimeConfigFromAppSettings
 	}
-	api := runtimeapi.NewRuntime(runtimeapi.Options{
-		SettingsProvider: func(context.Context) (runtimeconfig.Config, error) {
+	api := runtimeapi.NewEngine(runtimeapi.Options{
+		SettingsProvider: func(context.Context) (runtimeconfig.RuntimeSettings, error) {
 			return settingsLoader()
 		},
 		HTTPClientFactory: func() *http.Client {

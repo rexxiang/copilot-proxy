@@ -67,19 +67,20 @@ cmd/copilot-proxy/     CLI entry
   app/                 command routing, server wiring, Bubble Tea monitor, app-owned state
 cmd/copilot-proxy-c/   C ABI entry
 internal/
-  auth/                GitHub device flow + user lookup
-  config/              auth/settings persistence and constants
-  core/
-    account/           account DTOs + user info fetch helpers
+  runtime/
+    api/               stateless shared execution engine for server runtime and C ABI
+    server/            HTTP runtime wiring and handler composition
+    config/            auth persistence + runtime settings + protocol constants
+    identity/
+      oauth/           GitHub device flow + user lookup
+      account/         account DTOs + user info fetch helpers
+    model/             model catalog loading/fetching + refresh service
     endpoint/          upstream endpoint selection and protocol transforms
     execute/           stateless request execution primitive
-    model/             model catalog refresh service
     observability/     metrics sinks and persistence
-    runtime/           HTTP runtime wiring
-    runtimeapi/        stateless shared entry for server runtime and C ABI
     stats/             monitor snapshot service
+    types/             shared DTOs and runtime state/event contracts
   middleware/          shared HTTP interfaces + upstream helpers
-  models/              model catalog loading/fetching
   proxy/               reverse proxy and retry transport
   server/              HTTP server lifecycle
   token/               Copilot token cache + inflight deduplication
@@ -89,7 +90,7 @@ internal/
 
 - **Auth source of truth**: `~/.config/copilot-proxy/auth.json`, with `@default` as active account.
 - **CLI/TUI state ownership**: login sessions, active-account edits, settings editing state, and model catalog state live in the app layer and persist through config callbacks or injected state holders.
-- **Runtime statelessness**: `internal/core/runtimeapi` and the C ABI resolve auth/settings/models through callbacks/providers instead of holding mutable app state.
+- **Runtime statelessness**: `internal/runtime/api` and the C ABI resolve auth/settings/models through callbacks/providers instead of holding mutable app state.
 - **Monitor views**: Stats / Models / Logs, refreshed by periodic tick.
 - **Stats account modal** (`a`, Stats view only):
   - switch active account

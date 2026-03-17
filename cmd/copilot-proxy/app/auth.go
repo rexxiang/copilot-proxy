@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/runtime/config"
 )
 
 var (

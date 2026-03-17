@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/core"
+	core "copilot-proxy/internal/runtime/types"
 )
 
 func TestDetector_NewEligibleDetectedOnce(t *testing.T) {

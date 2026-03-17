@@ -10,12 +10,12 @@ import (
 
 	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
 	"copilot-proxy/cmd/copilot-proxy/app/tui"
-	"copilot-proxy/internal/config"
-	core "copilot-proxy/internal/core"
-	"copilot-proxy/internal/core/account"
-	"copilot-proxy/internal/core/observability"
-	"copilot-proxy/internal/core/stats"
-	"copilot-proxy/internal/models"
+	"copilot-proxy/internal/runtime/config"
+	"copilot-proxy/internal/runtime/identity/account"
+	models "copilot-proxy/internal/runtime/model"
+	"copilot-proxy/internal/runtime/observability"
+	"copilot-proxy/internal/runtime/stats"
+	core "copilot-proxy/internal/runtime/types"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/core/runtimeconfig"
+	runtimeconfig "copilot-proxy/internal/runtime/config"
 )
 
 func TestLoadSettingsDefaultWhenMissing(t *testing.T) {
@@ -192,7 +192,7 @@ func TestRuntimeConfigAdaptersExcludeUIOnlyFields(t *testing.T) {
 	input.SyncViewFieldsFromStorage()
 
 	cfg := ToRuntimeConfig(input)
-	if !reflect.DeepEqual(cfg, runtimeconfig.Config{
+	if !reflect.DeepEqual(cfg, runtimeconfig.RuntimeSettings{
 		ListenAddr:                        input.ListenAddr,
 		UpstreamBase:                      input.UpstreamBase,
 		RequiredHeaders:                   map[string]string{"editor-version": "v1"},

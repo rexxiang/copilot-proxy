@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/models"
 	"copilot-proxy/internal/reasoning"
+	"copilot-proxy/internal/runtime/config"
+	models "copilot-proxy/internal/runtime/model"
 )
 
 const messagesStreamBody = `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stream":true}`

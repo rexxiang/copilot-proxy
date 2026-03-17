@@ -3,9 +3,9 @@ package tui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 
-	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/core"
-	"copilot-proxy/internal/models"
+	"copilot-proxy/internal/runtime/config"
+	models "copilot-proxy/internal/runtime/model"
+	core "copilot-proxy/internal/runtime/types"
 )
 
 // ViewState represents the current active view.

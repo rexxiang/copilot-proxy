@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"copilot-proxy/internal/core/runtimeconfig"
 	"copilot-proxy/internal/reasoning"
+	runtimeconfig "copilot-proxy/internal/runtime/config"
 )
 
 const (
@@ -94,10 +94,10 @@ func DefaultSettings() Settings {
 	return FromRuntimeConfig(defaults)
 }
 
-func ToRuntimeConfig(settings Settings) runtimeconfig.Config {
+func ToRuntimeConfig(settings Settings) runtimeconfig.RuntimeSettings {
 	clone := applyDefaults(&settings)
 	_ = clone.SyncStorageFieldsFromView()
-	return runtimeconfig.Config{
+	return runtimeconfig.RuntimeSettings{
 		ListenAddr:                        clone.ListenAddr,
 		UpstreamBase:                      clone.UpstreamBase,
 		RequiredHeaders:                   cloneStringMap(clone.RequiredHeaders),
@@ -110,7 +110,7 @@ func ToRuntimeConfig(settings Settings) runtimeconfig.Config {
 	}
 }
 
-func FromRuntimeConfig(cfg runtimeconfig.Config) Settings {
+func FromRuntimeConfig(cfg runtimeconfig.RuntimeSettings) Settings {
 	defaults := runtimeconfig.Default()
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = defaults.ListenAddr

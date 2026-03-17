@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"copilot-proxy/internal/core"
+	core "copilot-proxy/internal/runtime/types"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"

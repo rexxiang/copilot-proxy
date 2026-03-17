@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/core"
-	"copilot-proxy/internal/models"
+	models "copilot-proxy/internal/runtime/model"
+	core "copilot-proxy/internal/runtime/types"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

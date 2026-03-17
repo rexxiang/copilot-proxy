@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/auth"
-	"copilot-proxy/internal/config"
-	core "copilot-proxy/internal/core"
-	accountcore "copilot-proxy/internal/core/account"
+	"copilot-proxy/internal/runtime/config"
+	accountcore "copilot-proxy/internal/runtime/identity/account"
+	auth "copilot-proxy/internal/runtime/identity/oauth"
+	core "copilot-proxy/internal/runtime/types"
 )
 
 func TestAccountManagerLoginFlow(t *testing.T) {
