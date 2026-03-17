@@ -1,6 +1,8 @@
 package messages
 
-import "copilot-proxy/internal/reasoning"
+import (
+	"copilot-proxy/internal/runtime/reasoning"
+)
 
 // MessagesReasoningOptions controls reasoning-effort conversion for messages payloads.
 type MessagesReasoningOptions struct {

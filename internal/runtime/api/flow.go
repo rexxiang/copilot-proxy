@@ -2,11 +2,11 @@ package api
 
 import (
 	"context"
+	"copilot-proxy/internal/runtime/reasoning"
 	"errors"
 	"fmt"
 	"net/http"
 
-	"copilot-proxy/internal/reasoning"
 	runtimeconfig "copilot-proxy/internal/runtime/config"
 	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
 	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"

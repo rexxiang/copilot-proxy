@@ -1,4 +1,4 @@
-package transform
+package model
 
 import (
 	"bytes"
@@ -25,7 +25,7 @@ func TestModelRewriteExactMatchCaseInsensitive(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o"}}}
 	req := httptestRequest([]byte(`{"model":"GPT-4O"}`))
 
-	RewriteModel(req, nil, catalog, nil)
+	RewriteRequestModel(req, nil, catalog, nil)
 
 	body := readBody(t, req)
 	if !bytes.Contains(body, []byte(`"model":"GPT-4O"`)) {
@@ -37,7 +37,7 @@ func TestModelRewriteMappedFallback(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "claude-sonnet-4.5", Family: "claude-sonnet-4.5"}}}
 	req := httptestRequest([]byte(`{"model":"claude-sonnet-4-20250514"}`))
 
-	RewriteModel(req, nil, catalog, nil)
+	RewriteRequestModel(req, nil, catalog, nil)
 
 	body := readBody(t, req)
 	if !bytes.Contains(body, []byte(`"model":"claude-sonnet-4.5"`)) {
@@ -49,7 +49,7 @@ func TestModelRewriteNoMatchNoChange(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o"}}}
 	req := httptestRequest([]byte(`{"model":"unknown-model"}`))
 
-	RewriteModel(req, nil, catalog, nil)
+	RewriteRequestModel(req, nil, catalog, nil)
 
 	body := readBody(t, req)
 	if !bytes.Contains(body, []byte(`"model":"unknown-model"`)) {
@@ -61,7 +61,7 @@ func TestModelRewriteMissingModelNoop(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o"}}}
 	req := httptestRequest([]byte(`{"messages":[{"role":"user","content":"hi"}]}`))
 
-	RewriteModel(req, nil, catalog, nil)
+	RewriteRequestModel(req, nil, catalog, nil)
 
 	body := readBody(t, req)
 	if !bytes.Contains(body, []byte(`"messages"`)) {
@@ -73,7 +73,7 @@ func TestModelRewriteEmptyModelNoop(t *testing.T) {
 	catalog := &stubCatalog{models: []models.ModelInfo{{ID: "gpt-4o"}}}
 	req := httptestRequest([]byte(`{"model":"","messages":[{"role":"user","content":"hi"}]}`))
 
-	RewriteModel(req, nil, catalog, nil)
+	RewriteRequestModel(req, nil, catalog, nil)
 
 	body := readBody(t, req)
 	if !bytes.Contains(body, []byte(`"model":""`)) {
@@ -86,7 +86,7 @@ func TestModelRewriteSetsMappedModel(t *testing.T) {
 	req := httptestRequest([]byte(`{"model":"claude-sonnet-4-20250514"}`))
 	rc := &requestctx.RequestContext{}
 
-	RewriteModel(req, rc, catalog, nil)
+	RewriteRequestModel(req, rc, catalog, nil)
 
 	if rc.Info.MappedModel != "claude-sonnet-4.5" {
 		t.Fatalf("expected MappedModel to be mapped, got %q", rc.Info.MappedModel)
@@ -98,7 +98,7 @@ func TestModelRewriteSetsMappedModelOnExactMatch(t *testing.T) {
 	req := httptestRequest([]byte(`{"model":"gpt-4o"}`))
 	rc := &requestctx.RequestContext{}
 
-	RewriteModel(req, rc, catalog, nil)
+	RewriteRequestModel(req, rc, catalog, nil)
 
 	if rc.Info.MappedModel != "gpt-4o" {
 		t.Fatalf("expected MappedModel to be exact model, got %q", rc.Info.MappedModel)
@@ -113,7 +113,7 @@ func TestModelRewritePrefersExactClaudeHaikuOverFallback(t *testing.T) {
 	req := httptestRequest([]byte(`{"model":"CLAUDE-HAIKU-3.2"}`))
 	rc := &requestctx.RequestContext{}
 
-	RewriteModel(req, rc, catalog, nil)
+	RewriteRequestModel(req, rc, catalog, nil)
 
 	body := readBody(t, req)
 	if !bytes.Contains(body, []byte(`"model":"CLAUDE-HAIKU-3.2"`)) {
@@ -138,7 +138,7 @@ func TestModelRewriteStoresSelectedModelEndpoints(t *testing.T) {
 	req := httptestRequest([]byte(`{"model":"gpt-4o"}`))
 	rc := &requestctx.RequestContext{}
 
-	RewriteModel(req, rc, catalog, nil)
+	RewriteRequestModel(req, rc, catalog, nil)
 
 	if len(rc.Info.SelectedModelEndpoints) != 2 {
 		t.Fatalf("expected selected endpoints to be recorded, got %v", rc.Info.SelectedModelEndpoints)

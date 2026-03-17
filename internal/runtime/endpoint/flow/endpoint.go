@@ -1,12 +1,14 @@
 package flow
 
 import (
+	"copilot-proxy/internal/runtime/reasoning"
 	"fmt"
 	"net/http"
 	"strings"
 
-	"copilot-proxy/internal/reasoning"
-	endpointtransform "copilot-proxy/internal/runtime/endpoint/transform"
+	endpointmodel "copilot-proxy/internal/runtime/endpoint/model"
+	endpointrouting "copilot-proxy/internal/runtime/endpoint/routing"
+	endpointtranslation "copilot-proxy/internal/runtime/endpoint/translation"
 	models "copilot-proxy/internal/runtime/model"
 	protocolmessages "copilot-proxy/internal/runtime/protocol/messages"
 	requestctx "copilot-proxy/internal/runtime/request"
@@ -45,8 +47,8 @@ func ApplyCatalogEndpointTransform(
 		})
 	}
 
-	endpointtransform.RewriteModel(req, rc, catalog, selector)
-	endpointtransform.SelectTargetEndpoint(req, rc)
+	endpointmodel.RewriteRequestModel(req, rc, catalog, selector)
+	endpointrouting.SelectTargetEndpoint(req, rc)
 	req = WithRequestContext(req, rc)
 
 	modelName := strings.TrimSpace(rc.Info.MappedModel)
@@ -61,20 +63,20 @@ func ExecuteEndpointTransform(
 	req *http.Request,
 	rc *requestctx.RequestContext,
 	pathMapping map[string]string,
-	codec endpointtransform.EndpointCodec,
+	codec endpointtranslation.ProtocolCodec,
 	forward func(*http.Request, *requestctx.RequestContext) (*http.Response, error),
 ) (*http.Response, error) {
-	resp, err := endpointtransform.ApplyEndpointTransform(req, rc, codec, func(nextReq *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, codec, func(nextReq *http.Request) (*http.Response, error) {
 		updatedRC, ok := requestctx.RequestContextFrom(nextReq.Context())
 		if !ok || updatedRC == nil {
 			updatedRC = EnsureRequestContext(nextReq)
 			nextReq = WithRequestContext(nextReq, updatedRC)
 		}
-		endpointtransform.ApplyUpstreamPath(nextReq, updatedRC, pathMapping)
+		endpointrouting.ApplyUpstreamPath(nextReq, updatedRC, pathMapping)
 		return forward(nextReq, updatedRC)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("apply endpoint transform: %w", err)
+		return nil, fmt.Errorf("apply endpoint translation: %w", err)
 	}
 	return resp, nil
 }
@@ -83,10 +85,10 @@ func BuildEndpointCodec(
 	policies []reasoning.Policy,
 	modelID string,
 	supportedEfforts []string,
-) endpointtransform.EndpointCodec {
+) endpointtranslation.ProtocolCodec {
 	policyForChat, _ := reasoning.MatchPolicy(policies, modelID, reasoning.TargetChat)
 	policyForResponses, _ := reasoning.MatchPolicy(policies, modelID, reasoning.TargetResponses)
-	return endpointtransform.EndpointCodec{
+	return endpointtranslation.ProtocolCodec{
 		MessagesToChatRequest: func(body []byte) ([]byte, bool) {
 			return protocolmessages.MessagesToChatRequestWithOptions(body, protocolmessages.MessagesReasoningOptions{
 				PolicyEffort:             policyForChat,
@@ -113,7 +115,7 @@ func RewriteMappedModelBody(path string, body []byte, rawModelID, mappedModelID 
 	if strings.EqualFold(strings.TrimSpace(rawModelID), strings.TrimSpace(mappedModelID)) {
 		return body, false
 	}
-	return endpointtransform.RewriteModelInBody(path, body, mappedModelID)
+	return endpointmodel.RewriteModelInBody(path, body, mappedModelID)
 }
 
 func ApplyResolvedModelInfo(
@@ -143,6 +145,6 @@ func ApplyResolvedModelInfo(
 	info.SelectedModelEndpoints = CloneStrings(resolved.Endpoints)
 	info.SupportedReasoningEffort = CloneStrings(resolved.SupportedReasoningEffort)
 	rc.Info = info
-	rc.TargetUpstreamPath = endpointtransform.PickTargetEndpoint(sourceLocalPath, resolved.Endpoints)
+	rc.TargetUpstreamPath = endpointrouting.PickTargetEndpoint(sourceLocalPath, resolved.Endpoints)
 	return info
 }

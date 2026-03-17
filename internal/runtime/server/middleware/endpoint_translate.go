@@ -1,10 +1,10 @@
 package middleware
 
 import (
+	"copilot-proxy/internal/runtime/reasoning"
 	"net/http"
 
 	transportmiddleware "copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/reasoning"
 	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
 	models "copilot-proxy/internal/runtime/model"
 	requestctx "copilot-proxy/internal/runtime/request"

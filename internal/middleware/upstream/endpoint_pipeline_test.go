@@ -3,6 +3,7 @@ package upstream
 import (
 	"bytes"
 	"context"
+	"copilot-proxy/internal/runtime/reasoning"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -10,7 +11,6 @@ import (
 	"testing"
 
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/reasoning"
 	"copilot-proxy/internal/runtime/config"
 	models "copilot-proxy/internal/runtime/model"
 )

@@ -1,9 +1,10 @@
-package transform
+package routing
 
 import (
 	"net/http"
 	"strings"
 
+	endpointmodel "copilot-proxy/internal/runtime/endpoint/model"
 	requestctx "copilot-proxy/internal/runtime/request"
 )
 
@@ -23,7 +24,7 @@ func SelectTargetEndpoint(req *http.Request, rc *requestctx.RequestContext) {
 		rc.SourceLocalPath = sourceLocalPath
 	}
 
-	if !IsModelRewritePath(sourceLocalPath) {
+	if !endpointmodel.IsModelRewritePath(sourceLocalPath) {
 		return
 	}
 	// Without a resolved model, keep legacy path behavior and skip endpoint selection.

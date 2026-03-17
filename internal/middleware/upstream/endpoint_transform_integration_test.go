@@ -10,7 +10,7 @@ import (
 
 	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/runtime/config"
-	"copilot-proxy/internal/runtime/endpoint/transform"
+	endpointtranslation "copilot-proxy/internal/runtime/endpoint/translation"
 	protocolmessages "copilot-proxy/internal/runtime/protocol/messages"
 )
 
@@ -20,7 +20,7 @@ const (
 	testToolNameSearch  = "search"
 )
 
-// These tests validate upstream-level codec wiring with transform.ApplyEndpointTransform.
+// These tests validate upstream-level codec wiring with endpointtranslation.ApplyEndpointTranslation.
 func TestEndpointTransformNoopWhenSameEndpoint(t *testing.T) {
 	body := testMessagesHiBody
 	req := httptestRequestWithRC(t, config.ChatCompletionsPath, body, &middleware.RequestContext{
@@ -31,7 +31,7 @@ func TestEndpointTransformNoopWhenSameEndpoint(t *testing.T) {
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	var gotReqBody string
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		data, _ := io.ReadAll(r.Body)
 		gotReqBody = string(data)
 		return &http.Response{
@@ -60,7 +60,7 @@ func TestEndpointTransformRejectsUnsupportedResponsesToChatConversion(t *testing
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	called := false
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		called = true
 		return nil, errUnexpectedNextCall
 	})
@@ -97,7 +97,7 @@ func TestEndpointTransformMessagesToChatSSEConvertsBack(t *testing.T) {
 		"",
 	}, "\n")
 
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -133,7 +133,7 @@ func TestEndpointTransformMessagesFromChatResponseMapsContentFilterToEndTurn(t *
 	upstreamResp := `{"id":"chatcmpl-cf","model":"gpt-4o","choices":[` +
 		`{"index":0,"message":{"role":"assistant","content":"filtered"},` +
 		`"finish_reason":"content_filter"}]}`
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -170,7 +170,7 @@ func TestEndpointTransformMessagesFromChatResponseAllowsEmptyChoices(t *testing.
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	upstreamResp := `{"id":"chatcmpl-empty","model":"gpt-4o","choices":[]}`
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -207,7 +207,7 @@ func TestEndpointTransformStrictFailureOnRequestConversionError(t *testing.T) {
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	called := false
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		called = true
 		return nil, errUnexpectedNextCall
 	})
@@ -233,7 +233,7 @@ func TestEndpointTransformStrictFailureOnUnsupportedConversionEvenWithValidBody(
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	called := false
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		called = true
 		return nil, errUnexpectedNextCall
 	})
@@ -263,7 +263,7 @@ func TestEndpointTransformMessagesToResponsesNormalizesLongUser(t *testing.T) {
 		rc, _ := middleware.RequestContextFrom(req.Context())
 
 		var upstreamReqBody []byte
-		resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+		resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 			upstreamReqBody, _ = io.ReadAll(r.Body)
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -310,7 +310,7 @@ func TestEndpointTransformMessagesToResponsesNormalizesContentTypes(t *testing.T
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	var upstreamReqBody []byte
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		upstreamReqBody, _ = io.ReadAll(r.Body)
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -355,7 +355,7 @@ func TestEndpointTransformMessagesToResponsesAssistantTextUsesOutputText(t *test
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	var upstreamReqBody []byte
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		upstreamReqBody, _ = io.ReadAll(r.Body)
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -399,7 +399,7 @@ func TestEndpointTransformMessagesToResponsesAssistantInputTextBlockIsNormalized
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	var upstreamReqBody []byte
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		upstreamReqBody, _ = io.ReadAll(r.Body)
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -449,7 +449,7 @@ func TestEndpointTransformMessagesToResponsesDirectMapsToolUseAndToolResult(t *t
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	var upstreamReqBody []byte
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		upstreamReqBody, _ = io.ReadAll(r.Body)
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -511,7 +511,7 @@ func TestEndpointTransformMessagesToResponsesNormalizesToolsShape(t *testing.T) 
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	var upstreamReqBody []byte
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		upstreamReqBody, _ = io.ReadAll(r.Body)
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -566,7 +566,7 @@ func TestEndpointTransformMessagesToResponsesBuildsReasoningFromEffort(t *testin
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	var upstreamReqBody []byte
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		upstreamReqBody, _ = io.ReadAll(r.Body)
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -612,7 +612,7 @@ func TestEndpointTransformMessagesFromResponsesResponseDirectMapsFunctionCallToT
 		`{"type":"function_call","call_id":"call_1","name":"search","arguments":"{\"q\":\"hi\"}"},` +
 		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}` +
 		`]}`
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -683,7 +683,7 @@ func TestEndpointTransformMessagesFromResponsesSSEDirectIncludesToolAndTextDelta
 		"",
 	}, "\n")
 
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -734,7 +734,7 @@ func TestEndpointTransformMessagesToResponsesMapsEffortAliases(t *testing.T) {
 			rc, _ := middleware.RequestContextFrom(req.Context())
 
 			var upstreamReqBody []byte
-			resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+			resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 				upstreamReqBody, _ = io.ReadAll(r.Body)
 				return &http.Response{
 					StatusCode: http.StatusOK,
@@ -788,7 +788,7 @@ func TestEndpointTransformMessagesToResponsesSkipsReasoningWhenEffortMissingOrIn
 			rc, _ := middleware.RequestContextFrom(req.Context())
 
 			var upstreamReqBody []byte
-			resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+			resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 				upstreamReqBody, _ = io.ReadAll(r.Body)
 				return &http.Response{
 					StatusCode: http.StatusOK,
@@ -826,7 +826,7 @@ func TestEndpointTransformResponsesPassthroughKeepsBodyUntouched(t *testing.T) {
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	var gotReqBody string
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		data, _ := io.ReadAll(r.Body)
 		gotReqBody = string(data)
 		return &http.Response{
@@ -855,7 +855,7 @@ func TestEndpointTransformResponsesPassthroughKeepsSmallMaxOutputTokensUntouched
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	var gotReqBody string
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		data, _ := io.ReadAll(r.Body)
 		gotReqBody = string(data)
 		return &http.Response{
@@ -885,7 +885,7 @@ func TestEndpointTransformRejectsUnsupportedChatToMessagesConversion(t *testing.
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	called := false
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		called = true
 		return nil, errUnexpectedNextCall
 	})
@@ -911,7 +911,7 @@ func TestEndpointTransformRejectsUnsupportedChatToMessagesConversionWithStopArra
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	called := false
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		called = true
 		return nil, errUnexpectedNextCall
 	})
@@ -937,7 +937,7 @@ func TestEndpointTransformPassesThrough4xxErrorResponseUnchanged(t *testing.T) {
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	errorBody := `{"error":{"message":"invalid model","type":"invalid_request_error","code":"model_not_found"}}`
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusNotFound,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -969,7 +969,7 @@ func TestEndpointTransformPassesThrough5xxErrorResponseUnchanged(t *testing.T) {
 	rc, _ := middleware.RequestContextFrom(req.Context())
 
 	errorBody := `{"error":{"message":"internal server error"}}`
-	resp, err := transform.ApplyEndpointTransform(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
+	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusInternalServerError,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -991,8 +991,8 @@ func TestEndpointTransformPassesThrough5xxErrorResponseUnchanged(t *testing.T) {
 	}
 }
 
-func testEndpointCodec() transform.EndpointCodec {
-	return transform.EndpointCodec{
+func testEndpointCodec() endpointtranslation.ProtocolCodec {
+	return endpointtranslation.ProtocolCodec{
 		MessagesToChatRequest:       protocolmessages.MessagesToChatRequest,
 		ChatToMessagesResponse:      protocolmessages.ChatToMessagesResponse,
 		ChatSSEToMessages:           protocolmessages.TranslateChatSSEToMessages,

@@ -1,4 +1,4 @@
-package transform
+package translation
 
 import (
 	"bytes"
@@ -9,12 +9,13 @@ import (
 	"strconv"
 	"strings"
 
+	endpointrouting "copilot-proxy/internal/runtime/endpoint/routing"
 	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
 	requestctx "copilot-proxy/internal/runtime/request"
 )
 
-// EndpointCodec provides message-protocol adapters implemented by the upstream package.
-type EndpointCodec struct {
+// ProtocolCodec provides message-protocol adapters implemented by the upstream package.
+type ProtocolCodec struct {
 	MessagesToChatRequest       func([]byte) ([]byte, bool)
 	ChatToMessagesResponse      func([]byte) ([]byte, bool)
 	ChatSSEToMessages           func(io.ReadCloser) io.ReadCloser
@@ -29,11 +30,11 @@ const (
 	normalizedEffortHigh   = "high"
 )
 
-// ApplyEndpointTransform rewrites request/response payloads across endpoint protocols.
-func ApplyEndpointTransform(
+// ApplyEndpointTranslation rewrites request/response payloads across endpoint protocols.
+func ApplyEndpointTranslation(
 	req *http.Request,
 	rc *requestctx.RequestContext,
-	codec EndpointCodec,
+	codec ProtocolCodec,
 	forward func(*http.Request) (*http.Response, error),
 ) (*http.Response, error) {
 	if req == nil {
@@ -56,11 +57,11 @@ func ApplyEndpointTransform(
 		rc.SourceLocalPath = sourceLocal
 	}
 
-	sourceUpstream, ok := LocalToUpstream(sourceLocal)
+	sourceUpstream, ok := endpointrouting.LocalToUpstream(sourceLocal)
 	if !ok {
 		return forward(req)
 	}
-	targetUpstream := NormalizeUpstreamPath(rc.TargetUpstreamPath)
+	targetUpstream := endpointrouting.NormalizeUpstreamPath(rc.TargetUpstreamPath)
 	if targetUpstream == "" || targetUpstream == sourceUpstream {
 		return forward(req)
 	}
@@ -109,12 +110,12 @@ func readRequestBody(req *http.Request) ([]byte, bool) {
 	return body, true
 }
 
-func convertRequestAcrossEndpoints(sourceLocal, targetUpstream string, body []byte, codec EndpointCodec) ([]byte, bool) {
+func convertRequestAcrossEndpoints(sourceLocal, targetUpstream string, body []byte, codec ProtocolCodec) ([]byte, bool) {
 	if len(body) == 0 {
 		return body, true
 	}
 
-	if NormalizeLocalPath(sourceLocal) == protocolpaths.MessagesPath {
+	if endpointrouting.NormalizeLocalPath(sourceLocal) == protocolpaths.MessagesPath {
 		switch targetUpstream {
 		case protocolpaths.UpstreamChatCompletionsPath:
 			return codec.messagesToChatRequest(body)
@@ -128,7 +129,7 @@ func convertRequestAcrossEndpoints(sourceLocal, targetUpstream string, body []by
 	return nil, false
 }
 
-func convertResponseAcrossEndpoints(sourceLocal, targetUpstream string, resp *http.Response, codec EndpointCodec) (*http.Response, bool) {
+func convertResponseAcrossEndpoints(sourceLocal, targetUpstream string, resp *http.Response, codec ProtocolCodec) (*http.Response, bool) {
 	if resp == nil {
 		return nil, false
 	}
@@ -145,7 +146,7 @@ func convertResponseAcrossEndpoints(sourceLocal, targetUpstream string, resp *ht
 	return convertJSONResponse(sourceLocal, targetUpstream, resp, codec)
 }
 
-func convertJSONResponse(sourceLocal, targetUpstream string, resp *http.Response, codec EndpointCodec) (*http.Response, bool) {
+func convertJSONResponse(sourceLocal, targetUpstream string, resp *http.Response, codec ProtocolCodec) (*http.Response, bool) {
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
 		err = closeErr
@@ -163,7 +164,7 @@ func convertJSONResponse(sourceLocal, targetUpstream string, resp *http.Response
 	var converted []byte
 	var ok bool
 
-	if NormalizeLocalPath(sourceLocal) == protocolpaths.MessagesPath {
+	if endpointrouting.NormalizeLocalPath(sourceLocal) == protocolpaths.MessagesPath {
 		switch targetUpstream {
 		case protocolpaths.UpstreamChatCompletionsPath:
 			converted, ok = codec.chatToMessagesResponse(bodyBytes)
@@ -185,9 +186,9 @@ func convertJSONResponse(sourceLocal, targetUpstream string, resp *http.Response
 	return resp, true
 }
 
-func convertStreamingResponse(sourceLocal, targetUpstream string, resp *http.Response, codec EndpointCodec) (*http.Response, bool) {
+func convertStreamingResponse(sourceLocal, targetUpstream string, resp *http.Response, codec ProtocolCodec) (*http.Response, bool) {
 	var transformed io.ReadCloser
-	if NormalizeLocalPath(sourceLocal) == protocolpaths.MessagesPath {
+	if endpointrouting.NormalizeLocalPath(sourceLocal) == protocolpaths.MessagesPath {
 		switch targetUpstream {
 		case protocolpaths.UpstreamChatCompletionsPath:
 			transformed = codec.chatSSEToMessages(resp.Body)
@@ -251,42 +252,42 @@ func (ew *errWriter) failed() bool {
 	return ew.err != nil
 }
 
-func (c EndpointCodec) messagesToChatRequest(body []byte) ([]byte, bool) {
+func (c ProtocolCodec) messagesToChatRequest(body []byte) ([]byte, bool) {
 	if c.MessagesToChatRequest == nil {
 		return nil, false
 	}
 	return c.MessagesToChatRequest(body)
 }
 
-func (c EndpointCodec) chatToMessagesResponse(body []byte) ([]byte, bool) {
+func (c ProtocolCodec) chatToMessagesResponse(body []byte) ([]byte, bool) {
 	if c.ChatToMessagesResponse == nil {
 		return nil, false
 	}
 	return c.ChatToMessagesResponse(body)
 }
 
-func (c EndpointCodec) chatSSEToMessages(body io.ReadCloser) io.ReadCloser {
+func (c ProtocolCodec) chatSSEToMessages(body io.ReadCloser) io.ReadCloser {
 	if c.ChatSSEToMessages == nil {
 		return nil
 	}
 	return c.ChatSSEToMessages(body)
 }
 
-func (c EndpointCodec) messagesToResponsesRequest(body []byte) ([]byte, bool) {
+func (c ProtocolCodec) messagesToResponsesRequest(body []byte) ([]byte, bool) {
 	if c.MessagesToResponsesRequest == nil {
 		return nil, false
 	}
 	return c.MessagesToResponsesRequest(body)
 }
 
-func (c EndpointCodec) responsesToMessagesResponse(body []byte) ([]byte, bool) {
+func (c ProtocolCodec) responsesToMessagesResponse(body []byte) ([]byte, bool) {
 	if c.ResponsesToMessagesResponse == nil {
 		return nil, false
 	}
 	return c.ResponsesToMessagesResponse(body)
 }
 
-func (c EndpointCodec) responsesSSEToMessages(body io.ReadCloser) io.ReadCloser {
+func (c ProtocolCodec) responsesSSEToMessages(body io.ReadCloser) io.ReadCloser {
 	if c.ResponsesSSEToMessages == nil {
 		return nil
 	}

@@ -1,10 +1,10 @@
 package flow
 
 import (
+	"copilot-proxy/internal/runtime/reasoning"
 	"net/http"
 	"strings"
 
-	"copilot-proxy/internal/reasoning"
 	requestctx "copilot-proxy/internal/runtime/request"
 )
 

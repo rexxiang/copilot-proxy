@@ -1,4 +1,4 @@
-package transform
+package model
 
 import (
 	"bytes"
@@ -11,8 +11,8 @@ import (
 	requestctx "copilot-proxy/internal/runtime/request"
 )
 
-// RewriteModel applies model mapping and stores selected endpoint metadata.
-func RewriteModel(req *http.Request, rc *requestctx.RequestContext, catalog models.Catalog, selector *models.Selector) {
+// RewriteRequestModel applies model mapping and stores selected endpoint metadata.
+func RewriteRequestModel(req *http.Request, rc *requestctx.RequestContext, catalog models.Catalog, selector *models.Selector) {
 	path := resolveRewritePath(req, rc)
 	if shouldSkipModelRewrite(req, path) {
 		return

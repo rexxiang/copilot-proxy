@@ -2,12 +2,12 @@ package model
 
 import (
 	"context"
+	"copilot-proxy/internal/runtime/reasoning"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 
-	"copilot-proxy/internal/reasoning"
 	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
 
 	"github.com/google/uuid"

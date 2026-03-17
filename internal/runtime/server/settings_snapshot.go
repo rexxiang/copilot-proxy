@@ -1,12 +1,12 @@
 package server
 
 import (
+	"copilot-proxy/internal/runtime/reasoning"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"copilot-proxy/internal/reasoning"
 	runtimeconfig "copilot-proxy/internal/runtime/config"
 )
 

@@ -1,12 +1,12 @@
 package settings
 
 import (
+	"copilot-proxy/internal/runtime/reasoning"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
-	"copilot-proxy/internal/reasoning"
 	runtimeconfig "copilot-proxy/internal/runtime/config"
 	configstore "copilot-proxy/internal/runtime/config/store"
 )
