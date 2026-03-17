@@ -2,49 +2,21 @@ package middleware
 
 import (
 	"context"
-	"time"
-
-	"copilot-proxy/internal/runtime/config"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
-// RequestInfo contains metadata extracted from the request body.
-type RequestInfo struct {
-	IsVision                 bool     // Request contains image content
-	IsAgent                  bool     // Request initiated by agent (not user)
-	Model                    string   // Model name from request body
-	MappedModel              string   // Model name after mapping
-	SelectedModelEndpoints   []string // Endpoints from selector-chosen model (raw catalog values, not normalized)
-	SupportedReasoningEffort []string // Model-supported reasoning effort levels (low/medium/high)
-}
+// RequestInfo aliases runtime request metadata during migration.
+type RequestInfo = requestctx.RequestInfo
 
-type requestContextKey struct{}
-
-// RequestContext holds per-request data shared across middleware layers.
-type RequestContext struct {
-	ID                 string
-	LocalPath          string // Local path used by middleware internals
-	SourceLocalPath    string // Frozen original local path from request entry
-	TargetUpstreamPath string // Final selected upstream endpoint path
-	Account            config.Account
-	Token              string
-	Info               RequestInfo
-	Body               []byte
-	Headers            map[string]string
-	Start              time.Time
-	RetryAttempt       bool
-	TokenInvalidated   bool
-}
+// RequestContext aliases runtime request context during migration.
+type RequestContext = requestctx.RequestContext
 
 // WithRequestContext stores RequestContext in context.
 func WithRequestContext(ctx context.Context, rc *RequestContext) context.Context {
-	if rc == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, requestContextKey{}, rc)
+	return requestctx.WithRequestContext(ctx, rc)
 }
 
 // RequestContextFrom retrieves RequestContext from context.
 func RequestContextFrom(ctx context.Context) (*RequestContext, bool) {
-	rc, ok := ctx.Value(requestContextKey{}).(*RequestContext)
-	return rc, ok
+	return requestctx.RequestContextFrom(ctx)
 }

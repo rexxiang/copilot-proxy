@@ -6,24 +6,24 @@ import (
 	"net/http"
 	"time"
 
-	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/runtime/config"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
-func EnsureRequestContext(req *http.Request) *middleware.RequestContext {
+func EnsureRequestContext(req *http.Request) *requestctx.RequestContext {
 	if req == nil {
-		return ensureRequestContextDefaults(req, &middleware.RequestContext{Start: time.Now()})
+		return ensureRequestContextDefaults(req, &requestctx.RequestContext{Start: time.Now()})
 	}
 
-	if rc, ok := middleware.RequestContextFrom(req.Context()); ok && rc != nil {
+	if rc, ok := requestctx.RequestContextFrom(req.Context()); ok && rc != nil {
 		return ensureRequestContextDefaults(req, rc)
 	}
-	return ensureRequestContextDefaults(req, &middleware.RequestContext{})
+	return ensureRequestContextDefaults(req, &requestctx.RequestContext{})
 }
 
-func ensureRequestContextDefaults(req *http.Request, rc *middleware.RequestContext) *middleware.RequestContext {
+func ensureRequestContextDefaults(req *http.Request, rc *requestctx.RequestContext) *requestctx.RequestContext {
 	if rc == nil {
-		rc = new(middleware.RequestContext)
+		rc = new(requestctx.RequestContext)
 	}
 	if req != nil && rc.LocalPath == "" {
 		rc.LocalPath = req.URL.Path
@@ -40,11 +40,11 @@ func ensureRequestContextDefaults(req *http.Request, rc *middleware.RequestConte
 	return rc
 }
 
-func WithRequestContext(req *http.Request, rc *middleware.RequestContext) *http.Request {
+func WithRequestContext(req *http.Request, rc *requestctx.RequestContext) *http.Request {
 	if req == nil {
 		return nil
 	}
-	return req.WithContext(middleware.WithRequestContext(req.Context(), rc))
+	return req.WithContext(requestctx.WithRequestContext(req.Context(), rc))
 }
 
 func ReadAndRestoreRequestBody(req *http.Request) ([]byte, error) {
@@ -70,19 +70,19 @@ func RestoreRequestBody(req *http.Request, body []byte) {
 	}
 }
 
-func ParseRequest(req *http.Request, path string, options middleware.ParseOptions) ([]byte, middleware.RequestInfo, error) {
+func ParseRequest(req *http.Request, path string, options requestctx.ParseOptions) ([]byte, requestctx.RequestInfo, error) {
 	if req == nil {
-		return nil, middleware.RequestInfo{}, nil
+		return nil, requestctx.RequestInfo{}, nil
 	}
 	body, err := ReadAndRestoreRequestBody(req)
 	if err != nil {
-		return body, middleware.RequestInfo{}, err
+		return body, requestctx.RequestInfo{}, err
 	}
 	if len(body) == 0 {
-		return body, middleware.RequestInfo{}, nil
+		return body, requestctx.RequestInfo{}, nil
 	}
 	if path == "" {
 		path = req.URL.Path
 	}
-	return body, middleware.ParseRequestByPathWithOptions(path, body, options), nil
+	return body, requestctx.ParseRequestByPathWithOptions(path, body, options), nil
 }
