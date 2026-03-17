@@ -59,9 +59,14 @@ func TestPackageDependencies(t *testing.T) {
 			disallowed: []string{"copilot-proxy/internal/middleware/"},
 		},
 		{
-			name:       "runtime protocol package must not depend on runtime config",
-			source:     "copilot-proxy/internal/runtime/protocol/",
-			disallowed: []string{"copilot-proxy/internal/runtime/config/"},
+			name:   "runtime protocol package must not depend on runtime config",
+			source: "copilot-proxy/internal/runtime/protocol/",
+			disallowed: []string{
+				"copilot-proxy/internal/runtime/config/",
+				"copilot-proxy/internal/runtime/endpoint/",
+				"copilot-proxy/internal/runtime/request/",
+				"copilot-proxy/internal/middleware/",
+			},
 		},
 	}
 

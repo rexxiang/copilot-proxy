@@ -18,4 +18,5 @@ Current rules:
 4. `internal/runtime/api/*` must not import `internal/middleware/*`.
 5. `internal/runtime/endpoint/*` must not import `internal/middleware/*`.
 6. `internal/runtime/request/*` must not import `internal/middleware/*`.
-7. `internal/runtime/protocol/*` must not import `internal/runtime/config/*`.
+7. `internal/runtime/protocol/*` must not import:
+`internal/runtime/config/*`, `internal/runtime/endpoint/*`, `internal/runtime/request/*`, `internal/middleware/*`.
