@@ -1,12 +1,10 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
+
+	configstore "copilot-proxy/internal/runtime/config/store"
 )
 
 type Account struct {
@@ -20,11 +18,6 @@ type AuthConfig struct {
 	Accounts []Account `json:"accounts"`
 }
 
-const (
-	configFileMode = 0o600
-	configDirMode  = 0o700
-)
-
 var (
 	ErrAccountNotFound        = errors.New("account not found")
 	ErrDefaultAccountNotFound = errors.New("default account not found")
@@ -33,15 +26,11 @@ var (
 )
 
 func ConfigDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve user home: %w", err)
-	}
-	return filepath.Join(home, ".config", "copilot-proxy"), nil
+	return configstore.ConfigDir()
 }
 
 func AuthPath() (string, error) {
-	return configPath("auth.json")
+	return configstore.Path("auth.json")
 }
 
 func LoadAuth() (AuthConfig, error) {
@@ -126,21 +115,12 @@ func loadJSON[T any](pathFunc func() (string, error), defaultVal T) (T, error) {
 	if err != nil {
 		return defaultVal, fmt.Errorf("resolve config path: %w", err)
 	}
-	if !isConfigPath(path) {
-		return defaultVal, fmt.Errorf("%w: %s", ErrInvalidConfigPath, path)
-	}
-
-	data, err := os.ReadFile(path)
+	result, err := configstore.LoadJSON(path, defaultVal)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return defaultVal, nil
+		if errors.Is(err, configstore.ErrInvalidPath) {
+			return defaultVal, fmt.Errorf("%w: %s", ErrInvalidConfigPath, path)
 		}
-		return defaultVal, fmt.Errorf("read config file: %w", err)
-	}
-
-	var result T
-	if err := json.Unmarshal(data, &result); err != nil {
-		return defaultVal, fmt.Errorf("decode config: %w", err)
+		return defaultVal, err
 	}
 	return result, nil
 }
@@ -150,62 +130,11 @@ func saveJSON[T any](pathFunc func() (string, error), value T) error {
 	if err != nil {
 		return fmt.Errorf("resolve config path: %w", err)
 	}
-
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode config: %w", err)
-	}
-
-	if err := ensureConfigDir(); err != nil {
-		return fmt.Errorf("ensure config dir: %w", err)
-	}
-	if err := os.WriteFile(path, data, configFileMode); err != nil {
-		return fmt.Errorf("write config: %w", err)
+	if err := configstore.SaveJSON(path, value); err != nil {
+		if errors.Is(err, configstore.ErrInvalidPath) {
+			return fmt.Errorf("%w: %s", ErrInvalidConfigPath, path)
+		}
+		return err
 	}
 	return nil
-}
-
-func configPath(name string) (string, error) {
-	dir, err := ConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, name), nil
-}
-
-func ensureConfigDir() error {
-	dir, err := ConfigDir()
-	if err != nil {
-		return fmt.Errorf("resolve config dir: %w", err)
-	}
-	if err := os.MkdirAll(dir, configDirMode); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
-	return nil
-}
-
-func isConfigPath(path string) bool {
-	if path == "" {
-		return false
-	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return false
-	}
-	configDir, err := ConfigDir()
-	if err != nil {
-		return false
-	}
-	absConfigDir, err := filepath.Abs(configDir)
-	if err != nil {
-		return false
-	}
-	rel, err := filepath.Rel(absConfigDir, absPath)
-	if err != nil {
-		return false
-	}
-	if rel == "." {
-		return true
-	}
-	return rel != ".." && !strings.HasPrefix(rel, "..")
 }
