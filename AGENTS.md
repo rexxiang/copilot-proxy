@@ -64,13 +64,22 @@ Default listen address: `http://127.0.0.1:4000`
 
 ```text
 cmd/copilot-proxy/     CLI entry
+cmd/copilot-proxy-c/   C ABI entry
 internal/
-  cli/                 command routing, server wiring, Bubble Tea monitor
+  cli/                 command routing, server wiring, Bubble Tea monitor, app-owned state
   auth/                GitHub device flow + user lookup
   config/              auth/settings persistence and constants
-  middleware/          shared interfaces + upstream middleware pipeline
+  core/
+    account/           account DTOs + user info fetch helpers
+    endpoint/          upstream endpoint selection and protocol transforms
+    execute/           stateless request execution primitive
+    model/             model catalog refresh service
+    observability/     metrics sinks and persistence
+    runtime/           HTTP runtime wiring
+    runtimeapi/        stateless shared entry for server runtime and C ABI
+    stats/             monitor snapshot service
+  middleware/          shared HTTP interfaces + upstream helpers
   models/              model catalog loading/fetching
-  monitor/             metrics collector, persistence, user/model API clients
   proxy/               reverse proxy and retry transport
   server/              HTTP server lifecycle
   token/               Copilot token cache + inflight deduplication
@@ -79,7 +88,8 @@ internal/
 ## Core Runtime Rules
 
 - **Auth source of truth**: `~/.config/copilot-proxy/auth.json`, with `@default` as active account.
-- **Runtime auth consistency**: account changes from TUI must update both disk and in-process auth store.
+- **CLI/TUI state ownership**: login sessions, active-account edits, and settings editing state live in the CLI/TUI layer and persist through config callbacks.
+- **Runtime statelessness**: `internal/core/runtimeapi` and the C ABI resolve auth/settings/models through callbacks/providers instead of holding mutable app state.
 - **Monitor views**: Stats / Models / Logs, refreshed by periodic tick.
 - **Stats account modal** (`a`, Stats view only):
   - switch active account

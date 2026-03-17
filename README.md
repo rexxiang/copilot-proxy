@@ -19,13 +19,15 @@
 
 Default listen address: `127.0.0.1:4000`.
 
-## Core / Monitor boundary
+## Core boundary
 
-- `internal/core` (observability, stats, account, models, etc.) owns the runtime instrumentation, persistence, and DTO implementations that drive metrics and user telemetry.
-- `internal/monitor` is a thin compatibility shim for the CLI/TUI: it re-exports `core.RequestRecord`, `core.Snapshot`, `models.ModelInfo`, and `monitor.UserInfo`, and it keeps the `/copilot_internal/user` helper so the UI can surface quota details without importing `core`.
-- The CLI/TUI consumes observability data through `core/stats.Service.MonitorSnapshot()` while persistence and sink wiring remain strictly inside `internal/core/observability`, keeping instrumentation logic decoupled from UI adapters.
-
-Keeping `internal/monitor` focused on surface-level DTOs and the user-info bridge ensures the UI layers stay decoupled from the actual metric collection.
+- `internal/core` is split by capability domain (`execute`, `runtimeapi`, `observability`, `stats`, `model`, `account`).
+- `internal/core/runtimeapi` is the stateless operation entry and type surface shared by server runtime and the C ABI.
+  - operations: `Execute`, device-flow auth, user info, model fetch
+  - shared types: request invocation, execute options/results, telemetry events, device-code payloads, user info, model DTOs
+- CLI/TUI own mutable app state (account selection, login session state, settings editing state, monitor state). `internal` consumes that state through callbacks/providers instead of holding long-lived auth/config services.
+- CLI/TUI consume observability snapshots through `core/stats.Service.MonitorSnapshot()`.
+- Persistence and sink wiring stay inside `internal/core/observability`, while UI adapters remain in `internal/cli`.
 
 ## Install
 
@@ -127,37 +129,48 @@ Map-style settings (for example `required_headers` and `reasoning_policies`) are
 
 ## C ABI
 
-`cmd/copilot-proxy-c` boots the same `internal/core.Kernel` that powers the CLI/TUI runtime (including auth, config, models, and observability) and exposes it through a compact C ABI that exchanges `core.RequestInvocation`/`core.ResponsePayload` pairs over JSON. Building the shared workflow produces `./bin/copilot-proxy`, `./bin/copilot-proxy-c.so`, and the generated header `./bin/copilot-proxy-c.h`. Use `mise x -- build` for the combined CLI + shared library or `mise x -- build:c-shared` for the library alone.
+`cmd/copilot-proxy-c` now exposes a **stateless** C ABI. The library does not keep runtime handles, queues, account state, login sessions, settings state, model-selection state, or observability aggregates. Callers provide token/model resolution callbacks and own all state. The exported execution path uses the same stateless `runtimeapi` flow as the server runtime, including model rewrite, endpoint selection, and `/v1/messages` protocol translation. Building the shared workflow produces `./bin/copilot-proxy`, `./bin/copilot-proxy-c.so`, and the generated header `./bin/copilot-proxy-c.h`. Use `mise x -- build` for the combined CLI + shared library or `mise x -- build:c-shared` for the library alone.
 
 ### Entry points
 
 ```
-void *CopilotProxyCore_Create(void);
-void CopilotProxyCore_Destroy(void *core);
-int CopilotProxyCore_Start(void *core);
-int CopilotProxyCore_Stop(void *core);
-int CopilotProxyCore_Status(void *core);
-int CopilotProxyCore_Invoke(void *core, const char *request_json);
-void CopilotProxyCore_SetCallback(void *core, CopilotProxyCallback cb, void *user_data);
+int CopilotProxy_Execute(
+  const char *request_json,
+  CopilotProxyResolveTokenFn resolve_token,
+  CopilotProxyResolveModelFn resolve_model,
+  CopilotProxyResultCallback on_result,
+  CopilotProxyTelemetryCallback on_telemetry,
+  void *user_data,
+  char **final_error_out
+);
+
+int CopilotProxyAuth_RequestCode(char **challenge_out, char **error_out);
+int CopilotProxyAuth_PollToken(const char *device_payload, char **token_out, char **error_out);
+int CopilotProxyUser_FetchInfo(const char *token, char **info_out, char **error_out);
+int CopilotProxyModels_Fetch(const char *token, char **models_out, char **error_out);
+void CopilotProxy_FreeCString(char *ptr);
 ```
 
-`CopilotProxyCore_Status` returns either `COPILOT_PROXY_CORE_STATUS_STOPPED` or `COPILOT_PROXY_CORE_STATUS_RUNNING`. `CopilotProxyCallback` has the signature:
+Callback contracts:
 
 ```
-typedef void (*CopilotProxyCallback)(const char *payload_json, const char *error_message, uint64_t invocation_id, void *user_data);
+typedef int (*CopilotProxyResolveTokenFn)(const char *account_ref, char **token_out, char **error_out, void *user_data);
+typedef int (*CopilotProxyResolveModelFn)(const char *model_id, char **model_json_out, char **error_out, void *user_data);
+typedef void (*CopilotProxyResultCallback)(int status_code, const char *headers_json, const uint8_t *body, size_t body_len, const char *error_message, void *user_data);
+typedef void (*CopilotProxyTelemetryCallback)(const char *event_json, void *user_data);
 ```
 
-`request_json` / `payload_json` are the JSON encodings of `core.RequestInvocation` and `core.ResponsePayload`, respectively. `core.RequestInvocation` contains `Method`, `Path`, optional `Header` map, and `Body` bytes (JSON/Go encodes `[]byte` as base64). `core.ResponsePayload` mirrors the HTTP response (`StatusCode`, `Headers`, `Body`).
+`request_json` is the JSON encoding of `core.RequestInvocation` (`Method`, `Path`, optional `Header`, and `Body` as base64).
 
-### Lifecycle and threading
+### Execution semantics
 
-`CopilotProxyCore_Create` sets up the runtime dependencies (settings, auth, model catalog, observability) so the C ABI shares the same kernel instance that the CLI and TUI use. `CopilotProxyCore_Start` launches that kernel on a dedicated goroutine, waits until the runtime reports `StateRunning`, and then returns. `CopilotProxyCore_Stop` asks the kernel to shut down, waits for the goroutine to exit, and propagates any fatal errors; revisit `CopilotProxyCore_Status` to confirm whether the stop succeeded. Because CLI/TUI/C all build the same core, they observe the same configuration, telemetry, and model availability.
-
-### Request queue and callback
-
-`CopilotProxyCore_Invoke` enqueues a JSON request into a single-threaded serialization loop. A dedicated goroutine serializes the JSON, invokes `kernel.Invoke`, re-encodes the response, and finally runs the callback on that same goroutine so users can rely on a consistent thread context. `payload_json` carries the `core.ResponsePayload`, while `error_message` carries Go error text that occurs during decoding, validation, or kernel rejection. `Invoke` returns non-zero when the queue is full, the kernel is not running, or the core has been destroyed; the callback still fires with whatever diagnostics are available. Wrap every `Invoke` between `Start`/`Stop`, register your callback with `CopilotProxyCore_SetCallback`, and destroy the handle once you are finished.
+- `CopilotProxy_Execute` is synchronous: it returns only after the request is fully finished.
+- Non-stream responses trigger exactly one `CopilotProxyResultCallback`.
+- Stream responses trigger one first callback with `status_code` + `headers_json`, then body-only callbacks (`status_code=0`, `headers_json=NULL`) for subsequent chunks.
+- Telemetry emits raw lifecycle events (`start`, `first_byte`, `end`, `error`) through `CopilotProxyTelemetryCallback`. Aggregation is caller-owned.
+- Any C string returned through out-params must be freed with `CopilotProxy_FreeCString`.
 
 ## Testing
 
 - Run the general Go test suite (CGO disabled by default) with `mise x -- test`.
-- Verify the C ABI layer with `mise x -- test:cgo` (the same as `CGO_ENABLED=1 go test ./cmd/copilot-proxy-c`), ensuring the exported symbols link to the core kernel.
+- Verify the C ABI layer with `mise x -- env CGO_ENABLED=1 go test ./cmd/copilot-proxy-c`, ensuring the stateless exports and callbacks compile and run.
