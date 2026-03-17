@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
+	"copilot-proxy/internal/core/endpoint/transform"
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/middleware/upstream/transform"
 	"copilot-proxy/internal/models"
 	"copilot-proxy/internal/reasoning"
 )

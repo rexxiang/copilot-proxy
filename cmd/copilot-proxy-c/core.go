@@ -5,355 +5,183 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
-	"sync/atomic"
+	"net/http"
 	"time"
 
+	"copilot-proxy/internal/auth"
 	"copilot-proxy/internal/config"
-	"copilot-proxy/internal/core"
-	"copilot-proxy/internal/core/kernel"
-	"copilot-proxy/internal/core/observability"
-	coreRuntime "copilot-proxy/internal/core/runtime"
-	"copilot-proxy/internal/models"
+	"copilot-proxy/internal/core/runtimeapi"
 )
 
-const (
-	defaultQueueSize        = 64
-	kernelStartTimeout      = 5 * time.Second
-	kernelStatePollInterval = 10 * time.Millisecond
-)
+type resolveToken func(ctx context.Context, accountRef string) (string, error)
+type resolveModel func(ctx context.Context, modelID string) (modelInfo, error)
+type resultCallback func(status int, headers map[string]string, body []byte, errMsg string)
+type telemetryCallback func(event map[string]any)
+
+type executeDeps struct {
+	ResolveToken resolveToken
+	ResolveModel resolveModel
+}
+
+type executeOptions struct {
+	ResultCallback    resultCallback
+	TelemetryCallback telemetryCallback
+}
+
+type modelInfo struct {
+	ID                       string   `json:"id"`
+	Endpoints                []string `json:"endpoints"`
+	SupportedReasoningEffort []string `json:"supported_reasoning_effort,omitempty"`
+}
 
 var (
-	errCoreDestroyed     = errors.New("copilot-proxy-core: destroyed")
-	errKernelNotRunning  = core.ErrNotStarted
-	errKernelUnavailable = errors.New("copilot-proxy-core: kernel unavailable")
+	githubAPIBase    = config.GitHubAPIURL
+	httpClientMaker  = func() *http.Client { return &http.Client{Timeout: 90 * time.Second} }
+	settingsProvider = func() config.Settings {
+		return config.DefaultSettings()
+	}
 )
 
-type invocationTask struct {
-	payload string
-	ack     chan error
-	id      uint64
-}
-
-type copilotProxyCore struct {
-	kernel  *kernel.Kernel
-	initErr error
-	queue   chan *invocationTask
-	destroy chan struct{}
-	obs     *observability.Observability
-
-	serverMu    sync.Mutex
-	serverDone  chan struct{}
-	serverErr   error
-	serverErrMu sync.Mutex
-	serverWG    sync.WaitGroup
-
-	callbackMu sync.RWMutex
-	callback   func(string, error, uint64)
-
-	idCounter atomic.Uint64
-	destroyed atomic.Bool
-	once      sync.Once
-	wg        sync.WaitGroup
-	invoking  sync.WaitGroup
-}
-
-func newCopilotProxyCore() *copilotProxyCore {
-	obs := observability.New(100, 0)
-	kern, err := buildKernel(obs)
-	core := &copilotProxyCore{
-		kernel:  kern,
-		initErr: err,
-		queue:   make(chan *invocationTask, defaultQueueSize),
-		destroy: make(chan struct{}),
-		obs:     obs,
+func executeRequest(ctx context.Context, requestJSON string, deps executeDeps, opts executeOptions) error {
+	if opts.ResultCallback == nil {
+		return errors.New("result callback is required")
 	}
-	core.wg.Add(1)
-	go core.run()
-	return core
-}
 
-func buildKernel(obs *observability.Observability) (*kernel.Kernel, error) {
-	if obs == nil {
-		obs = observability.New(100, 0)
+	var req runtimeapi.RequestInvocation
+	if err := json.Unmarshal([]byte(requestJSON), &req); err != nil {
+		return fmt.Errorf("parse request: %w", err)
 	}
-	rt, err := coreRuntime.NewRuntime(coreRuntime.RuntimeDeps{
-		SettingsFunc: func() (config.Settings, error) {
-			settings := config.DefaultSettings()
-			settings.ListenAddr = "127.0.0.1:0"
-			return settings, nil
+	runtime := newRuntime(deps.ResolveToken, deps.ResolveModel)
+
+	execOpts := runtimeapi.ExecuteOptions{
+		Mode: runtimeapi.StreamModeCallback,
+		ResultCallback: func(result runtimeapi.ExecuteResult) {
+			opts.ResultCallback(result.StatusCode, result.Headers, result.Body, result.Error)
 		},
-		ModelLoader: noopModelLoader{},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("build runtime: %w", err)
+		TelemetryCallback: func(event runtimeapi.TelemetryEvent) {
+			emitTelemetry(opts.TelemetryCallback, telemetryEventMap(event))
+		},
 	}
-	return kernel.NewKernel(rt, obs), nil
+
+	return runtime.Execute(ctx, req, execOpts)
 }
 
-func (c *copilotProxyCore) run() {
-	defer c.wg.Done()
-	for {
-		select {
-		case task := <-c.queue:
-			c.handleTask(task)
-		case <-c.destroy:
-			c.drainQueue()
-			return
+func newRuntime(resolveTokenFn resolveToken, resolveModelFn resolveModel) *runtimeapi.Runtime {
+	opts := runtimeapi.Options{
+		SettingsProvider: func(context.Context) (config.Settings, error) {
+			return settingsProvider(), nil
+		},
+		HTTPClientFactory: httpClientMaker,
+		GitHubBaseURL:     githubAPIBase,
+	}
+	if resolveTokenFn != nil {
+		opts.ResolveToken = func(ctx context.Context, accountRef string) (string, error) {
+			return resolveTokenFn(ctx, accountRef)
 		}
 	}
-}
-
-func (c *copilotProxyCore) drainQueue() {
-	for {
-		select {
-		case task := <-c.queue:
-			if task == nil {
-				continue
+	if resolveModelFn != nil {
+		opts.ResolveModel = func(ctx context.Context, modelID string) (runtimeapi.ModelInfo, error) {
+			info, err := resolveModelFn(ctx, modelID)
+			if err != nil {
+				return runtimeapi.ModelInfo{}, err
 			}
-			c.handleTask(task)
-		default:
-			return
+			return runtimeapi.ModelInfo{
+				ID:                       info.ID,
+				Endpoints:                append([]string(nil), info.Endpoints...),
+				SupportedReasoningEffort: append([]string(nil), info.SupportedReasoningEffort...),
+			}, nil
 		}
 	}
+	return runtimeapi.NewRuntime(opts)
 }
 
-func (c *copilotProxyCore) handleTask(task *invocationTask) {
-	if task == nil {
-		return
+func telemetryEventMap(event runtimeapi.TelemetryEvent) map[string]any {
+	payload := map[string]any{
+		"type":      event.Type,
+		"timestamp": event.Timestamp.Format(time.RFC3339Nano),
 	}
-	var request core.RequestInvocation
-	if err := json.Unmarshal([]byte(task.payload), &request); err != nil {
-		c.finishTask(task, "", fmt.Errorf("invalid request: %w", err))
-		return
+	if event.Path != "" {
+		payload["path"] = event.Path
 	}
-	if err := c.ensureKernel(); err != nil {
-		c.finishTask(task, "", err)
-		return
+	if event.Model != "" {
+		payload["model"] = event.Model
 	}
-	if c.kernel.Status() != core.StateRunning {
-		c.finishTask(task, "", errKernelNotRunning)
-		return
+	if event.StatusCode != 0 {
+		payload["status_code"] = event.StatusCode
 	}
-	response, err := c.kernel.Invoke(request)
-	if err != nil {
-		c.finishTask(task, "", err)
-		return
+	if event.Error != "" {
+		payload["error"] = event.Error
 	}
-	payload, err := json.Marshal(response)
-	if err != nil {
-		c.finishTask(task, "", fmt.Errorf("serializing response: %w", err))
-		return
-	}
-	c.finishTask(task, string(payload), nil)
+	return payload
 }
 
-func (c *copilotProxyCore) finishTask(task *invocationTask, payload string, err error) {
-	if task == nil {
-		return
-	}
-	task.ack <- err
-	c.invokeCallback(payload, err, task.id)
-}
-
-func (c *copilotProxyCore) Start() error {
-	if c.destroyed.Load() {
-		return errCoreDestroyed
-	}
-	if err := c.ensureKernel(); err != nil {
-		return err
-	}
-
-	c.serverMu.Lock()
-	if c.kernel.Status() == core.StateRunning {
-		c.serverMu.Unlock()
-		return nil
-	}
-	done := make(chan struct{})
-	c.serverDone = done
-	c.resetServerErr()
-	c.serverWG.Add(1)
-	go c.runKernel(done)
-	c.serverMu.Unlock()
-
-	if err := c.waitForState(core.StateRunning, done); err != nil {
-		return err
-	}
-	c.logEvent("kernel.start", "kernel started (C ABI)")
-	return nil
-}
-
-func (c *copilotProxyCore) Stop() error {
-	if c.destroyed.Load() {
-		return errCoreDestroyed
-	}
-	if err := c.ensureKernel(); err != nil {
-		return err
-	}
-
-	c.serverMu.Lock()
-	done := c.serverDone
-	c.serverMu.Unlock()
-	if done == nil {
-		return nil
-	}
-
-	if err := c.kernel.Stop(); err != nil {
-		return err
-	}
-	<-done
-
-	c.serverMu.Lock()
-	c.serverDone = nil
-	c.serverMu.Unlock()
-
-	c.logEvent("kernel.stop", "kernel stopped (C ABI)")
-	return c.serverError()
-}
-
-func (c *copilotProxyCore) Status() core.ServiceState {
-	if c.kernel == nil {
-		return core.StateStopped
-	}
-	return c.kernel.Status()
-}
-
-func (c *copilotProxyCore) Invoke(payload string) error {
-	if c.destroyed.Load() {
-		return errCoreDestroyed
-	}
-	if err := c.ensureKernel(); err != nil {
-		return err
-	}
-	c.invoking.Add(1)
-	defer c.invoking.Done()
-	if c.destroyed.Load() {
-		return errCoreDestroyed
-	}
-	if c.kernel.Status() != core.StateRunning {
-		return errKernelNotRunning
-	}
-
-	task := &invocationTask{
-		payload: payload,
-		ack:     make(chan error, 1),
-		id:      c.idCounter.Add(1),
-	}
-
-	select {
-	case c.queue <- task:
-	case <-c.destroy:
-		return errCoreDestroyed
-	}
-
-	select {
-	case err := <-task.ack:
-		return err
-	case <-c.destroy:
-		return errCoreDestroyed
-	}
-}
-
-func (c *copilotProxyCore) Destroy() {
-	c.once.Do(func() {
-		c.destroyed.Store(true)
-		_ = c.Stop()
-		c.invoking.Wait()
-		close(c.destroy)
-		c.wg.Wait()
-		c.serverWG.Wait()
-	})
-}
-
-func (c *copilotProxyCore) SetCallback(fn func(string, error, uint64)) {
-	c.callbackMu.Lock()
-	c.callback = fn
-	c.callbackMu.Unlock()
-}
-
-func (c *copilotProxyCore) invokeCallback(payload string, err error, id uint64) {
-	c.callbackMu.RLock()
-	cb := c.callback
-	c.callbackMu.RUnlock()
+func emitTelemetry(cb telemetryCallback, event map[string]any) {
 	if cb == nil {
 		return
 	}
-	cb(payload, err, id)
+	cb(event)
 }
 
-func (c *copilotProxyCore) waitForState(target core.ServiceState, done <-chan struct{}) error {
-	deadline := time.Now().Add(kernelStartTimeout)
-	for {
-		if c.kernel.Status() == target {
-			return nil
-		}
-		select {
-		case <-done:
-			if err := c.serverError(); err != nil {
-				return err
-			}
-			if c.kernel.Status() == target {
-				return nil
-			}
-			return fmt.Errorf("kernel terminated before reaching %s", target)
-		default:
-		}
-		if time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(kernelStatePollInterval)
+func requestCodeJSON(ctx context.Context) (string, error) {
+	runtime := newRuntime(nil, nil)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	device, err := runtime.RequestCode(ctx)
+	if err != nil {
+		return "", err
 	}
-	if c.kernel.Status() == target {
-		return nil
+	data, err := json.Marshal(device)
+	if err != nil {
+		return "", err
 	}
-	return fmt.Errorf("timeout waiting for kernel to reach %s", target)
+	return string(data), nil
 }
 
-func (c *copilotProxyCore) runKernel(done chan struct{}) {
-	defer c.serverWG.Done()
-	err := c.kernel.Start()
-	c.setServerErr(err)
-	close(done)
-}
-
-func (c *copilotProxyCore) setServerErr(err error) {
-	c.serverErrMu.Lock()
-	c.serverErr = err
-	c.serverErrMu.Unlock()
-}
-
-func (c *copilotProxyCore) resetServerErr() {
-	c.serverErrMu.Lock()
-	c.serverErr = nil
-	c.serverErrMu.Unlock()
-}
-
-func (c *copilotProxyCore) serverError() error {
-	c.serverErrMu.Lock()
-	err := c.serverErr
-	c.serverErrMu.Unlock()
-	return err
-}
-
-func (c *copilotProxyCore) ensureKernel() error {
-	if c.initErr != nil {
-		return c.initErr
+func pollTokenJSON(ctx context.Context, payload string) (string, error) {
+	var device auth.DeviceCodeResponse
+	if err := json.Unmarshal([]byte(payload), &device); err != nil {
+		return "", err
 	}
-	if c.kernel == nil {
-		return errKernelUnavailable
+	runtime := newRuntime(nil, nil)
+	timeout := time.Duration(device.ExpiresIn+30) * time.Second
+	if timeout <= 0 {
+		timeout = 2 * time.Minute
 	}
-	return nil
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	tokenValue, err := runtime.PollToken(ctx, device)
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(map[string]string{"token": tokenValue})
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
-func (c *copilotProxyCore) logEvent(eventType, message string) {
-	if c.obs == nil {
-		return
+func fetchUserInfoJSON(ctx context.Context, tokenValue string) (string, error) {
+	runtime := newRuntime(nil, nil)
+	info, err := runtime.FetchUserInfo(ctx, tokenValue)
+	if err != nil {
+		return "", err
 	}
-	c.obs.AddEvent(observability.Event{Timestamp: time.Now(), Type: eventType, Message: message})
+	payload, err := json.Marshal(info)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
 }
 
-type noopModelLoader struct{}
-
-func (noopModelLoader) Load(context.Context) ([]models.ModelInfo, error) {
-	return nil, nil
+func fetchModelsJSON(ctx context.Context, tokenValue string) (string, error) {
+	runtime := newRuntime(nil, nil)
+	data, err := runtime.FetchModels(ctx, tokenValue)
+	if err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
 }

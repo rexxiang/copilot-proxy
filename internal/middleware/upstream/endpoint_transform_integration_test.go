@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/core/endpoint/transform"
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/middleware/upstream/transform"
 )
 
 const (
