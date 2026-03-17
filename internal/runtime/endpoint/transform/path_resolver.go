@@ -3,18 +3,18 @@ package transform
 import (
 	"strings"
 
-	"copilot-proxy/internal/runtime/config"
+	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
 )
 
 // NormalizeLocalPath normalizes supported local API paths.
 func NormalizeLocalPath(path string) string {
 	switch strings.TrimSpace(path) {
-	case config.ChatCompletionsPath:
-		return config.ChatCompletionsPath
-	case config.ResponsesPath:
-		return config.ResponsesPath
-	case config.MessagesPath:
-		return config.MessagesPath
+	case protocolpaths.ChatCompletionsPath:
+		return protocolpaths.ChatCompletionsPath
+	case protocolpaths.ResponsesPath:
+		return protocolpaths.ResponsesPath
+	case protocolpaths.MessagesPath:
+		return protocolpaths.MessagesPath
 	default:
 		return ""
 	}
@@ -23,12 +23,12 @@ func NormalizeLocalPath(path string) string {
 // NormalizeUpstreamPath normalizes supported upstream API paths.
 func NormalizeUpstreamPath(path string) string {
 	switch strings.TrimSpace(path) {
-	case config.UpstreamChatCompletionsPath:
-		return config.UpstreamChatCompletionsPath
-	case config.UpstreamResponsesPath:
-		return config.UpstreamResponsesPath
-	case config.UpstreamMessagesPath:
-		return config.UpstreamMessagesPath
+	case protocolpaths.UpstreamChatCompletionsPath:
+		return protocolpaths.UpstreamChatCompletionsPath
+	case protocolpaths.UpstreamResponsesPath:
+		return protocolpaths.UpstreamResponsesPath
+	case protocolpaths.UpstreamMessagesPath:
+		return protocolpaths.UpstreamMessagesPath
 	default:
 		return ""
 	}
@@ -37,12 +37,12 @@ func NormalizeUpstreamPath(path string) string {
 // LocalToUpstream maps a local path to an upstream path.
 func LocalToUpstream(localPath string) (string, bool) {
 	switch NormalizeLocalPath(localPath) {
-	case config.ChatCompletionsPath:
-		return config.UpstreamChatCompletionsPath, true
-	case config.ResponsesPath:
-		return config.UpstreamResponsesPath, true
-	case config.MessagesPath:
-		return config.UpstreamMessagesPath, true
+	case protocolpaths.ChatCompletionsPath:
+		return protocolpaths.UpstreamChatCompletionsPath, true
+	case protocolpaths.ResponsesPath:
+		return protocolpaths.UpstreamResponsesPath, true
+	case protocolpaths.MessagesPath:
+		return protocolpaths.UpstreamMessagesPath, true
 	default:
 		return "", false
 	}
@@ -60,31 +60,31 @@ func LocalToUpstream(localPath string) (string, bool) {
 // If model endpoints are missing or unrecognized for /v1/messages, it falls back to /chat/completions.
 func PickTargetEndpoint(sourceLocalPath string, selectedModelEndpoints []string) string {
 	switch NormalizeLocalPath(sourceLocalPath) {
-	case config.ChatCompletionsPath:
-		return config.UpstreamChatCompletionsPath
-	case config.ResponsesPath:
-		return config.UpstreamResponsesPath
+	case protocolpaths.ChatCompletionsPath:
+		return protocolpaths.UpstreamChatCompletionsPath
+	case protocolpaths.ResponsesPath:
+		return protocolpaths.UpstreamResponsesPath
 	}
 
 	normalized := normalizeAndUniqueUpstreamEndpoints(selectedModelEndpoints)
 	if len(normalized) == 0 {
-		return config.UpstreamChatCompletionsPath
+		return protocolpaths.UpstreamChatCompletionsPath
 	}
 
 	if current, ok := LocalToUpstream(sourceLocalPath); ok && containsString(normalized, current) {
 		return current
 	}
 
-	if containsString(normalized, config.UpstreamResponsesPath) {
-		return config.UpstreamResponsesPath
+	if containsString(normalized, protocolpaths.UpstreamResponsesPath) {
+		return protocolpaths.UpstreamResponsesPath
 	}
-	if containsString(normalized, config.UpstreamMessagesPath) {
-		return config.UpstreamMessagesPath
+	if containsString(normalized, protocolpaths.UpstreamMessagesPath) {
+		return protocolpaths.UpstreamMessagesPath
 	}
-	if containsString(normalized, config.UpstreamChatCompletionsPath) {
-		return config.UpstreamChatCompletionsPath
+	if containsString(normalized, protocolpaths.UpstreamChatCompletionsPath) {
+		return protocolpaths.UpstreamChatCompletionsPath
 	}
-	return config.UpstreamChatCompletionsPath
+	return protocolpaths.UpstreamChatCompletionsPath
 }
 
 func normalizeAndUniqueUpstreamEndpoints(items []string) []string {

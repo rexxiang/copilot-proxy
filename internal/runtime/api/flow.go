@@ -10,7 +10,10 @@ import (
 	"copilot-proxy/internal/reasoning"
 	runtimeconfig "copilot-proxy/internal/runtime/config"
 	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
+	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
 )
+
+var defaultPathMapping = protocolpaths.DefaultPathMapping()
 
 func (r *Engine) doExecuteUpstream(
 	ctx context.Context,
@@ -50,7 +53,7 @@ func (r *Engine) doExecuteUpstream(
 	endpointflow.ApplyDynamicHeaders(req.Header, info)
 
 	codec := endpointflow.BuildEndpointCodec(resolvedPolicies(settings), info.MappedModel, info.SupportedReasoningEffort)
-	return endpointflow.ExecuteEndpointTransform(req, rc, runtimeconfig.PathMapping, codec, func(nextReq *http.Request, _ *middleware.RequestContext) (*http.Response, error) {
+	return endpointflow.ExecuteEndpointTransform(req, rc, defaultPathMapping, codec, func(nextReq *http.Request, _ *middleware.RequestContext) (*http.Response, error) {
 		if r.upstreamDo != nil {
 			return r.upstreamDo(ctx, nextReq)
 		}

@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/runtime/config"
+	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
 )
 
 // EndpointCodec provides message-protocol adapters implemented by the upstream package.
@@ -114,13 +114,13 @@ func convertRequestAcrossEndpoints(sourceLocal, targetUpstream string, body []by
 		return body, true
 	}
 
-	if NormalizeLocalPath(sourceLocal) == config.MessagesPath {
+	if NormalizeLocalPath(sourceLocal) == protocolpaths.MessagesPath {
 		switch targetUpstream {
-		case config.UpstreamChatCompletionsPath:
+		case protocolpaths.UpstreamChatCompletionsPath:
 			return codec.messagesToChatRequest(body)
-		case config.UpstreamResponsesPath:
+		case protocolpaths.UpstreamResponsesPath:
 			return codec.messagesToResponsesRequest(body)
-		case config.UpstreamMessagesPath:
+		case protocolpaths.UpstreamMessagesPath:
 			return body, true
 		}
 	}
@@ -163,13 +163,13 @@ func convertJSONResponse(sourceLocal, targetUpstream string, resp *http.Response
 	var converted []byte
 	var ok bool
 
-	if NormalizeLocalPath(sourceLocal) == config.MessagesPath {
+	if NormalizeLocalPath(sourceLocal) == protocolpaths.MessagesPath {
 		switch targetUpstream {
-		case config.UpstreamChatCompletionsPath:
+		case protocolpaths.UpstreamChatCompletionsPath:
 			converted, ok = codec.chatToMessagesResponse(bodyBytes)
-		case config.UpstreamResponsesPath:
+		case protocolpaths.UpstreamResponsesPath:
 			converted, ok = codec.responsesToMessagesResponse(bodyBytes)
-		case config.UpstreamMessagesPath:
+		case protocolpaths.UpstreamMessagesPath:
 			converted, ok = bodyBytes, true
 		}
 	}
@@ -187,13 +187,13 @@ func convertJSONResponse(sourceLocal, targetUpstream string, resp *http.Response
 
 func convertStreamingResponse(sourceLocal, targetUpstream string, resp *http.Response, codec EndpointCodec) (*http.Response, bool) {
 	var transformed io.ReadCloser
-	if NormalizeLocalPath(sourceLocal) == config.MessagesPath {
+	if NormalizeLocalPath(sourceLocal) == protocolpaths.MessagesPath {
 		switch targetUpstream {
-		case config.UpstreamChatCompletionsPath:
+		case protocolpaths.UpstreamChatCompletionsPath:
 			transformed = codec.chatSSEToMessages(resp.Body)
-		case config.UpstreamResponsesPath:
+		case protocolpaths.UpstreamResponsesPath:
 			transformed = codec.responsesSSEToMessages(resp.Body)
-		case config.UpstreamMessagesPath:
+		case protocolpaths.UpstreamMessagesPath:
 			transformed = resp.Body
 		}
 	}

@@ -7,8 +7,8 @@ import (
 	"net/http"
 
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/runtime/config"
 	models "copilot-proxy/internal/runtime/model"
+	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
 )
 
 // RewriteModel applies model mapping and stores selected endpoint metadata.
@@ -123,7 +123,7 @@ func rawModelFromJSON(body []byte) string {
 // IsModelRewritePath returns true if the path uses a model-bearing request body.
 func IsModelRewritePath(path string) bool {
 	switch path {
-	case config.ChatCompletionsPath, config.ResponsesPath, config.MessagesPath:
+	case protocolpaths.ChatCompletionsPath, protocolpaths.ResponsesPath, protocolpaths.MessagesPath:
 		return true
 	default:
 		return false
@@ -133,11 +133,11 @@ func IsModelRewritePath(path string) bool {
 // RewriteModelInBody rewrites the model field in the request body for supported paths.
 func RewriteModelInBody(path string, body []byte, mapped string) ([]byte, bool) {
 	switch path {
-	case config.ChatCompletionsPath:
+	case protocolpaths.ChatCompletionsPath:
 		return rewriteModelField(body, mapped)
-	case config.ResponsesPath:
+	case protocolpaths.ResponsesPath:
 		return rewriteModelField(body, mapped)
-	case config.MessagesPath:
+	case protocolpaths.MessagesPath:
 		return rewriteModelField(body, mapped)
 	default:
 		return body, false

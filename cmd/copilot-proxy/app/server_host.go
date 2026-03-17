@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"copilot-proxy/internal/runtime/config"
+	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
 )
 
 const (
@@ -29,7 +30,7 @@ type serverHost struct {
 
 func newServerHost(addr string, handler http.Handler) *serverHost {
 	mux := http.NewServeMux()
-	for _, path := range config.AllowedPaths {
+	for _, path := range protocolpaths.AllowedLocalPaths() {
 		mux.Handle(path, handler)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

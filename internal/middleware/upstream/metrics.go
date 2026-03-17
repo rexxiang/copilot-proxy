@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/runtime/config"
+	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
 	core "copilot-proxy/internal/runtime/types"
 )
 
 const (
-	localResponsesPath = config.ResponsesPath
+	localResponsesPath = protocolpaths.ResponsesPath
 )
 
 // ObservabilityMiddleware reports lifecycle events to an observability sink.

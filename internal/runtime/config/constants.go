@@ -1,6 +1,10 @@
 package config
 
-import "time"
+import (
+	"time"
+
+	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
+)
 
 // GitHub OAuth.
 const (
@@ -12,19 +16,21 @@ const (
 )
 
 // API Paths - Local (OpenAI-compatible) endpoints.
+// Deprecated: use internal/runtime/protocol/paths.
 const (
-	ChatCompletionsPath = "/v1/chat/completions"
-	ResponsesPath       = "/v1/responses"
-	MessagesPath        = "/v1/messages"
-	ModelsPath          = "/copilot/models"
+	ChatCompletionsPath = protocolpaths.ChatCompletionsPath
+	ResponsesPath       = protocolpaths.ResponsesPath
+	MessagesPath        = protocolpaths.MessagesPath
+	ModelsPath          = protocolpaths.ModelsPath
 )
 
-// Upstream Copilot API paths (no /v1 prefix).
+// Upstream Copilot API paths.
+// Deprecated: use internal/runtime/protocol/paths.
 const (
-	UpstreamChatCompletionsPath = "/chat/completions"
-	UpstreamResponsesPath       = "/responses"
-	UpstreamMessagesPath        = "/v1/messages"
-	UpstreamModelsPath          = "/models"
+	UpstreamChatCompletionsPath = protocolpaths.UpstreamChatCompletionsPath
+	UpstreamResponsesPath       = protocolpaths.UpstreamResponsesPath
+	UpstreamMessagesPath        = protocolpaths.UpstreamMessagesPath
+	UpstreamModelsPath          = protocolpaths.UpstreamModelsPath
 )
 
 // Timeouts and Durations.
@@ -49,12 +55,9 @@ const (
 )
 
 // AllowedPaths contains the API paths that are allowed to be proxied.
-var AllowedPaths = []string{ChatCompletionsPath, ResponsesPath, MessagesPath, ModelsPath}
+// Deprecated: use internal/runtime/protocol/paths.AllowedLocalPaths.
+var AllowedPaths = protocolpaths.AllowedLocalPaths()
 
 // PathMapping maps local paths to upstream Copilot API paths.
-var PathMapping = map[string]string{
-	ChatCompletionsPath: UpstreamChatCompletionsPath,
-	ResponsesPath:       UpstreamResponsesPath,
-	MessagesPath:        UpstreamMessagesPath,
-	ModelsPath:          UpstreamModelsPath,
-}
+// Deprecated: use internal/runtime/protocol/paths.DefaultPathMapping.
+var PathMapping = protocolpaths.DefaultPathMapping()

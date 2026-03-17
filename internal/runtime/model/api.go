@@ -8,7 +8,7 @@ import (
 	"net/http"
 
 	"copilot-proxy/internal/reasoning"
-	"copilot-proxy/internal/runtime/config"
+	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
 
 	"github.com/google/uuid"
 )
@@ -123,7 +123,7 @@ func FetchModels(ctx context.Context, client *http.Client, baseURL, token string
 
 // FetchViaProxy retrieves available models through the local proxy.
 func FetchViaProxy(ctx context.Context, client *http.Client, proxyURL string) ([]ModelInfo, error) {
-	return FetchViaDoer(ctx, client, proxyURL+config.ModelsPath)
+	return FetchViaDoer(ctx, client, proxyURL+protocolpaths.ModelsPath)
 }
 
 // FetchViaDoer retrieves available models through any HTTP doer.

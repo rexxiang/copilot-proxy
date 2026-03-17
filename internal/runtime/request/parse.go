@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"copilot-proxy/internal/runtime/config"
+	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
 )
 
 // Parser extracts request information from request body.
@@ -105,11 +105,11 @@ func emptyRequestInfo() RequestInfo {
 
 func parserByPath(path string, options ParseOptions) (Parser, bool) {
 	switch path {
-	case config.ChatCompletionsPath:
+	case protocolpaths.ChatCompletionsPath:
 		return &ChatCompletionsParser{}, true
-	case config.ResponsesPath:
+	case protocolpaths.ResponsesPath:
 		return &ResponsesParser{}, true
-	case config.MessagesPath:
+	case protocolpaths.MessagesPath:
 		return &AnthropicMessagesParser{RequestModeAgentDetection: options.MessagesAgentDetectionRequestMode}, true
 	default:
 		return nil, false
