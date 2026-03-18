@@ -47,7 +47,8 @@ func (m ResolveAccountMiddleware) Handle(ctx *middleware.Context, next middlewar
 	}
 
 	rc := ensureRequestContext(ctx.Request)
-	rc.Account = account
+	rc.AccountRef = account.User
+	rc.AccountToken = account.GhToken
 	ctx.Request = withRequestContext(ctx.Request, rc)
 	return next()
 }

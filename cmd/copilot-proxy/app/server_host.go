@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"os/signal"
 	"syscall"
 	"time"
 
@@ -50,9 +48,9 @@ func newServerHost(addr string, handler http.Handler) *serverHost {
 }
 
 func (s *serverHost) Start(ctx context.Context) error {
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	cancelCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -66,19 +64,10 @@ func (s *serverHost) Start(ctx context.Context) error {
 		select {
 		case <-cancelCtx.Done():
 			return s.shutdownWithTimeout(cancelCtx)
-		case sig := <-sigCh:
-			if isShutdownSignal(sig) {
-				cancel()
-				return s.shutdownWithTimeout(cancelCtx)
-			}
 		case err := <-errCh:
 			return err
 		}
 	}
-}
-
-func isShutdownSignal(sig os.Signal) bool {
-	return sig == os.Interrupt || sig == syscall.SIGTERM
 }
 
 func (s *serverHost) shutdownWithTimeout(ctx context.Context) error {

@@ -5,6 +5,7 @@ import (
 
 	"copilot-proxy/internal/middleware"
 	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 // DynamicHeadersMiddleware sets x-initiator and Copilot-Vision-Request.
@@ -17,7 +18,7 @@ func NewDynamicHeaders() DynamicHeadersMiddleware {
 
 func (m DynamicHeadersMiddleware) Handle(ctx *middleware.Context, next middleware.Next) (*http.Response, error) {
 	req := ctx.Request
-	rc, ok := middleware.RequestContextFrom(req.Context())
+	rc, ok := requestctx.RequestContextFrom(req.Context())
 	if !ok || rc == nil {
 		return next()
 	}

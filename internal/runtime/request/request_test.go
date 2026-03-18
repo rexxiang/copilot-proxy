@@ -33,3 +33,27 @@ func TestWithRequestContextRoundTrip(t *testing.T) {
 		t.Fatalf("request context mismatch: got %+v, want %+v", got, in)
 	}
 }
+
+func TestInferModelID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "model", body: `{"model":"gpt-4o"}`, want: "gpt-4o"},
+		{name: "model id", body: `{"model_id":"gpt-5-mini"}`, want: "gpt-5-mini"},
+		{name: "trimmed", body: `{"model":"  gpt-4.1  "}`, want: "gpt-4.1"},
+		{name: "invalid", body: `{"model":123}`, want: ""},
+		{name: "malformed", body: `{`, want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := InferModelID([]byte(tt.body)); got != tt.want {
+				t.Fatalf("InferModelID() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

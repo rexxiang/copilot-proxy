@@ -13,6 +13,8 @@ import (
 	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/runtime/config"
 	models "copilot-proxy/internal/runtime/model"
+	requestctx "copilot-proxy/internal/runtime/request"
+	runtimemiddleware "copilot-proxy/internal/runtime/server/middleware"
 )
 
 const messagesStreamBody = `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stream":true}`
@@ -27,24 +29,31 @@ func (s *stubCatalog) GetModels() []models.ModelInfo {
 	return copied
 }
 
+type messagesTranslateForTest struct {
+	*runtimemiddleware.MessagesTranslateMiddleware
+	reasoningPolicies []reasoning.Policy
+}
+
 func newMessagesTranslateForTest(
 	catalog models.Catalog,
 	mapping map[string]string,
 	reasoningPolicyMaps ...map[string]string,
-) *MessagesTranslateMiddleware {
+) *messagesTranslateForTest {
 	policies, _ := reasoning.EffectivePoliciesFromMap(nil)
 	if len(reasoningPolicyMaps) > 0 {
 		if parsed, err := reasoning.EffectivePoliciesFromMap(reasoningPolicyMaps[0]); err == nil {
 			policies = parsed
 		}
 	}
-	mw := NewMessagesTranslateWithRuntimeOptions(catalog, mapping, func() MessagesTranslateRuntimeOptions {
-		return MessagesTranslateRuntimeOptions{
+	mw := runtimemiddleware.NewMessagesTranslateWithRuntimeOptions(catalog, mapping, func() runtimemiddleware.MessagesTranslateRuntimeOptions {
+		return runtimemiddleware.MessagesTranslateRuntimeOptions{
 			ReasoningPolicies: policies,
 		}
 	})
-	mw.reasoningPolicies = cloneReasoningPolicies(policies)
-	return mw
+	return &messagesTranslateForTest{
+		MessagesTranslateMiddleware: mw,
+		reasoningPolicies:           policies,
+	}
 }
 
 func TestEndpointPipelineKeepsResponsesOnSameEndpoint(t *testing.T) {
@@ -61,10 +70,10 @@ func TestEndpointPipelineKeepsResponsesOnSameEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		SourceLocalPath: config.ResponsesPath,
 		LocalPath:       config.ResponsesPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 		},
 	}))
@@ -92,7 +101,7 @@ func TestEndpointPipelineKeepsResponsesOnSameEndpoint(t *testing.T) {
 		t.Fatalf("expected upstream body unchanged, got %s", string(upstreamBody))
 	}
 
-	rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+	rc, ok := requestctx.RequestContextFrom(ctx.Request.Context())
 	if !ok || rc == nil {
 		t.Fatalf("expected request context")
 	}
@@ -118,8 +127,8 @@ func TestEndpointPipelineRuntimeOptionsProviderUpdatesHaikuFallbackPerRequest(t 
 		{ID: "grok-code-fast-1", Endpoints: []string{config.UpstreamResponsesPath}},
 	}}
 	fallbackModels := []string{"gpt-5-mini"}
-	mw := NewMessagesTranslateWithRuntimeOptions(catalog, config.PathMapping, func() MessagesTranslateRuntimeOptions {
-		return MessagesTranslateRuntimeOptions{
+	mw := runtimemiddleware.NewMessagesTranslateWithRuntimeOptions(catalog, config.PathMapping, func() runtimemiddleware.MessagesTranslateRuntimeOptions {
+		return runtimemiddleware.MessagesTranslateRuntimeOptions{
 			ClaudeHaikuFallbackModels: fallbackModels,
 			ReasoningPolicies:         nil,
 		}
@@ -136,7 +145,7 @@ func TestEndpointPipelineRuntimeOptionsProviderUpdatesHaikuFallbackPerRequest(t 
 		if err != nil {
 			t.Fatalf("new request: %v", err)
 		}
-		req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+		req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 			SourceLocalPath: config.ResponsesPath,
 			LocalPath:       config.ResponsesPath,
 		}))
@@ -188,8 +197,8 @@ func TestEndpointPipelineRuntimeOptionsProviderUpdatesReasoningPoliciesPerReques
 	policies := []reasoning.Policy{
 		{Model: "gpt-5-mini", Target: reasoning.TargetResponses, Effort: reasoning.EffortNone},
 	}
-	mw := NewMessagesTranslateWithRuntimeOptions(catalog, config.PathMapping, func() MessagesTranslateRuntimeOptions {
-		return MessagesTranslateRuntimeOptions{
+	mw := runtimemiddleware.NewMessagesTranslateWithRuntimeOptions(catalog, config.PathMapping, func() runtimemiddleware.MessagesTranslateRuntimeOptions {
+		return runtimemiddleware.MessagesTranslateRuntimeOptions{
 			ClaudeHaikuFallbackModels: nil,
 			ReasoningPolicies:         policies,
 		}
@@ -206,7 +215,7 @@ func TestEndpointPipelineRuntimeOptionsProviderUpdatesReasoningPoliciesPerReques
 		if err != nil {
 			t.Fatalf("new request: %v", err)
 		}
-		req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+		req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 			SourceLocalPath: config.MessagesPath,
 			LocalPath:       config.MessagesPath,
 		}))
@@ -269,7 +278,7 @@ func TestEndpointPipelineTransformsMessagesToChatJSONResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		SourceLocalPath: config.MessagesPath,
 		LocalPath:       config.MessagesPath,
 	}))
@@ -346,7 +355,7 @@ func TestEndpointPipelineTransformsMessagesToChatSSEResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		SourceLocalPath: config.MessagesPath,
 		LocalPath:       config.MessagesPath,
 	}))
@@ -411,7 +420,7 @@ func TestEndpointPipelineKeepsMessagesBodyWhenModelSupportsMessagesEndpoint(t *t
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		SourceLocalPath: config.MessagesPath,
 		LocalPath:       config.MessagesPath,
 	}))
@@ -463,7 +472,7 @@ func TestEndpointPipelineRewritesModelForMessagesPassthrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		SourceLocalPath: config.MessagesPath,
 		LocalPath:       config.MessagesPath,
 	}))
@@ -514,7 +523,7 @@ func TestEndpointPipelineAppliesReasoningPolicyWithModelSupport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		SourceLocalPath: config.MessagesPath,
 		LocalPath:       config.MessagesPath,
 	}))
@@ -564,7 +573,7 @@ func TestEndpointPipelineSkipsReasoningWhenModelSupportMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		SourceLocalPath: config.MessagesPath,
 		LocalPath:       config.MessagesPath,
 	}))

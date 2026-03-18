@@ -3,17 +3,18 @@ package upstream
 import (
 	"net/http"
 
-	"copilot-proxy/internal/middleware"
 	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
+	requestctx "copilot-proxy/internal/runtime/request"
+	"copilot-proxy/internal/middleware"
 )
 
 // ParseRequestBodyMiddleware reads request body and stores info for downstream middleware.
 type ParseRequestBodyMiddleware struct {
-	parseOptionsProvider func() middleware.ParseOptions
+	parseOptionsProvider func() requestctx.ParseOptions
 }
 
 // NewParseRequestBodyWithOptionsProvider builds request parsing middleware with options fetched per request.
-func NewParseRequestBodyWithOptionsProvider(provider func() middleware.ParseOptions) ParseRequestBodyMiddleware {
+func NewParseRequestBodyWithOptionsProvider(provider func() requestctx.ParseOptions) ParseRequestBodyMiddleware {
 	return ParseRequestBodyMiddleware{
 		parseOptionsProvider: provider,
 	}
@@ -31,7 +32,7 @@ func (m ParseRequestBodyMiddleware) Handle(ctx *middleware.Context, next middlew
 		return next()
 	}
 
-	parseOptions := middleware.ParseOptions{
+	parseOptions := requestctx.ParseOptions{
 		MessagesAgentDetectionRequestMode: true,
 	}
 	if m.parseOptionsProvider != nil {

@@ -3,8 +3,6 @@ package request
 import (
 	"context"
 	"time"
-
-	"copilot-proxy/internal/runtime/config"
 )
 
 // RequestInfo contains metadata extracted from the request body.
@@ -25,14 +23,13 @@ type RequestContext struct {
 	LocalPath          string // Local path used by middleware internals
 	SourceLocalPath    string // Frozen original local path from request entry
 	TargetUpstreamPath string // Final selected upstream endpoint path
-	Account            config.Account
+	AccountRef         string
+	AccountToken       string
 	Token              string
 	Info               RequestInfo
 	Body               []byte
 	Headers            map[string]string
 	Start              time.Time
-	RetryAttempt       bool
-	TokenInvalidated   bool
 }
 
 // WithRequestContext stores RequestContext in context.

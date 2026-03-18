@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/runtime/config"
+	requestctx "copilot-proxy/internal/runtime/request"
 	core "copilot-proxy/internal/runtime/types"
 )
 
@@ -35,11 +35,11 @@ func TestObservabilityMiddlewareEmitsEvents(t *testing.T) {
 	mw := NewObservabilityMiddleware(sink)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	rc := &middleware.RequestContext{
+	rc := &requestctx.RequestContext{
 		ID:              "req-events",
 		LocalPath:       "/v1/responses",
 		SourceLocalPath: "/v1/responses",
-		Account:         config.Account{User: "user1"},
+		AccountRef:      "user1",
 		Start:           time.Now().Add(-time.Millisecond),
 	}
 	req = withRequestContext(req, rc)
@@ -100,11 +100,11 @@ func TestObservabilityMiddlewareCompletesOnCanceledStream(t *testing.T) {
 	mw := NewObservabilityMiddleware(sink)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	rc := &middleware.RequestContext{
+	rc := &requestctx.RequestContext{
 		ID:              "req-complete",
 		LocalPath:       "/v1/responses",
 		SourceLocalPath: "/v1/responses",
-		Account:         config.Account{User: "user1"},
+		AccountRef:      "user1",
 		Start:           time.Now().Add(-time.Millisecond),
 	}
 	req = withRequestContext(req, rc)
@@ -162,13 +162,13 @@ func TestObservabilityMiddlewareCompletesOnRequestError(t *testing.T) {
 	mw := NewObservabilityMiddleware(sink)
 	errBoom := errors.New("boom")
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	rc := &middleware.RequestContext{
+	rc := &requestctx.RequestContext{
 		ID:              "req-error",
 		LocalPath:       "/v1/responses",
 		SourceLocalPath: "/v1/responses",
-		Account:         config.Account{User: "user1"},
+		AccountRef:      "user1",
 		Start:           time.Now().Add(-10 * time.Millisecond),
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 		},
 	}

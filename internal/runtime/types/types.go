@@ -4,15 +4,12 @@ import (
 	"errors"
 	"strings"
 	"time"
-
-	"copilot-proxy/internal/runtime/model"
 )
 
-// Core defines the foundational contracts shared between the kernel, observability,
-// account, config, and monitoring subsystems. These DTOs avoid importing
-// anything outside the standard library (ModelInfo aliases into internal models
-// to stay in sync with persisted metadata) so they can be referenced transitively
-// without creating dependency cycles.
+// Core defines the foundational contracts shared between the kernel,
+// observability, account, config, and monitoring subsystems. These DTOs avoid
+// importing anything outside the standard library so they can be referenced
+// transitively without creating dependency cycles.
 const (
 	// StatusClientCanceled matches the HTTP status code sent when a client
 	// aborts the connection mid-stream. Observability consumers rely on this
@@ -117,9 +114,6 @@ type ModelStats struct {
 	VisionReqs  int64
 	AgentReqs   int64
 }
-
-// ModelInfo mirrors the persisted model metadata returned to the UI adapters.
-type ModelInfo = model.ModelInfo
 
 // Snapshot is a point-in-time view of the metrics collector.
 type Snapshot struct {

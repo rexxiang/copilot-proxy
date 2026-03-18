@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"copilot-proxy/internal/middleware"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 // RequestTimeoutMiddleware ensures the request context has at least the configured timeout.
@@ -40,7 +41,7 @@ func (m RequestTimeoutMiddleware) Handle(ctx *middleware.Context, next middlewar
 
 	ctxToUse, cancel := context.WithTimeout(reqCtx, m.timeout)
 	defer cancel()
-	ctxToUse = middleware.WithRequestContext(ctxToUse, rc)
+	ctxToUse = requestctx.WithRequestContext(ctxToUse, rc)
 	ctx.Request = ctx.Request.WithContext(ctxToUse)
 	return next()
 }

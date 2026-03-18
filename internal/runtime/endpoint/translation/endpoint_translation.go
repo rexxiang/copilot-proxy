@@ -2,7 +2,6 @@ package translation
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +9,7 @@ import (
 	"strings"
 
 	endpointrouting "copilot-proxy/internal/runtime/endpoint/routing"
+	"copilot-proxy/internal/runtime/httpjson"
 	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
 	requestctx "copilot-proxy/internal/runtime/request"
 )
@@ -23,12 +23,6 @@ type ProtocolCodec struct {
 	ResponsesToMessagesResponse func([]byte) ([]byte, bool)
 	ResponsesSSEToMessages      func(io.ReadCloser) io.ReadCloser
 }
-
-const (
-	normalizedEffortLow    = "low"
-	normalizedEffortMedium = "medium"
-	normalizedEffortHigh   = "high"
-)
 
 // ApplyEndpointTranslation rewrites request/response payloads across endpoint protocols.
 func ApplyEndpointTranslation(
@@ -68,11 +62,11 @@ func ApplyEndpointTranslation(
 
 	originalBody, ok := readRequestBody(req)
 	if !ok {
-		return jsonErrorResponse(req, http.StatusBadGateway, "failed to convert request for target endpoint"), nil
+		return httpjson.ErrorResponse(req, http.StatusBadGateway, "failed to convert request for target endpoint"), nil
 	}
 	convertedReqBody, ok := convertRequestAcrossEndpoints(sourceLocal, targetUpstream, originalBody, codec)
 	if !ok {
-		return jsonErrorResponse(req, http.StatusBadGateway, "failed to convert request for target endpoint"), nil
+		return httpjson.ErrorResponse(req, http.StatusBadGateway, "failed to convert request for target endpoint"), nil
 	}
 	applyTransformedRequestBody(req, rc, convertedReqBody)
 
@@ -83,7 +77,7 @@ func ApplyEndpointTranslation(
 
 	convertedResp, ok := convertResponseAcrossEndpoints(sourceLocal, targetUpstream, resp, codec)
 	if !ok {
-		return jsonErrorResponse(req, http.StatusBadGateway, "failed to convert upstream response"), nil
+		return httpjson.ErrorResponse(req, http.StatusBadGateway, "failed to convert upstream response"), nil
 	}
 	return convertedResp, nil
 }
@@ -210,24 +204,6 @@ func convertStreamingResponse(sourceLocal, targetUpstream string, resp *http.Res
 	return resp, true
 }
 
-// NormalizeEffort normalizes reasoning effort values across all endpoint formats.
-func NormalizeEffort(raw string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "minimal":
-		return normalizedEffortLow, true
-	case "low":
-		return normalizedEffortLow, true
-	case "medium":
-		return normalizedEffortMedium, true
-	case "high":
-		return normalizedEffortHigh, true
-	case "max":
-		return normalizedEffortHigh, true
-	default:
-		return "", false
-	}
-}
-
 // errWriter wraps an io.Writer and stops writing after the first error.
 // This prevents SSE translation goroutines from continuing to read upstream
 // data when the downstream consumer has disconnected (pipe closed).
@@ -300,20 +276,4 @@ func isEventStreamResponse(resp *http.Response) bool {
 	}
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	return strings.HasPrefix(contentType, "text/event-stream")
-}
-
-func jsonErrorResponse(req *http.Request, status int, message string) *http.Response {
-	payload, err := json.Marshal(map[string]string{"error": message})
-	if err != nil {
-		payload = []byte(`{"error":"internal error"}`)
-	}
-
-	resp := new(http.Response)
-	resp.StatusCode = status
-	resp.Header = http.Header{"Content-Type": []string{"application/json"}}
-	resp.Body = io.NopCloser(bytes.NewReader(payload))
-	resp.ContentLength = int64(len(payload))
-	resp.Request = req
-
-	return resp
 }

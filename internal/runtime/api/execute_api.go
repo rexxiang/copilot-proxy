@@ -2,13 +2,13 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	execute "copilot-proxy/internal/runtime/execute"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 func (r *Engine) Execute(ctx context.Context, invocation RequestInvocation, opts ExecuteOptions) error {
@@ -23,7 +23,7 @@ func (r *Engine) Execute(ctx context.Context, invocation RequestInvocation, opts
 	if err != nil {
 		return fmt.Errorf("load settings: %w", err)
 	}
-	modelID := inferModelID(invocation.Body)
+	modelID := requestctx.InferModelID(invocation.Body)
 
 	resolvedModel := ModelInfo{ID: modelID}
 	if modelID != "" && r.resolveModel != nil {
@@ -91,26 +91,6 @@ func accountReference(header map[string]string) string {
 		lower := strings.ToLower(key)
 		if lower == "x-copilot-account" || lower == "x-account" {
 			return value
-		}
-	}
-	return ""
-}
-
-func inferModelID(buf []byte) string {
-	if len(buf) == 0 {
-		return ""
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(buf, &payload); err != nil {
-		return ""
-	}
-	for _, key := range []string{"model", "model_id"} {
-		value, exists := payload[key]
-		if !exists {
-			continue
-		}
-		if modelID, ok := value.(string); ok {
-			return modelID
 		}
 	}
 	return ""

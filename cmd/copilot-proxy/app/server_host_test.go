@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"os"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -91,23 +90,32 @@ func TestServeWithRetryReturnsImmediatelyOnAddressInUse(t *testing.T) {
 	}
 }
 
-func TestIsShutdownSignal(t *testing.T) {
-	tests := []struct {
-		name string
-		sig  os.Signal
-		want bool
-	}{
-		{name: "interrupt", sig: os.Interrupt, want: true},
-		{name: "sigterm", sig: syscall.SIGTERM, want: true},
-		{name: "sigusr1", sig: syscall.SIGUSR1, want: false},
+func TestStartStopsOnContextCancel(t *testing.T) {
+	srv := newServerHost(runtimeconfig.Default().ListenAddr, http.NewServeMux())
+	t.Cleanup(func() {
+		_ = srv.Close()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	srv.listenFn = func(network, address string) (net.Listener, error) {
+		<-ctx.Done()
+		return nil, context.Canceled
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isShutdownSignal(tt.sig)
-			if got != tt.want {
-				t.Fatalf("isShutdownSignal(%v) = %v, want %v", tt.sig, got, tt.want)
-			}
-		})
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil && !isExpectedShutdownError(err) {
+			t.Fatalf("expected shutdown error semantics, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected Start to return after context cancellation")
 	}
 }

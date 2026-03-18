@@ -18,6 +18,8 @@ import (
 	"copilot-proxy/internal/runtime/config"
 	models "copilot-proxy/internal/runtime/model"
 	"copilot-proxy/internal/runtime/observability"
+	requestctx "copilot-proxy/internal/runtime/request"
+	runtimemiddleware "copilot-proxy/internal/runtime/server/middleware"
 )
 
 // stubAuthStore implements AuthStore for testing.
@@ -79,14 +81,14 @@ func buildTestUpstreamMiddlewares(
 		upstream.NewRequestID(),
 		upstream.NewResolveAccount(store),
 		upstream.NewToken(),
-		upstream.NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
-			return middleware.ParseOptions{
+		upstream.NewParseRequestBodyWithOptionsProvider(func() requestctx.ParseOptions {
+			return requestctx.ParseOptions{
 				MessagesAgentDetectionRequestMode: true,
 			}
 		}),
 		upstream.NewRequestTimeout(0),
-		upstream.NewMessagesTranslateWithRuntimeOptions(catalog, config.PathMapping, func() upstream.MessagesTranslateRuntimeOptions {
-			return upstream.MessagesTranslateRuntimeOptions{}
+		runtimemiddleware.NewMessagesTranslateWithRuntimeOptions(catalog, config.PathMapping, func() runtimemiddleware.MessagesTranslateRuntimeOptions {
+			return runtimemiddleware.MessagesTranslateRuntimeOptions{}
 		}),
 		upstream.NewTokenInjection(),
 		upstream.NewStaticHeaders(headers),
@@ -711,8 +713,8 @@ func TestProxyHandlerDynamicHeadersMessagesSessionDetectionMode(t *testing.T) {
 		upstreamServer.Client().Transport,
 		func(cfg *HandlerConfig) {
 			middlewares := buildTestUpstreamMiddlewares(store, nil, nil, nil)
-			middlewares[4] = upstream.NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
-				return middleware.ParseOptions{
+			middlewares[4] = upstream.NewParseRequestBodyWithOptionsProvider(func() requestctx.ParseOptions {
+				return requestctx.ParseOptions{
 					MessagesAgentDetectionRequestMode: false,
 				}
 			})

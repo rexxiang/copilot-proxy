@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"copilot-proxy/internal/runtime/config"
 	requestctx "copilot-proxy/internal/runtime/request"
 )
 
@@ -33,9 +32,6 @@ func ensureRequestContextDefaults(req *http.Request, rc *requestctx.RequestConte
 	}
 	if rc.Start.IsZero() {
 		rc.Start = time.Now()
-	}
-	if rc.Account.User == "" && rc.Account.GhToken == "" {
-		rc.Account = config.Account{}
 	}
 	return rc
 }

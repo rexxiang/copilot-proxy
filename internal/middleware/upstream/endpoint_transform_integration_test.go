@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/runtime/config"
 	endpointtranslation "copilot-proxy/internal/runtime/endpoint/translation"
 	protocolmessages "copilot-proxy/internal/runtime/protocol/messages"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 const (
@@ -23,12 +23,12 @@ const (
 // These tests validate upstream-level codec wiring with endpointtranslation.ApplyEndpointTranslation.
 func TestEndpointTransformNoopWhenSameEndpoint(t *testing.T) {
 	body := testMessagesHiBody
-	req := httptestRequestWithRC(t, config.ChatCompletionsPath, body, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.ChatCompletionsPath, body, &requestctx.RequestContext{
 		SourceLocalPath:    config.ChatCompletionsPath,
 		LocalPath:          config.ChatCompletionsPath,
 		TargetUpstreamPath: config.UpstreamChatCompletionsPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	var gotReqBody string
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -52,12 +52,12 @@ func TestEndpointTransformNoopWhenSameEndpoint(t *testing.T) {
 
 func TestEndpointTransformRejectsUnsupportedResponsesToChatConversion(t *testing.T) {
 	reqBody := testResponsesHiBody
-	req := httptestRequestWithRC(t, config.ResponsesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.ResponsesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.ResponsesPath,
 		LocalPath:          config.ResponsesPath,
 		TargetUpstreamPath: config.UpstreamChatCompletionsPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	called := false
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -78,13 +78,13 @@ func TestEndpointTransformRejectsUnsupportedResponsesToChatConversion(t *testing
 
 func TestEndpointTransformMessagesToChatSSEConvertsBack(t *testing.T) {
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stream":true}`
-	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.MessagesPath,
 		LocalPath:          config.MessagesPath,
 		TargetUpstreamPath: config.UpstreamChatCompletionsPath,
-		Info:               middleware.RequestInfo{MappedModel: "gpt-4o"},
+		Info:               requestctx.RequestInfo{MappedModel: "gpt-4o"},
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	stream := strings.Join([]string{
 		`data: {"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
@@ -122,13 +122,13 @@ func TestEndpointTransformMessagesToChatSSEConvertsBack(t *testing.T) {
 
 func TestEndpointTransformMessagesFromChatResponseMapsContentFilterToEndTurn(t *testing.T) {
 	reqBody := testMessagesHiBody
-	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.MessagesPath,
 		LocalPath:          config.MessagesPath,
 		TargetUpstreamPath: config.UpstreamChatCompletionsPath,
-		Info:               middleware.RequestInfo{MappedModel: "gpt-4o"},
+		Info:               requestctx.RequestInfo{MappedModel: "gpt-4o"},
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	upstreamResp := `{"id":"chatcmpl-cf","model":"gpt-4o","choices":[` +
 		`{"index":0,"message":{"role":"assistant","content":"filtered"},` +
@@ -161,13 +161,13 @@ func TestEndpointTransformMessagesFromChatResponseMapsContentFilterToEndTurn(t *
 
 func TestEndpointTransformMessagesFromChatResponseAllowsEmptyChoices(t *testing.T) {
 	reqBody := testMessagesHiBody
-	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.MessagesPath,
 		LocalPath:          config.MessagesPath,
 		TargetUpstreamPath: config.UpstreamChatCompletionsPath,
-		Info:               middleware.RequestInfo{MappedModel: "gpt-4o"},
+		Info:               requestctx.RequestInfo{MappedModel: "gpt-4o"},
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	upstreamResp := `{"id":"chatcmpl-empty","model":"gpt-4o","choices":[]}`
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -199,12 +199,12 @@ func TestEndpointTransformMessagesFromChatResponseAllowsEmptyChoices(t *testing.
 }
 
 func TestEndpointTransformStrictFailureOnRequestConversionError(t *testing.T) {
-	req := httptestRequestWithRC(t, config.ResponsesPath, "not-json", &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.ResponsesPath, "not-json", &requestctx.RequestContext{
 		SourceLocalPath:    config.ResponsesPath,
 		LocalPath:          config.ResponsesPath,
 		TargetUpstreamPath: config.UpstreamChatCompletionsPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	called := false
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -225,12 +225,12 @@ func TestEndpointTransformStrictFailureOnRequestConversionError(t *testing.T) {
 
 func TestEndpointTransformStrictFailureOnUnsupportedConversionEvenWithValidBody(t *testing.T) {
 	reqBody := testResponsesHiBody
-	req := httptestRequestWithRC(t, config.ResponsesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.ResponsesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.ResponsesPath,
 		LocalPath:          config.ResponsesPath,
 		TargetUpstreamPath: config.UpstreamChatCompletionsPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	called := false
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -255,12 +255,12 @@ func TestEndpointTransformMessagesToResponsesNormalizesLongUser(t *testing.T) {
 		`"metadata":{"user_id":"` + longUserID + `"}}`
 
 	capturedUser := func() string {
-		req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+		req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 			SourceLocalPath:    config.MessagesPath,
 			LocalPath:          config.MessagesPath,
 			TargetUpstreamPath: config.UpstreamResponsesPath,
 		})
-		rc, _ := middleware.RequestContextFrom(req.Context())
+		rc, _ := requestctx.RequestContextFrom(req.Context())
 
 		var upstreamReqBody []byte
 		resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -302,12 +302,12 @@ func TestEndpointTransformMessagesToResponsesNormalizesContentTypes(t *testing.T
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":[` +
 		`{"type":"text","text":"hello"},` +
 		`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]}]}`
-	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.MessagesPath,
 		LocalPath:          config.MessagesPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	var upstreamReqBody []byte
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -347,12 +347,12 @@ func TestEndpointTransformMessagesToResponsesNormalizesContentTypes(t *testing.T
 
 func TestEndpointTransformMessagesToResponsesAssistantTextUsesOutputText(t *testing.T) {
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"assistant","content":[{"type":"text","text":"hello"}]}]}`
-	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.MessagesPath,
 		LocalPath:          config.MessagesPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	var upstreamReqBody []byte
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -391,12 +391,12 @@ func TestEndpointTransformMessagesToResponsesAssistantTextUsesOutputText(t *test
 
 func TestEndpointTransformMessagesToResponsesAssistantInputTextBlockIsNormalized(t *testing.T) {
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"Assistant","content":[{"type":"input_text","text":"hello"}]}]}`
-	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.MessagesPath,
 		LocalPath:          config.MessagesPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	var upstreamReqBody []byte
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -441,12 +441,12 @@ func TestEndpointTransformMessagesToResponsesDirectMapsToolUseAndToolResult(t *t
 		`{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"search","input":{"q":"hi"}}]},` +
 		`{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"ok"}]}` +
 		`]}`
-	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.MessagesPath,
 		LocalPath:          config.MessagesPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	var upstreamReqBody []byte
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -503,12 +503,12 @@ func TestEndpointTransformMessagesToResponsesNormalizesToolsShape(t *testing.T) 
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],` +
 		`"tools":[{"name":"search","description":"query","input_schema":{"type":"object","properties":{"q":{"type":"string"}}}}],` +
 		`"tool_choice":{"type":"tool","name":"search"}}`
-	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.MessagesPath,
 		LocalPath:          config.MessagesPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	var upstreamReqBody []byte
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -558,12 +558,12 @@ func TestEndpointTransformMessagesToResponsesNormalizesToolsShape(t *testing.T) 
 
 func TestEndpointTransformMessagesToResponsesBuildsReasoningFromEffort(t *testing.T) {
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"output_config":{"effort":"high"}}`
-	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.MessagesPath,
 		LocalPath:          config.MessagesPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	var upstreamReqBody []byte
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -601,12 +601,12 @@ func TestEndpointTransformMessagesToResponsesBuildsReasoningFromEffort(t *testin
 
 func TestEndpointTransformMessagesFromResponsesResponseDirectMapsFunctionCallToToolUse(t *testing.T) {
 	reqBody := testMessagesHiBody
-	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.MessagesPath,
 		LocalPath:          config.MessagesPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	upstreamResp := `{"id":"resp_1","model":"gpt-4o","status":"completed","output":[` +
 		`{"type":"function_call","call_id":"call_1","name":"search","arguments":"{\"q\":\"hi\"}"},` +
@@ -660,13 +660,13 @@ func TestEndpointTransformMessagesFromResponsesResponseDirectMapsFunctionCallToT
 
 func TestEndpointTransformMessagesFromResponsesSSEDirectIncludesToolAndTextDeltas(t *testing.T) {
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stream":true}`
-	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.MessagesPath,
 		LocalPath:          config.MessagesPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
-		Info:               middleware.RequestInfo{MappedModel: "gpt-4o"},
+		Info:               requestctx.RequestInfo{MappedModel: "gpt-4o"},
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	stream := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-4o","status":"in_progress"}}`,
@@ -726,12 +726,12 @@ func TestEndpointTransformMessagesToResponsesMapsEffortAliases(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],` +
 				`"output_config":{"effort":"` + tc.rawEffort + `"}}`
-			req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &middleware.RequestContext{
+			req := httptestRequestWithRC(t, config.MessagesPath, reqBody, &requestctx.RequestContext{
 				SourceLocalPath:    config.MessagesPath,
 				LocalPath:          config.MessagesPath,
 				TargetUpstreamPath: config.UpstreamResponsesPath,
 			})
-			rc, _ := middleware.RequestContextFrom(req.Context())
+			rc, _ := requestctx.RequestContextFrom(req.Context())
 
 			var upstreamReqBody []byte
 			resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -780,12 +780,12 @@ func TestEndpointTransformMessagesToResponsesSkipsReasoningWhenEffortMissingOrIn
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptestRequestWithRC(t, config.MessagesPath, tc.body, &middleware.RequestContext{
+			req := httptestRequestWithRC(t, config.MessagesPath, tc.body, &requestctx.RequestContext{
 				SourceLocalPath:    config.MessagesPath,
 				LocalPath:          config.MessagesPath,
 				TargetUpstreamPath: config.UpstreamResponsesPath,
 			})
-			rc, _ := middleware.RequestContextFrom(req.Context())
+			rc, _ := requestctx.RequestContextFrom(req.Context())
 
 			var upstreamReqBody []byte
 			resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -818,12 +818,12 @@ func TestEndpointTransformMessagesToResponsesSkipsReasoningWhenEffortMissingOrIn
 
 func TestEndpointTransformResponsesPassthroughKeepsBodyUntouched(t *testing.T) {
 	body := `{"model":"gpt-4o","user":"` + strings.Repeat("u", 90) + `","input":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
-	req := httptestRequestWithRC(t, config.ResponsesPath, body, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.ResponsesPath, body, &requestctx.RequestContext{
 		SourceLocalPath:    config.ResponsesPath,
 		LocalPath:          config.ResponsesPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	var gotReqBody string
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -847,12 +847,12 @@ func TestEndpointTransformResponsesPassthroughKeepsBodyUntouched(t *testing.T) {
 
 func TestEndpointTransformResponsesPassthroughKeepsSmallMaxOutputTokensUntouched(t *testing.T) {
 	body := `{"model":"gpt-4o","max_output_tokens":1,"input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]}]}`
-	req := httptestRequestWithRC(t, config.ResponsesPath, body, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.ResponsesPath, body, &requestctx.RequestContext{
 		SourceLocalPath:    config.ResponsesPath,
 		LocalPath:          config.ResponsesPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	var gotReqBody string
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -877,12 +877,12 @@ func TestEndpointTransformResponsesPassthroughKeepsSmallMaxOutputTokensUntouched
 
 func TestEndpointTransformRejectsUnsupportedChatToMessagesConversion(t *testing.T) {
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stop":"END"}`
-	req := httptestRequestWithRC(t, config.ChatCompletionsPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.ChatCompletionsPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.ChatCompletionsPath,
 		LocalPath:          config.ChatCompletionsPath,
 		TargetUpstreamPath: config.UpstreamMessagesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	called := false
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -903,12 +903,12 @@ func TestEndpointTransformRejectsUnsupportedChatToMessagesConversion(t *testing.
 
 func TestEndpointTransformRejectsUnsupportedChatToMessagesConversionWithStopArray(t *testing.T) {
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stop":["END","STOP"]}`
-	req := httptestRequestWithRC(t, config.ChatCompletionsPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.ChatCompletionsPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.ChatCompletionsPath,
 		LocalPath:          config.ChatCompletionsPath,
 		TargetUpstreamPath: config.UpstreamMessagesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	called := false
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -929,12 +929,12 @@ func TestEndpointTransformRejectsUnsupportedChatToMessagesConversionWithStopArra
 
 func TestEndpointTransformPassesThrough4xxErrorResponseUnchanged(t *testing.T) {
 	reqBody := testResponsesHiBody
-	req := httptestRequestWithRC(t, config.ResponsesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.ResponsesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.ResponsesPath,
 		LocalPath:          config.ResponsesPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	errorBody := `{"error":{"message":"invalid model","type":"invalid_request_error","code":"model_not_found"}}`
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -961,12 +961,12 @@ func TestEndpointTransformPassesThrough4xxErrorResponseUnchanged(t *testing.T) {
 
 func TestEndpointTransformPassesThrough5xxErrorResponseUnchanged(t *testing.T) {
 	reqBody := testResponsesHiBody
-	req := httptestRequestWithRC(t, config.ResponsesPath, reqBody, &middleware.RequestContext{
+	req := httptestRequestWithRC(t, config.ResponsesPath, reqBody, &requestctx.RequestContext{
 		SourceLocalPath:    config.ResponsesPath,
 		LocalPath:          config.ResponsesPath,
 		TargetUpstreamPath: config.UpstreamResponsesPath,
 	})
-	rc, _ := middleware.RequestContextFrom(req.Context())
+	rc, _ := requestctx.RequestContextFrom(req.Context())
 
 	errorBody := `{"error":{"message":"internal server error"}}`
 	resp, err := endpointtranslation.ApplyEndpointTranslation(req, rc, testEndpointCodec(), func(r *http.Request) (*http.Response, error) {
@@ -1002,7 +1002,7 @@ func testEndpointCodec() endpointtranslation.ProtocolCodec {
 	}
 }
 
-func httptestRequestWithRC(t *testing.T, path, body string, rc *middleware.RequestContext) *http.Request {
+func httptestRequestWithRC(t *testing.T, path, body string, rc *requestctx.RequestContext) *http.Request {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://localhost"+path, strings.NewReader(body))
 	if err != nil {
@@ -1011,5 +1011,5 @@ func httptestRequestWithRC(t *testing.T, path, body string, rc *middleware.Reque
 	if rc == nil {
 		return req
 	}
-	return req.WithContext(middleware.WithRequestContext(req.Context(), rc))
+	return req.WithContext(requestctx.WithRequestContext(req.Context(), rc))
 }

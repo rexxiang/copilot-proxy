@@ -45,7 +45,7 @@ func (r *Engine) doExecuteUpstream(
 		requestBody = rewrittenBody
 	}
 	endpointflow.RestoreRequestBody(req, requestBody)
-	rc.Account = runtimeconfig.Account{User: accountRef}
+	rc.AccountRef = accountRef
 	req = endpointflow.WithRequestContext(req, rc)
 
 	endpointflow.StripClientXHeaders(req.Header)

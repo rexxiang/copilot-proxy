@@ -12,6 +12,7 @@ import (
 
 	"copilot-proxy/internal/middleware"
 	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
+	requestctx "copilot-proxy/internal/runtime/request"
 	core "copilot-proxy/internal/runtime/types"
 )
 
@@ -45,7 +46,7 @@ func (m ObservabilityMiddleware) Handle(ctx *middleware.Context, next middleware
 			Method:       req.Method,
 			Path:         fallbackLocalPath(rc),
 			Model:        selectMappedModel(rc.Info),
-			Account:      rc.Account.User,
+			Account:      rc.AccountRef,
 			RequestID:    rc.ID,
 			IsVision:     rc.Info.IsVision,
 			IsAgent:      rc.Info.IsAgent,
@@ -90,7 +91,7 @@ func (m ObservabilityMiddleware) Handle(ctx *middleware.Context, next middleware
 	return resp, err
 }
 
-func (m ObservabilityMiddleware) recordFirstResponse(rc *middleware.RequestContext, statusCode int, duration time.Duration, upstreamPath string, isStream bool) {
+func (m ObservabilityMiddleware) recordFirstResponse(rc *requestctx.RequestContext, statusCode int, duration time.Duration, upstreamPath string, isStream bool) {
 	if rc == nil || rc.ID == "" || m.sink == nil {
 		return
 	}
@@ -104,7 +105,7 @@ func (m ObservabilityMiddleware) recordFirstResponse(rc *middleware.RequestConte
 	})
 }
 
-func (m ObservabilityMiddleware) recordCompletion(rc *middleware.RequestContext, statusCode int, duration time.Duration, upstreamPath string) {
+func (m ObservabilityMiddleware) recordCompletion(rc *requestctx.RequestContext, statusCode int, duration time.Duration, upstreamPath string) {
 	if rc == nil || rc.ID == "" || m.sink == nil {
 		return
 	}
@@ -142,14 +143,14 @@ func captureHeaders(req *http.Request) map[string]string {
 	return headers
 }
 
-func responseUpstreamPath(resp *http.Response, rc *middleware.RequestContext) string {
+func responseUpstreamPath(resp *http.Response, rc *requestctx.RequestContext) string {
 	if resp == nil {
 		return fallbackUpstreamPath(nil, rc)
 	}
 	return fallbackUpstreamPath(resp.Request, rc)
 }
 
-func fallbackUpstreamPath(req *http.Request, rc *middleware.RequestContext) string {
+func fallbackUpstreamPath(req *http.Request, rc *requestctx.RequestContext) string {
 	if rc != nil && rc.TargetUpstreamPath != "" {
 		return rc.TargetUpstreamPath
 	}
@@ -162,7 +163,7 @@ func fallbackUpstreamPath(req *http.Request, rc *middleware.RequestContext) stri
 	return ""
 }
 
-func fallbackLocalPath(rc *middleware.RequestContext) string {
+func fallbackLocalPath(rc *requestctx.RequestContext) string {
 	if rc == nil {
 		return ""
 	}
@@ -274,7 +275,7 @@ func (r *streamObservabilityReadCloser) completeOnce(statusCode int) {
 	})
 }
 
-func selectMappedModel(info middleware.RequestInfo) string {
+func selectMappedModel(info requestctx.RequestInfo) string {
 	if info.MappedModel != "" {
 		return info.MappedModel
 	}

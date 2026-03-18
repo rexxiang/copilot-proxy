@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"copilot-proxy/internal/middleware"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 var (
@@ -197,7 +198,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) errorHandler(rw http.ResponseWriter, req *http.Request, err error) {
 	ctx := req.Context()
 	var requestID string
-	if rc, ok := middleware.RequestContextFrom(ctx); ok && rc != nil {
+	if rc, ok := requestctx.RequestContextFrom(ctx); ok && rc != nil {
 		requestID = rc.ID
 	}
 	if requestID == "" {
