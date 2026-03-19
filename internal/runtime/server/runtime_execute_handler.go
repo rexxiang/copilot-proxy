@@ -70,11 +70,28 @@ func (rt *Runtime) doUpstream(proxyHandler http.Handler) func(context.Context, *
 		if upstreamReq == nil {
 			return nil, errors.New("upstream request is required")
 		}
-		if ctx != nil {
-			upstreamReq = upstreamReq.Clone(ctx)
+		mergedCtx := preserveRuntimeRequestContext(ctx, upstreamReq.Context())
+		if mergedCtx != nil && mergedCtx != upstreamReq.Context() {
+			upstreamReq = upstreamReq.Clone(mergedCtx)
 		}
 		return invoker.Do(upstreamReq)
 	}
+}
+
+func preserveRuntimeRequestContext(base context.Context, requestCtx context.Context) context.Context {
+	if base == nil {
+		return requestCtx
+	}
+	if requestCtx == nil {
+		return base
+	}
+	if rc, ok := requestctx.RequestContextFrom(base); ok && rc != nil {
+		return base
+	}
+	if rc, ok := requestctx.RequestContextFrom(requestCtx); ok && rc != nil {
+		return requestctx.WithRequestContext(base, rc)
+	}
+	return base
 }
 
 func (rt *Runtime) buildResultCallback(w http.ResponseWriter, wroteResponse *bool) func(execute.ExecuteResult) {

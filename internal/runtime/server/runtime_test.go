@@ -10,8 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"copilot-proxy/internal/middleware"
+	"copilot-proxy/internal/middleware/upstream"
+	"copilot-proxy/internal/proxy"
 	runtimeconfig "copilot-proxy/internal/runtime/config"
 	models "copilot-proxy/internal/runtime/model"
+	requestctx "copilot-proxy/internal/runtime/request"
 	core "copilot-proxy/internal/runtime/types"
 )
 
@@ -31,6 +35,34 @@ func (testObservabilitySink) Snapshot() core.Snapshot                           
 
 type runtimeTestCatalog struct {
 	models []models.ModelInfo
+}
+
+type capturingObservabilitySink struct {
+	mu      sync.Mutex
+	started []core.RequestRecord
+}
+
+func (s *capturingObservabilitySink) RecordStart(record *core.RequestRecord) {
+	if record == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cloned := *record
+	s.started = append(s.started, cloned)
+}
+
+func (s *capturingObservabilitySink) RecordFirstResponse(string, int, time.Duration, string, bool) {}
+func (s *capturingObservabilitySink) RecordComplete(string, int, time.Duration, string)            {}
+func (s *capturingObservabilitySink) AddEvent(core.Event)                                          {}
+func (s *capturingObservabilitySink) Snapshot() core.Snapshot                                      { return core.Snapshot{} }
+
+func (s *capturingObservabilitySink) startedRecords() []core.RequestRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]core.RequestRecord, len(s.started))
+	copy(out, s.started)
+	return out
 }
 
 func (c *runtimeTestCatalog) GetModels() []models.ModelInfo {
@@ -241,6 +273,116 @@ func TestRuntimeUsesUpdatedExternalAuthAndSettingsState(t *testing.T) {
 	}
 	if got := server2Hits[0].path; got != runtimeconfig.UpstreamChatCompletionsPath {
 		t.Fatalf("second upstream path = %q, want %q", got, runtimeconfig.UpstreamChatCompletionsPath)
+	}
+}
+
+func TestRuntimeObservabilityStartRecordPreservesModelAndAgent(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	}))
+	defer upstreamServer.Close()
+
+	sink := &capturingObservabilitySink{}
+	rt, err := NewRuntimeWithContext(context.Background(), RuntimeDeps{
+		SettingsFunc: func() (runtimeconfig.RuntimeSettings, error) {
+			settings := runtimeconfig.Default()
+			settings.ListenAddr = "127.0.0.1:0"
+			settings.UpstreamBase = upstreamServer.URL
+			return settings, nil
+		},
+		AuthFunc: func() (runtimeconfig.AuthConfig, error) {
+			return runtimeconfig.AuthConfig{
+				Default: "user",
+				Accounts: []runtimeconfig.Account{
+					{User: "user", GhToken: "token"},
+				},
+			}, nil
+		},
+		Observability: sink,
+		ModelCatalog:  &runtimeTestCatalog{},
+		ModelLoader:   testLoader{},
+	})
+	if err != nil {
+		t.Fatalf("build runtime: %v", err)
+	}
+
+	body := []byte(`{"model":"gpt-4o","messages":[{"role":"assistant","content":"hello"}]}`)
+	req := httptest.NewRequest(http.MethodPost, runtimeconfig.ChatCompletionsPath, http.NoBody)
+	req.Body = ioNopCloserBytes(body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Copilot-Account", "user")
+	resp := httptest.NewRecorder()
+	rt.Handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("response code = %d, want %d", resp.Code, http.StatusOK)
+	}
+
+	started := sink.startedRecords()
+	if len(started) != 1 {
+		t.Fatalf("expected 1 started record, got %d", len(started))
+	}
+	if got := started[0].Model; got != "gpt-4o" {
+		t.Fatalf("start record model = %q, want %q", got, "gpt-4o")
+	}
+	if !started[0].IsAgent {
+		t.Fatalf("expected IsAgent=true in start record")
+	}
+	if got := started[0].Path; got != runtimeconfig.ChatCompletionsPath {
+		t.Fatalf("start record path = %q, want %q", got, runtimeconfig.ChatCompletionsPath)
+	}
+}
+
+func TestRuntimeDoUpstreamPreservesRequestContextWhenExternalContextProvided(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	}))
+	defer upstreamServer.Close()
+
+	sink := &capturingObservabilitySink{}
+	handler, err := proxy.NewHandler(&proxy.HandlerConfig{
+		UpstreamURL: upstreamServer.URL,
+		UpstreamMiddlewares: []middleware.Middleware{
+			upstream.NewObservabilityMiddleware(sink),
+		},
+	})
+	if err != nil {
+		t.Fatalf("build proxy handler: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, runtimeconfig.UpstreamChatCompletionsPath, http.NoBody)
+	req.Body = ioNopCloserBytes([]byte(`{"model":"gpt-4o"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
+		Start:              time.Now(),
+		LocalPath:          runtimeconfig.ChatCompletionsPath,
+		SourceLocalPath:    runtimeconfig.ChatCompletionsPath,
+		TargetUpstreamPath: runtimeconfig.UpstreamChatCompletionsPath,
+		Info: requestctx.RequestInfo{
+			Model:       "gpt-4o",
+			MappedModel: "gpt-4o",
+			IsAgent:     true,
+		},
+	}))
+
+	resp, err := (&Runtime{}).doUpstream(handler)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("do upstream: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	started := sink.startedRecords()
+	if len(started) != 1 {
+		t.Fatalf("expected 1 started record, got %d", len(started))
+	}
+	if got := started[0].Model; got != "gpt-4o" {
+		t.Fatalf("start record model = %q, want %q", got, "gpt-4o")
+	}
+	if !started[0].IsAgent {
+		t.Fatalf("expected IsAgent=true in start record")
 	}
 }
 

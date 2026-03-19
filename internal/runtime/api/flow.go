@@ -54,10 +54,11 @@ func (r *Engine) doExecuteUpstream(
 
 	codec := endpointflow.BuildEndpointCodec(resolvedPolicies(settings), info.MappedModel, info.SupportedReasoningEffort)
 	return endpointflow.ExecuteEndpointTransform(req, rc, defaultPathMapping, codec, func(nextReq *http.Request, _ *requestctx.RequestContext) (*http.Response, error) {
+		upstreamCtx := nextReq.Context()
 		if r.upstreamDo != nil {
-			return r.upstreamDo(ctx, nextReq)
+			return r.upstreamDo(upstreamCtx, nextReq)
 		}
-		return r.doUpstreamRequest(ctx, nextReq, settings)
+		return r.doUpstreamRequest(upstreamCtx, nextReq, settings)
 	})
 }
 
