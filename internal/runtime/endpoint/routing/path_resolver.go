@@ -58,12 +58,17 @@ func LocalToUpstream(localPath string) (string, bool) {
 //   - /chat/completions
 //
 // If model endpoints are missing or unrecognized for /v1/messages, it falls back to /chat/completions.
+// Unknown local paths return empty to allow static path mapping to decide.
 func PickTargetEndpoint(sourceLocalPath string, selectedModelEndpoints []string) string {
 	switch NormalizeLocalPath(sourceLocalPath) {
 	case protocolpaths.ChatCompletionsPath:
 		return protocolpaths.UpstreamChatCompletionsPath
 	case protocolpaths.ResponsesPath:
 		return protocolpaths.UpstreamResponsesPath
+	case protocolpaths.MessagesPath:
+		// Continue below to select compatible upstream endpoint.
+	default:
+		return ""
 	}
 
 	normalized := normalizeAndUniqueUpstreamEndpoints(selectedModelEndpoints)

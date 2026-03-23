@@ -72,8 +72,8 @@ type modelData struct {
 	ModelPickerEnabled bool     `json:"model_picker_enabled"`
 	SupportedEndpoints []string `json:"supported_endpoints"`
 	Billing            struct {
-		IsPremium  bool    `json:"is_premium"`
-		Multiplier float64 `json:"multiplier"`
+		IsPremium  bool     `json:"is_premium"`
+		Multiplier *float64 `json:"multiplier"`
 	} `json:"billing"`
 	Capabilities struct {
 		Family   string `json:"family"`
@@ -182,6 +182,12 @@ func parseResponse(resp *http.Response) ([]ModelInfo, error) {
 		if len(endpoints) == 0 {
 			endpoints = []string{"/chat/completions"}
 		}
+		multiplierValue := 0.0
+		multiplierKnown := false
+		if m.Billing.Multiplier != nil {
+			multiplierValue = *m.Billing.Multiplier
+			multiplierKnown = true
+		}
 
 		items = append(items, ModelInfo{
 			ID:                       m.ID,
@@ -190,7 +196,8 @@ func parseResponse(resp *http.Response) ([]ModelInfo, error) {
 			Endpoints:                endpoints,
 			SupportedReasoningEffort: reasoning.NormalizeSupportedEfforts(m.Capabilities.Supports.ReasoningEffort),
 			IsPremium:                m.Billing.IsPremium,
-			Multiplier:               m.Billing.Multiplier,
+			Multiplier:               multiplierValue,
+			MultiplierKnown:          multiplierKnown,
 			Preview:                  m.Preview,
 			Family:                   m.Capabilities.Family,
 			ContextWindow:            m.Capabilities.Limits.MaxContextWindowTokens,

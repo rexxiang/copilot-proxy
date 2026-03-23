@@ -36,6 +36,11 @@ type serverRuntime struct {
 	runtime *coreRuntime.Runtime
 }
 
+type tuiProgram interface {
+	Quit()
+	ReleaseTerminal() error
+}
+
 const (
 	defaultMonitorTimeout = 30 * time.Second
 )
@@ -220,13 +225,40 @@ func runWithTUI(ctx context.Context, ctrl *ServiceController) error {
 	// Wait for either server error, TUI exit, or context cancellation
 	select {
 	case err := <-serverErr:
-		program.Quit()
+		_ = quitAndWaitForTUI(program, tuiErr, runtimeconfig.ShutdownTimeout)
 		return err
 	case err := <-tuiErr:
 		// TUI exited, signal server to stop
 		return err
 	case <-ctx.Done():
-		program.Quit()
+		_ = quitAndWaitForTUI(program, tuiErr, runtimeconfig.ShutdownTimeout)
+		return nil
+	}
+}
+
+func quitAndWaitForTUI(program tuiProgram, tuiErr <-chan error, shutdownTimeout time.Duration) error {
+	if program == nil {
+		return nil
+	}
+	program.Quit()
+
+	if tuiErr == nil {
+		return nil
+	}
+
+	timeout := shutdownTimeout
+	if timeout <= 0 {
+		timeout = runtimeconfig.ShutdownTimeout
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case err := <-tuiErr:
+		return err
+	case <-timer.C:
+		_ = program.ReleaseTerminal()
 		return nil
 	}
 }

@@ -265,6 +265,102 @@ func TestFetchModelsViaDoerDoesNotMutateExplicitManager(t *testing.T) {
 	}
 }
 
+func TestFetchModelsMultiplierPresence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{
+					"id":                   "missing-multiplier",
+					"name":                 "Missing Multiplier",
+					"model_picker_enabled": true,
+					"billing": map[string]any{
+						"is_premium": true,
+					},
+					"capabilities": map[string]any{
+						"type": "chat",
+						"limits": map[string]any{
+							"max_context_window_tokens": 8192,
+							"max_prompt_tokens":         8192,
+							"max_output_tokens":         2048,
+						},
+					},
+				},
+				{
+					"id":                   "zero-multiplier",
+					"name":                 "Zero Multiplier",
+					"model_picker_enabled": true,
+					"billing": map[string]any{
+						"is_premium": true,
+						"multiplier": 0.0,
+					},
+					"capabilities": map[string]any{
+						"type": "chat",
+						"limits": map[string]any{
+							"max_context_window_tokens": 8192,
+							"max_prompt_tokens":         8192,
+							"max_output_tokens":         2048,
+						},
+					},
+				},
+				{
+					"id":                   "positive-multiplier",
+					"name":                 "Positive Multiplier",
+					"model_picker_enabled": true,
+					"billing": map[string]any{
+						"is_premium": true,
+						"multiplier": 1.5,
+					},
+					"capabilities": map[string]any{
+						"type": "chat",
+						"limits": map[string]any{
+							"max_context_window_tokens": 8192,
+							"max_prompt_tokens":         8192,
+							"max_output_tokens":         2048,
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	items, err := FetchModels(context.Background(), server.Client(), server.URL, "token", nil)
+	if err != nil {
+		t.Fatalf("fetch models: %v", err)
+	}
+
+	missing := findModel(items, "missing-multiplier")
+	if missing == nil {
+		t.Fatalf("missing-multiplier model not found")
+	}
+	if missing.MultiplierKnown {
+		t.Fatalf("expected multiplier presence false when field is missing")
+	}
+
+	zero := findModel(items, "zero-multiplier")
+	if zero == nil {
+		t.Fatalf("zero-multiplier model not found")
+	}
+	if !zero.MultiplierKnown {
+		t.Fatalf("expected multiplier presence true for explicit zero")
+	}
+	if zero.Multiplier != 0 {
+		t.Fatalf("expected zero multiplier value, got %v", zero.Multiplier)
+	}
+
+	positive := findModel(items, "positive-multiplier")
+	if positive == nil {
+		t.Fatalf("positive-multiplier model not found")
+	}
+	if !positive.MultiplierKnown {
+		t.Fatalf("expected multiplier presence true for explicit positive value")
+	}
+	if positive.Multiplier != 1.5 {
+		t.Fatalf("expected multiplier 1.5, got %v", positive.Multiplier)
+	}
+}
+
 func findModel(items []ModelInfo, id string) *ModelInfo {
 	for i := range items {
 		if items[i].ID == id {

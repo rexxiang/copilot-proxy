@@ -9,6 +9,7 @@ type ModelInfo struct {
 	SupportedReasoningEffort []string // Supported reasoning effort levels: low, medium, high
 	IsPremium                bool     // Requires premium subscription
 	Multiplier               float64  // Premium quota multiplier
+	MultiplierKnown          bool     // True when billing.multiplier is explicitly present in upstream payload
 	Preview                  bool     // Is preview model
 	Family                   string   // Model family (gpt-4o, claude-sonnet-4.5, etc.)
 	ContextWindow            int      // Max context window tokens (e.g., 128000, 400000)

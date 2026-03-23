@@ -243,6 +243,142 @@ func TestRuntimeExecuteRewritesMappedModelInBody(t *testing.T) {
 	}
 }
 
+func TestRuntimeExecuteModelsPathPassesThroughRawResponse(t *testing.T) {
+	var upstreamPath string
+	rawBody := []byte("{\"data\":[{\"id\":\"gpt-4o\",\"billing\":{\"multiplier\":1.0}}],\"meta\":{\"raw\":true}}")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(rawBody)
+	}))
+	defer server.Close()
+
+	runtime := NewEngine(Options{
+		SettingsProvider:  settingsProviderForTests(server.URL),
+		HTTPClientFactory: func() *http.Client { return server.Client() },
+	})
+
+	request := RequestInvocation{
+		Method: http.MethodGet,
+		Path:   runtimeconfig.ModelsPath,
+		Header: map[string]string{"Accept": "application/json"},
+		Body:   nil,
+	}
+
+	var (
+		callbacks int
+		status    int
+		body      []byte
+	)
+	err := runtime.Execute(context.Background(), request, ExecuteOptions{
+		Mode: StreamModeCallback,
+		ResultCallback: func(result ExecuteResult) {
+			callbacks++
+			status = result.StatusCode
+			body = append([]byte(nil), result.Body...)
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if callbacks != 1 {
+		t.Fatalf("expected 1 callback, got %d", callbacks)
+	}
+	if upstreamPath != runtimeconfig.UpstreamModelsPath {
+		t.Fatalf("expected upstream path %q, got %q", runtimeconfig.UpstreamModelsPath, upstreamPath)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", status)
+	}
+	if string(body) != string(rawBody) {
+		t.Fatalf("expected raw body passthrough, got %s", string(body))
+	}
+}
+
+func TestRuntimeExecuteModelsPathPreservesAllowlistedXHeadersAcrossCalls(t *testing.T) {
+	type observedRequest struct {
+		path            string
+		apiVersion      string
+		interactionType string
+		interactionID   string
+	}
+
+	observed := make([]observedRequest, 0, 2)
+	rawBody := []byte("{\"data\":[{\"id\":\"gpt-4o\",\"billing\":{\"multiplier\":1.0}}]}")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observed = append(observed, observedRequest{
+			path:            r.URL.Path,
+			apiVersion:      r.Header.Get("X-GitHub-Api-Version"),
+			interactionType: r.Header.Get("X-Interaction-Type"),
+			interactionID:   r.Header.Get("X-Interaction-Id"),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(rawBody)
+	}))
+	defer server.Close()
+
+	runtime := NewEngine(Options{
+		SettingsProvider:  settingsProviderForTests(server.URL),
+		HTTPClientFactory: func() *http.Client { return server.Client() },
+	})
+
+	request := RequestInvocation{
+		Method: http.MethodGet,
+		Path:   runtimeconfig.ModelsPath,
+		Header: map[string]string{
+			"Accept":               "application/json",
+			"X-GitHub-Api-Version": "2025-05-01",
+			"X-Interaction-Type":   "conversation-agent",
+			"X-Interaction-Id":     "interaction-1",
+		},
+	}
+	for i := 0; i < 2; i++ {
+		expectedInteractionID := "interaction-1"
+		if i == 1 {
+			expectedInteractionID = "interaction-2"
+		}
+		request.Header["X-Interaction-Id"] = expectedInteractionID
+
+		var body []byte
+		err := runtime.Execute(context.Background(), request, ExecuteOptions{
+			Mode: StreamModeCallback,
+			ResultCallback: func(result ExecuteResult) {
+				body = append([]byte(nil), result.Body...)
+			},
+		})
+		if err != nil {
+			t.Fatalf("execute call %d: %v", i+1, err)
+		}
+		if string(body) != string(rawBody) {
+			t.Fatalf("expected raw body passthrough on call %d, got %s", i+1, string(body))
+		}
+	}
+
+	if len(observed) != 2 {
+		t.Fatalf("expected 2 upstream requests, got %d", len(observed))
+	}
+	for i, got := range observed {
+		expectedInteractionID := "interaction-1"
+		if i == 1 {
+			expectedInteractionID = "interaction-2"
+		}
+		if got.path != runtimeconfig.UpstreamModelsPath {
+			t.Fatalf("call %d expected upstream path %q, got %q", i+1, runtimeconfig.UpstreamModelsPath, got.path)
+		}
+		if got.apiVersion != "2025-05-01" {
+			t.Fatalf("call %d expected X-GitHub-Api-Version preserved, got %q", i+1, got.apiVersion)
+		}
+		if got.interactionType != "conversation-agent" {
+			t.Fatalf("call %d expected X-Interaction-Type preserved, got %q", i+1, got.interactionType)
+		}
+		if got.interactionID != expectedInteractionID {
+			t.Fatalf("call %d expected X-Interaction-Id %q, got %q", i+1, expectedInteractionID, got.interactionID)
+		}
+	}
+}
+
 func TestRuntimeFetchModelsUsesConfiguredBase(t *testing.T) {
 	var (
 		upstreamPath string

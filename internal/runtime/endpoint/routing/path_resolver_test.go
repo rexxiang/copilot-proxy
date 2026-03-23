@@ -66,3 +66,10 @@ func TestPickTargetEndpointMessagesFallsBackToChatCompletionsWhenMissingOrUnknow
 		t.Fatalf("expected fallback %q for unknown endpoints, got %q", config.UpstreamChatCompletionsPath, target)
 	}
 }
+
+func TestPickTargetEndpointUnknownLocalPathReturnsEmpty(t *testing.T) {
+	target := PickTargetEndpoint(config.ModelsPath, nil)
+	if target != "" {
+		t.Fatalf("expected empty target for unknown model-rewrite path, got %q", target)
+	}
+}
