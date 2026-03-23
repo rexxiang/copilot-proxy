@@ -1,20 +1,20 @@
 package upstream
 
 import (
-	"bytes"
-	"io"
 	"net/http"
 
+	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
+	requestctx "copilot-proxy/internal/runtime/request"
 	"copilot-proxy/internal/middleware"
 )
 
 // ParseRequestBodyMiddleware reads request body and stores info for downstream middleware.
 type ParseRequestBodyMiddleware struct {
-	parseOptionsProvider func() middleware.ParseOptions
+	parseOptionsProvider func() requestctx.ParseOptions
 }
 
 // NewParseRequestBodyWithOptionsProvider builds request parsing middleware with options fetched per request.
-func NewParseRequestBodyWithOptionsProvider(provider func() middleware.ParseOptions) ParseRequestBodyMiddleware {
+func NewParseRequestBodyWithOptionsProvider(provider func() requestctx.ParseOptions) ParseRequestBodyMiddleware {
 	return ParseRequestBodyMiddleware{
 		parseOptionsProvider: provider,
 	}
@@ -32,45 +32,26 @@ func (m ParseRequestBodyMiddleware) Handle(ctx *middleware.Context, next middlew
 		return next()
 	}
 
-	bodyBytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		ctx.Request = withRestoredBodyAndContext(req, bodyBytes, rc)
-		return next()
-	}
-
-	if len(bodyBytes) == 0 {
-		ctx.Request = withRestoredBodyAndContext(req, bodyBytes, rc)
-		return next()
-	}
-
-	parseOptions := middleware.ParseOptions{
+	parseOptions := requestctx.ParseOptions{
 		MessagesAgentDetectionRequestMode: true,
 	}
 	if m.parseOptionsProvider != nil {
 		parseOptions = m.parseOptionsProvider()
 	}
-	info := middleware.ParseRequestByPathWithOptions(req.URL.Path, bodyBytes, parseOptions)
+
+	bodyBytes, info, err := endpointflow.ParseRequest(req, rc.SourceLocalPath, parseOptions)
+	if err != nil {
+		ctx.Request = withRequestContext(req, rc)
+		return next()
+	}
+
+	if len(bodyBytes) == 0 {
+		ctx.Request = withRequestContext(req, rc)
+		return next()
+	}
 	rc.Body = bodyBytes
 	rc.Info = info
 
-	req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	req.ContentLength = int64(len(bodyBytes))
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(bodyBytes)), nil
-	}
-
 	ctx.Request = withRequestContext(req, rc)
 	return next()
-}
-
-func withRestoredBodyAndContext(
-	req *http.Request,
-	body []byte,
-	rc *middleware.RequestContext,
-) *http.Request {
-	if req == nil {
-		return nil
-	}
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	return withRequestContext(req, rc)
 }

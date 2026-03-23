@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"copilot-proxy/internal/middleware"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 var errRateLimitedHandlerClosed = errors.New("rate limited handler closed")
@@ -160,14 +161,14 @@ func attachRequestStart(req *http.Request) *http.Request {
 	if req == nil {
 		return nil
 	}
-	rc, ok := middleware.RequestContextFrom(req.Context())
+	rc, ok := requestctx.RequestContextFrom(req.Context())
 	if !ok || rc == nil {
-		rc = &middleware.RequestContext{
+		rc = &requestctx.RequestContext{
 			LocalPath:       req.URL.Path,
 			SourceLocalPath: req.URL.Path,
 			Start:           time.Now(),
 		}
-		return req.WithContext(middleware.WithRequestContext(req.Context(), rc))
+		return req.WithContext(requestctx.WithRequestContext(req.Context(), rc))
 	}
 	if rc.Start.IsZero() {
 		rc.Start = time.Now()
@@ -178,5 +179,5 @@ func attachRequestStart(req *http.Request) *http.Request {
 	if rc.SourceLocalPath == "" {
 		rc.SourceLocalPath = rc.LocalPath
 	}
-	return req.WithContext(middleware.WithRequestContext(req.Context(), rc))
+	return req.WithContext(requestctx.WithRequestContext(req.Context(), rc))
 }

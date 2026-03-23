@@ -14,9 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/middleware"
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/runtime/config"
+	requestctx "copilot-proxy/internal/runtime/request"
+	core "copilot-proxy/internal/runtime/types"
 )
 
 type upstreamStubAuthStore struct {
@@ -33,16 +34,6 @@ func (s *upstreamStubAuthStore) LoadAuth() (config.AuthConfig, error) {
 func (s *upstreamStubAuthStore) SaveAuth(auth config.AuthConfig) error {
 	s.saved = auth
 	return s.saveErr
-}
-
-type upstreamStubTokenProvider struct {
-	token string
-	err   error
-}
-
-//goland:noinspection GoUnusedParameter
-func (s upstreamStubTokenProvider) GetToken(ctx context.Context, account config.Account) (string, error) {
-	return s.token, s.err
 }
 
 type timeoutNetError struct{}
@@ -87,7 +78,6 @@ func (c *canceledAfterFirstRead) Close() error {
 
 var (
 	errUnexpectedNextCall = errors.New("unexpected next call")
-	errTokenBoom          = errors.New("boom")
 )
 
 func TestContextInitSetsSourceAndLocalPath(t *testing.T) {
@@ -96,7 +86,7 @@ func TestContextInitSetsSourceAndLocalPath(t *testing.T) {
 	mw := NewContextInit()
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
-		rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+		rc, ok := requestctx.RequestContextFrom(ctx.Request.Context())
 		if !ok || rc == nil {
 			t.Fatalf("expected request context")
 		}
@@ -125,7 +115,7 @@ func TestRequestIDSetsContextAndResponseHeader(t *testing.T) {
 	mw := NewRequestID()
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
-		rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+		rc, ok := requestctx.RequestContextFrom(ctx.Request.Context())
 		if !ok || rc == nil || rc.ID == "" {
 			t.Fatalf("expected request id in context")
 		}
@@ -167,44 +157,52 @@ func TestResolveAccountNoAccountsReturnsUnauthorized(t *testing.T) {
 	}
 }
 
-func TestTokenTimeoutReturnsGatewayTimeout(t *testing.T) {
+func TestTokenUsesGitHubTokenFromAccount(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
-		Account: config.Account{User: "u1", GhToken: "gh"},
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
+		AccountRef:   "u1",
+		AccountToken: "gho_token",
 	}))
 	ctx := &middleware.Context{Request: req}
-	mw := NewToken(TokenConfig{Provider: upstreamStubTokenProvider{err: timeoutNetError{}}})
+	mw := NewToken()
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
-		t.Fatal("next should not be called")
-		return nil, errUnexpectedNextCall
+		rc, ok := requestctx.RequestContextFrom(ctx.Request.Context())
+		if !ok || rc == nil {
+			t.Fatalf("expected request context")
+		}
+		if rc.Token != "gho_token" {
+			t.Fatalf("token: got %q, want %q", rc.Token, "gho_token")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    ctx.Request,
+		}, nil
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	defer closeResponse(resp)
-	if resp.StatusCode != http.StatusGatewayTimeout {
-		t.Fatalf("status: got %d, want %d", resp.StatusCode, http.StatusGatewayTimeout)
-	}
-	body := decodeErrorBody(t, resp)
-	if body != "request timed out" {
-		t.Fatalf("error body: got %q, want %q", body, "request timed out")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }
 
 func TestParseRequestBodyStoresInfoAndPreservesBody(t *testing.T) {
 	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", bytes.NewBufferString(body))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{}))
 	ctx := &middleware.Context{Request: req}
-	mw := NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
-		return middleware.ParseOptions{
+	mw := NewParseRequestBodyWithOptionsProvider(func() requestctx.ParseOptions {
+		return requestctx.ParseOptions{
 			MessagesAgentDetectionRequestMode: true,
 		}
 	})
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
-		rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+		rc, ok := requestctx.RequestContextFrom(ctx.Request.Context())
 		if !ok || rc == nil {
 			t.Fatalf("missing request context")
 		}
@@ -234,16 +232,16 @@ func TestParseRequestBodyStoresInfoAndPreservesBody(t *testing.T) {
 func TestParseRequestBodyMessagesInitSequenceDefaultsToAgent(t *testing.T) {
 	body := `{"model":"claude-3","messages":[{"role":"user","content":"system prompt"},{"role":"user","content":"question"}]}`
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", bytes.NewBufferString(body))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{}))
 	ctx := &middleware.Context{Request: req}
-	mw := NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
-		return middleware.ParseOptions{
+	mw := NewParseRequestBodyWithOptionsProvider(func() requestctx.ParseOptions {
+		return requestctx.ParseOptions{
 			MessagesAgentDetectionRequestMode: true,
 		}
 	})
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
-		rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+		rc, ok := requestctx.RequestContextFrom(ctx.Request.Context())
 		if !ok || rc == nil {
 			t.Fatalf("missing request context")
 		}
@@ -266,16 +264,16 @@ func TestParseRequestBodyMessagesInitSequenceDefaultsToAgent(t *testing.T) {
 func TestParseRequestBodyMessagesSessionModeUsesHistoricalNonUserRole(t *testing.T) {
 	body := `{"model":"claude-3","messages":[{"role":"user","content":"first"},{"role":"assistant","content":"second"},{"role":"user","content":"last"}]}`
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", bytes.NewBufferString(body))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{}))
 	ctx := &middleware.Context{Request: req}
-	mw := NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
-		return middleware.ParseOptions{
+	mw := NewParseRequestBodyWithOptionsProvider(func() requestctx.ParseOptions {
+		return requestctx.ParseOptions{
 			MessagesAgentDetectionRequestMode: false,
 		}
 	})
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
-		rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+		rc, ok := requestctx.RequestContextFrom(ctx.Request.Context())
 		if !ok || rc == nil {
 			t.Fatalf("missing request context")
 		}
@@ -298,19 +296,19 @@ func TestParseRequestBodyMessagesSessionModeUsesHistoricalNonUserRole(t *testing
 func TestParseRequestBodyOptionsProviderUsesLatestModePerRequest(t *testing.T) {
 	body := `{"model":"claude-3","messages":[{"role":"user","content":"first"},{"role":"assistant","content":"second"},{"role":"user","content":"last"}]}`
 	requestMode := true
-	mw := NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
-		return middleware.ParseOptions{
+	mw := NewParseRequestBodyWithOptionsProvider(func() requestctx.ParseOptions {
+		return requestctx.ParseOptions{
 			MessagesAgentDetectionRequestMode: requestMode,
 		}
 	})
 
 	makeRequest := func() bool {
 		req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", bytes.NewBufferString(body))
-		req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
+		req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{}))
 		ctx := &middleware.Context{Request: req}
 
 		resp, err := mw.Handle(ctx, func() (*http.Response, error) {
-			rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+			rc, ok := requestctx.RequestContextFrom(ctx.Request.Context())
 			if !ok || rc == nil {
 				t.Fatalf("missing request context")
 			}
@@ -325,7 +323,7 @@ func TestParseRequestBodyOptionsProviderUsesLatestModePerRequest(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		defer closeResponse(resp)
-		rc, _ := middleware.RequestContextFrom(ctx.Request.Context())
+		rc, _ := requestctx.RequestContextFrom(ctx.Request.Context())
 		return rc.Info.IsAgent
 	}
 
@@ -338,16 +336,16 @@ func TestParseRequestBodyOptionsProviderUsesLatestModePerRequest(t *testing.T) {
 	}
 }
 
-func TestCaptureDebugStoresHeaders(t *testing.T) {
+func TestObservabilityMiddlewareStoresHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
 	req.Header.Set("X-Test", "one")
 	req.Header.Add("X-Test", "two")
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{}))
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{}))
 	ctx := &middleware.Context{Request: req}
-	mw := NewCaptureDebug()
+	mw := NewObservabilityMiddleware(nil)
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
-		rc, ok := middleware.RequestContextFrom(ctx.Request.Context())
+		rc, ok := requestctx.RequestContextFrom(ctx.Request.Context())
 		if !ok || rc == nil {
 			t.Fatalf("missing request context")
 		}
@@ -479,13 +477,35 @@ func TestRequestTimeoutKeepsShorterDeadline(t *testing.T) {
 	closeResponse(resp)
 }
 
-func TestTokenReturnsBadGatewayForGenericError(t *testing.T) {
+func TestTokenReturnsBadGatewayWhenGitHubTokenMissing(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
-		Account: config.Account{User: "u1", GhToken: "gh"},
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
+		AccountRef: "u1",
 	}))
 	ctx := &middleware.Context{Request: req}
-	mw := NewToken(TokenConfig{Provider: upstreamStubTokenProvider{err: errTokenBoom}})
+	mw := NewToken()
+
+	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
+		t.Fatal("next should not be called")
+		return nil, errUnexpectedNextCall
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer closeResponse(resp)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status: got %d, want %d", resp.StatusCode, http.StatusBadGateway)
+	}
+	body := decodeErrorBody(t, resp)
+	if body != "failed to get token" {
+		t.Fatalf("error body: got %q, want %q", body, "failed to get token")
+	}
+}
+
+func TestTokenReturnsBadGatewayWhenAccountMissing(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
+	ctx := &middleware.Context{Request: req}
+	mw := NewToken()
 
 	resp, err := mw.Handle(ctx, func() (*http.Response, error) {
 		t.Fatal("next should not be called")
@@ -519,7 +539,7 @@ type metricsCapture struct {
 	lastCompleteDelay time.Duration
 }
 
-func (m *metricsCapture) RecordStart(_ *monitor.RequestRecord) {
+func (m *metricsCapture) RecordStart(_ *core.RequestRecord) {
 	m.started++
 }
 
@@ -540,21 +560,27 @@ func (m *metricsCapture) RecordComplete(requestID string, statusCode int, durati
 	m.lastCompleteDelay = duration
 }
 
-func (m *metricsCapture) Record(_ *monitor.RequestRecord) {}
+func (m *metricsCapture) Record(_ *core.RequestRecord) {}
+
+func (m *metricsCapture) AddEvent(event core.Event) {}
+
+func (m *metricsCapture) Snapshot() core.Snapshot {
+	return core.Snapshot{}
+}
 
 func TestMetricsRecordsContextCanceledAs499(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		ID:        "req-1",
 		Start:     time.Now().Add(-20 * time.Millisecond),
 		LocalPath: localResponsesPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 		},
-		Account: config.Account{User: "u1"},
+		AccountRef: "u1",
 	}))
 	ctx := &middleware.Context{Request: req}
 
@@ -577,7 +603,7 @@ func TestMetricsRecordsContextCanceledAs499(t *testing.T) {
 	if metrics.completed != 1 {
 		t.Fatalf("expected one RecordComplete call, got %d", metrics.completed)
 	}
-	if metrics.lastCompleteCode != monitor.StatusClientCanceled {
+	if metrics.lastCompleteCode != core.StatusClientCanceled {
 		t.Fatalf("expected canceled status 499, got %d", metrics.lastCompleteCode)
 	}
 	if metrics.lastCompletePath != localResponsesPath {
@@ -590,17 +616,17 @@ func TestMetricsRecordsContextCanceledAs499(t *testing.T) {
 
 func TestMetricsRecordsDeadlineExceededAs504(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		ID:        "req-2",
 		Start:     time.Now().Add(-15 * time.Millisecond),
 		LocalPath: localResponsesPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 		},
-		Account: config.Account{User: "u1"},
+		AccountRef: "u1",
 	}))
 	ctx := &middleware.Context{Request: req}
 
@@ -627,17 +653,17 @@ func TestMetricsRecordsDeadlineExceededAs504(t *testing.T) {
 
 func TestMetricsRecordsTimeoutNetErrorAs504(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		ID:        "req-3",
 		Start:     time.Now().Add(-15 * time.Millisecond),
 		LocalPath: localResponsesPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 		},
-		Account: config.Account{User: "u1"},
+		AccountRef: "u1",
 	}))
 	ctx := &middleware.Context{Request: req}
 
@@ -665,17 +691,17 @@ func TestMetricsRecordsTimeoutNetErrorAs504(t *testing.T) {
 
 func TestMetricsDefersSSECompletionUntilEOF(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		ID:        "req-sse-eof",
 		Start:     time.Now().Add(-30 * time.Millisecond),
 		LocalPath: localResponsesPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 		},
-		Account: config.Account{User: "u1"},
+		AccountRef: "u1",
 	}))
 	ctx := &middleware.Context{Request: req}
 
@@ -734,17 +760,17 @@ func TestMetricsDefersSSECompletionUntilEOF(t *testing.T) {
 
 func TestMetricsRecordsSSEContextCanceledAs499(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		ID:        "req-sse-cancel",
 		Start:     time.Now().Add(-30 * time.Millisecond),
 		LocalPath: localResponsesPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 		},
-		Account: config.Account{User: "u1"},
+		AccountRef: "u1",
 	}))
 	ctx := &middleware.Context{Request: req}
 
@@ -785,24 +811,24 @@ func TestMetricsRecordsSSEContextCanceledAs499(t *testing.T) {
 	if metrics.completed != 1 {
 		t.Fatalf("expected one completion after cancel, got %d", metrics.completed)
 	}
-	if metrics.lastCompleteCode != monitor.StatusClientCanceled {
+	if metrics.lastCompleteCode != core.StatusClientCanceled {
 		t.Fatalf("expected status 499 after cancel, got %d", metrics.lastCompleteCode)
 	}
 }
 
 func TestMetricsRecordsSSEDeadlineExceededAs504(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		ID:        "req-sse-deadline",
 		Start:     time.Now().Add(-30 * time.Millisecond),
 		LocalPath: localResponsesPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 		},
-		Account: config.Account{User: "u1"},
+		AccountRef: "u1",
 	}))
 	ctx := &middleware.Context{Request: req}
 
@@ -846,17 +872,17 @@ func TestMetricsRecordsSSEDeadlineExceededAs504(t *testing.T) {
 
 func TestMetricsRecordsSSECloseBeforeEOFAs499(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		ID:        "req-sse-close",
 		Start:     time.Now().Add(-30 * time.Millisecond),
 		LocalPath: localResponsesPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 		},
-		Account: config.Account{User: "u1"},
+		AccountRef: "u1",
 	}))
 	ctx := &middleware.Context{Request: req}
 
@@ -885,24 +911,24 @@ func TestMetricsRecordsSSECloseBeforeEOFAs499(t *testing.T) {
 	if metrics.completed != 1 {
 		t.Fatalf("expected one completion after close-before-eof, got %d", metrics.completed)
 	}
-	if metrics.lastCompleteCode != monitor.StatusClientCanceled {
+	if metrics.lastCompleteCode != core.StatusClientCanceled {
 		t.Fatalf("expected status 499 for close-before-eof, got %d", metrics.lastCompleteCode)
 	}
 }
 
 func TestMetricsRecordsSSECloseAfterDoneAs200(t *testing.T) {
 	metrics := &metricsCapture{}
-	mw := NewMetrics(metrics)
+	mw := NewObservabilityMiddleware(metrics)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString(`{}`))
-	req = req.WithContext(middleware.WithRequestContext(req.Context(), &middleware.RequestContext{
+	req = req.WithContext(requestctx.WithRequestContext(req.Context(), &requestctx.RequestContext{
 		ID:        "req-sse-done-close",
 		Start:     time.Now().Add(-30 * time.Millisecond),
 		LocalPath: localResponsesPath,
-		Info: middleware.RequestInfo{
+		Info: requestctx.RequestInfo{
 			Model: "gpt-4o",
 		},
-		Account: config.Account{User: "u1"},
+		AccountRef: "u1",
 	}))
 	ctx := &middleware.Context{Request: req}
 

@@ -19,6 +19,17 @@
 
 Default listen address: `127.0.0.1:4000`.
 
+## Runtime boundary
+
+- `internal/runtime` is split by capability domain (`api`, `server`, `execute`, `endpoint`, `observability`, `stats`, `model`, `identity`, `config`, `types`).
+- `internal/runtime/api` is the stateless operation entry and type surface shared by server runtime and the C ABI.
+  - operations: `Execute`, device-flow auth, user info, model fetch
+  - shared types: request invocation, execute options/results, telemetry events, device-code payloads, user info, model DTOs
+- `cmd/copilot-proxy/app` owns mutable app state (account selection, login session state, settings editing state, monitor state) and application composition.
+- Model catalog state is caller-owned and injected explicitly; production runtime no longer falls back to a process-global default catalog.
+- CLI/TUI consume observability snapshots through `runtime/stats.Service.MonitorSnapshot()`.
+- Persistence and sink wiring stay inside `internal/runtime/observability`, while CLI/TUI adapters live under `cmd/copilot-proxy/app`.
+
 ## Install
 
 ### One-command install (latest release)
@@ -43,9 +54,11 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ### Build from source
 
-```bash
-mise x -- go build -o ./bin/copilot-proxy ./cmd/copilot-proxy
-```
+- CLI only (no CGO): `mise x -- go build -o ./bin/copilot-proxy ./cmd/copilot-proxy`
+- CLI and C ABI: `mise x -- build` (go build followed by `mise run build:c-shared`)
+- C ABI only: `mise x -- build:c-shared`
+
+The c-shared build emits `./bin/copilot-proxy-c.so` (or the platform-appropriate shared library) plus the generated header `./bin/copilot-proxy-c.h`.
 
 ## Usage
 
@@ -114,3 +127,51 @@ Map-style settings (for example `required_headers` and `reasoning_policies`) are
 - `copilot-proxy auth login` - authenticate via GitHub device flow
 - `copilot-proxy auth ls` - list and manage accounts
 - `copilot-proxy auth rm <user>` - remove an account
+
+## C ABI
+
+`cmd/copilot-proxy-c` now exposes a **stateless** C ABI. The library does not keep runtime handles, queues, account state, login sessions, settings state, model-selection state, or observability aggregates. Callers provide token/model resolution callbacks and own all state. The exported execution path uses the same stateless `runtime/api` engine flow as the server runtime, including model rewrite, endpoint selection, and `/v1/messages` protocol translation. Building the shared workflow produces `./bin/copilot-proxy`, `./bin/copilot-proxy-c.so`, and the generated header `./bin/copilot-proxy-c.h`. Use `mise x -- build` for the combined CLI + shared library or `mise x -- build:c-shared` for the library alone.
+
+### Entry points
+
+```
+int CopilotProxy_Execute(
+  const char *request_json,
+  CopilotProxyResolveTokenFn resolve_token,
+  CopilotProxyResolveModelFn resolve_model,
+  CopilotProxyResultCallback on_result,
+  CopilotProxyTelemetryCallback on_telemetry,
+  void *user_data,
+  char **final_error_out
+);
+
+int CopilotProxyAuth_RequestCode(char **challenge_out, char **error_out);
+int CopilotProxyAuth_PollToken(const char *device_payload, char **token_out, char **error_out);
+int CopilotProxyUser_FetchInfo(const char *token, char **info_out, char **error_out);
+int CopilotProxyModels_Fetch(const char *token, char **models_out, char **error_out);
+void CopilotProxy_FreeCString(char *ptr);
+```
+
+Callback contracts:
+
+```
+typedef int (*CopilotProxyResolveTokenFn)(const char *account_ref, char **token_out, char **error_out, void *user_data);
+typedef int (*CopilotProxyResolveModelFn)(const char *model_id, char **model_json_out, char **error_out, void *user_data);
+typedef void (*CopilotProxyResultCallback)(int status_code, const char *headers_json, const uint8_t *body, size_t body_len, const char *error_message, void *user_data);
+typedef void (*CopilotProxyTelemetryCallback)(const char *event_json, void *user_data);
+```
+
+`request_json` is the JSON encoding of `types.RequestInvocation` (`Method`, `Path`, optional `Header`, and `Body` as base64).
+
+### Execution semantics
+
+- `CopilotProxy_Execute` is synchronous: it returns only after the request is fully finished.
+- Non-stream responses trigger exactly one `CopilotProxyResultCallback`.
+- Stream responses trigger one first callback with `status_code` + `headers_json`, then body-only callbacks (`status_code=0`, `headers_json=NULL`) for subsequent chunks.
+- Telemetry emits raw lifecycle events (`start`, `first_byte`, `end`, `error`) through `CopilotProxyTelemetryCallback`. Aggregation is caller-owned.
+- Any C string returned through out-params must be freed with `CopilotProxy_FreeCString`.
+
+## Testing
+
+- Run the general Go test suite (CGO disabled by default) with `mise x -- test`.
+- Verify the C ABI layer with `mise x -- env CGO_ENABLED=1 go test ./cmd/copilot-proxy-c`, ensuring the stateless exports and callbacks compile and run.

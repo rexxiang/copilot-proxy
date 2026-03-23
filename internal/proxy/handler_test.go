@@ -9,55 +9,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"copilot-proxy/internal/config"
 	"copilot-proxy/internal/middleware"
 	"copilot-proxy/internal/middleware/upstream"
-	"copilot-proxy/internal/models"
-	"copilot-proxy/internal/monitor"
+	"copilot-proxy/internal/runtime/config"
+	models "copilot-proxy/internal/runtime/model"
+	"copilot-proxy/internal/runtime/observability"
+	requestctx "copilot-proxy/internal/runtime/request"
+	runtimemiddleware "copilot-proxy/internal/runtime/server/middleware"
 )
-
-type stubToken struct {
-	token string
-	err   error
-}
-
-//goland:noinspection GoUnusedParameter
-func (s stubToken) GetToken(ctx context.Context, account config.Account) (string, error) {
-	return s.token, s.err
-}
-
-type rotatingToken struct {
-	mu          sync.Mutex
-	tokens      []string
-	calls       int
-	invalidated chan config.Account
-}
-
-//goland:noinspection GoUnusedParameter
-func (r *rotatingToken) GetToken(ctx context.Context, account config.Account) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.tokens) == 0 {
-		return "", nil
-	}
-	if r.calls >= len(r.tokens) {
-		return r.tokens[len(r.tokens)-1], nil
-	}
-	token := r.tokens[r.calls]
-	r.calls++
-	return token, nil
-}
-
-func (r *rotatingToken) Invalidate(account config.Account) {
-	if r.invalidated != nil {
-		r.invalidated <- account
-	}
-}
 
 // stubAuthStore implements AuthStore for testing.
 type stubAuthStore struct {
@@ -85,7 +48,6 @@ func (s *stubAuthStore) SaveAuth(auth config.AuthConfig) error {
 func newTestHandler(
 	t *testing.T,
 	upstreamURL string,
-	tokens middleware.TokenProvider,
 	store upstream.AuthStore,
 	transport http.RoundTripper,
 	opts ...func(*HandlerConfig),
@@ -99,7 +61,7 @@ func newTestHandler(
 		opt(&cfg)
 	}
 	if cfg.UpstreamMiddlewares == nil {
-		cfg.UpstreamMiddlewares = buildTestUpstreamMiddlewares(store, tokens, nil, nil, nil)
+		cfg.UpstreamMiddlewares = buildTestUpstreamMiddlewares(store, nil, nil, nil)
 	}
 	h, err := NewHandler(&cfg)
 	if err != nil {
@@ -110,31 +72,28 @@ func newTestHandler(
 
 func buildTestUpstreamMiddlewares(
 	store upstream.AuthStore,
-	tokens middleware.TokenProvider,
 	headers map[string]string,
 	catalog models.Catalog,
-	metrics middleware.MetricsRecorder,
+	metrics middleware.ObservabilitySink,
 ) []middleware.Middleware {
 	return []middleware.Middleware{
 		upstream.NewContextInit(),
 		upstream.NewRequestID(),
 		upstream.NewResolveAccount(store),
-		upstream.NewToken(upstream.TokenConfig{Provider: tokens}),
-		upstream.NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
-			return middleware.ParseOptions{
+		upstream.NewToken(),
+		upstream.NewParseRequestBodyWithOptionsProvider(func() requestctx.ParseOptions {
+			return requestctx.ParseOptions{
 				MessagesAgentDetectionRequestMode: true,
 			}
 		}),
-		upstream.NewCaptureDebug(),
 		upstream.NewRequestTimeout(0),
-		upstream.NewMessagesTranslateWithRuntimeOptions(catalog, config.PathMapping, func() upstream.MessagesTranslateRuntimeOptions {
-			return upstream.MessagesTranslateRuntimeOptions{}
+		runtimemiddleware.NewMessagesTranslateWithRuntimeOptions(catalog, config.PathMapping, func() runtimemiddleware.MessagesTranslateRuntimeOptions {
+			return runtimemiddleware.MessagesTranslateRuntimeOptions{}
 		}),
 		upstream.NewTokenInjection(),
 		upstream.NewStaticHeaders(headers),
 		upstream.NewDynamicHeaders(),
-		upstream.NewMetrics(metrics),
-		upstream.NewDebugLog(nil),
+		upstream.NewObservabilityMiddleware(metrics),
 	}
 }
 
@@ -185,13 +144,11 @@ func TestProxyHandlerForwardsRequest(t *testing.T) {
 	proxyHandler := newTestHandler(
 		t,
 		upstreamServer.URL,
-		stubToken{token: "cp"},
 		store,
 		upstreamServer.Client().Transport,
 		func(cfg *HandlerConfig) {
 			cfg.UpstreamMiddlewares = buildTestUpstreamMiddlewares(
 				store,
-				stubToken{token: "cp"},
 				map[string]string{"X-Required": "yes"},
 				nil,
 				nil,
@@ -215,7 +172,7 @@ func TestProxyHandlerForwardsRequest(t *testing.T) {
 	if upstreamReq.URL.Path != chatCompletionsPath {
 		t.Fatalf("unexpected upstream path: %s, expected /chat/completions (rewritten from /v1/chat/completions)", upstreamReq.URL.Path)
 	}
-	if got := upstreamReq.Header.Get("Authorization"); got != "Bearer cp" {
+	if got := upstreamReq.Header.Get("Authorization"); got != "Bearer gh" {
 		t.Fatalf("unexpected auth header: %s", got)
 	}
 	if got := upstreamReq.Header.Get("X-Required"); got != "yes" {
@@ -252,13 +209,11 @@ func TestProxyHandlerModelMappingRewritesBody(t *testing.T) {
 	proxyHandler := newTestHandler(
 		t,
 		upstreamServer.URL,
-		stubToken{token: "cp"},
 		store,
 		upstreamServer.Client().Transport,
 		func(cfg *HandlerConfig) {
 			cfg.UpstreamMiddlewares = buildTestUpstreamMiddlewares(
 				store,
-				stubToken{token: "cp"},
 				nil,
 				modelCatalog,
 				nil,
@@ -294,7 +249,7 @@ func TestProxyHandlerUpdatesDefault(t *testing.T) {
 		},
 	}
 
-	proxyHandler := newTestHandler(t, upstreamServer.URL, stubToken{token: "cp"}, store, upstreamServer.Client().Transport)
+	proxyHandler := newTestHandler(t, upstreamServer.URL, store, upstreamServer.Client().Transport)
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString("{}"))
 	resp := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(resp, req)
@@ -307,7 +262,7 @@ func TestProxyHandlerUpdatesDefault(t *testing.T) {
 func TestProxyHandlerNoAccounts(t *testing.T) {
 	store := &stubAuthStore{auth: config.AuthConfig{}}
 
-	proxyHandler := newTestHandler(t, "http://example.com", stubToken{token: "cp"}, store, http.DefaultTransport)
+	proxyHandler := newTestHandler(t, "http://example.com", store, http.DefaultTransport)
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString("{}"))
 	resp := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(resp, req)
@@ -331,7 +286,6 @@ func TestProxyHandlerMethodPassesThroughToUpstream(t *testing.T) {
 	proxyHandler := newTestHandler(
 		t,
 		upstreamServer.URL,
-		stubToken{token: "cp"},
 		store,
 		upstreamServer.Client().Transport,
 	)
@@ -349,31 +303,16 @@ func TestProxyHandlerMethodPassesThroughToUpstream(t *testing.T) {
 
 func TestProxyHandlerTokenError(t *testing.T) {
 	store := &stubAuthStore{
-		auth: config.AuthConfig{Default: "u1", Accounts: []config.Account{{User: "u1", GhToken: "gh"}}},
+		auth: config.AuthConfig{Default: "u1", Accounts: []config.Account{{User: "u1"}}},
 	}
 
-	proxyHandler := newTestHandler(t, "http://example.com", stubToken{err: errToken}, store, http.DefaultTransport)
+	proxyHandler := newTestHandler(t, "http://example.com", store, http.DefaultTransport)
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString("{}"))
 	resp := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(resp, req)
 
 	if resp.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", resp.Code)
-	}
-}
-
-func TestProxyHandlerTokenTimeout(t *testing.T) {
-	store := &stubAuthStore{
-		auth: config.AuthConfig{Default: "u1", Accounts: []config.Account{{User: "u1", GhToken: "gh"}}},
-	}
-
-	timeoutHandler := newTestHandler(t, "http://example.com", stubToken{err: context.DeadlineExceeded}, store, http.DefaultTransport)
-	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString("{}"))
-	resp := httptest.NewRecorder()
-	timeoutHandler.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusGatewayTimeout {
-		t.Fatalf("expected 504, got %d", resp.Code)
 	}
 }
 
@@ -387,7 +326,6 @@ func TestProxyHandlerErrorPathIncludesRequestID(t *testing.T) {
 	proxyHandler := newTestHandler(
 		t,
 		"http://example.com",
-		stubToken{token: "cp"},
 		store,
 		failingTransport,
 	)
@@ -468,13 +406,11 @@ func TestProxyHandlerRecordsMetricsOnUpstreamError(t *testing.T) {
 	proxyHandler := newTestHandler(
 		t,
 		upstreamServer.URL,
-		stubToken{token: "cp"},
 		store,
 		upstreamServer.Client().Transport,
 		func(cfg *HandlerConfig) {
 			cfg.UpstreamMiddlewares = buildTestUpstreamMiddlewares(
 				store,
-				stubToken{token: "cp"},
 				nil,
 				nil,
 				metrics,
@@ -523,9 +459,8 @@ func TestProxyHandlerDefaultPipelineDoesNotRetryOnUnauthorized(t *testing.T) {
 	store := &stubAuthStore{
 		auth: config.AuthConfig{Default: "u1", Accounts: []config.Account{{User: "u1", GhToken: "gh"}}},
 	}
-	tokens := &rotatingToken{tokens: []string{"gho_1", "gho_2"}}
 
-	proxyHandler := newTestHandler(t, upstreamServer.URL, tokens, store, upstreamServer.Client().Transport)
+	proxyHandler := newTestHandler(t, upstreamServer.URL, store, upstreamServer.Client().Transport)
 
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-4o"}`))
 	resp := httptest.NewRecorder()
@@ -544,7 +479,7 @@ var errToken = io.ErrUnexpectedEOF
 func TestProxyHandlerLoadAuthError(t *testing.T) {
 	store := &stubAuthStore{loadErr: errToken}
 
-	proxyHandler := newTestHandler(t, "http://example.com", stubToken{token: "cp"}, store, http.DefaultTransport)
+	proxyHandler := newTestHandler(t, "http://example.com", store, http.DefaultTransport)
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/responses", bytes.NewBufferString("{}"))
 	resp := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(resp, req)
@@ -560,7 +495,7 @@ func TestProxyHandlerSaveAuthError(t *testing.T) {
 		saveErr: errToken,
 	}
 
-	proxyHandler := newTestHandler(t, "http://example.com", stubToken{token: "cp"}, store, http.DefaultTransport)
+	proxyHandler := newTestHandler(t, "http://example.com", store, http.DefaultTransport)
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", bytes.NewBufferString("{}"))
 	resp := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(resp, req)
@@ -593,7 +528,7 @@ func TestProxyHandlerSaveAuthPreservesAccounts(t *testing.T) {
 		return second, nil
 	}
 
-	proxyHandler := newTestHandler(t, upstreamServer.URL, stubToken{token: "cp"}, store, upstreamServer.Client().Transport)
+	proxyHandler := newTestHandler(t, upstreamServer.URL, store, upstreamServer.Client().Transport)
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", bytes.NewBufferString("{}"))
 	resp := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(resp, req)
@@ -629,7 +564,7 @@ func TestProxyHandlerUnknownPathPassesThrough(t *testing.T) {
 		auth: config.AuthConfig{Default: "u1", Accounts: []config.Account{{User: "u1", GhToken: "gh"}}},
 	}
 
-	proxyHandler := newTestHandler(t, upstreamServer.URL, stubToken{token: "cp"}, store, upstreamServer.Client().Transport)
+	proxyHandler := newTestHandler(t, upstreamServer.URL, store, upstreamServer.Client().Transport)
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/models", bytes.NewBufferString("{}"))
 	resp := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(resp, req)
@@ -732,7 +667,7 @@ func TestProxyHandlerDynamicHeaders(t *testing.T) {
 				auth: config.AuthConfig{Default: "u1", Accounts: []config.Account{{User: "u1", GhToken: "gh"}}},
 			}
 
-			proxyHandler := newTestHandler(t, upstreamServer.URL, stubToken{token: "cp"}, store, upstreamServer.Client().Transport)
+			proxyHandler := newTestHandler(t, upstreamServer.URL, store, upstreamServer.Client().Transport)
 			req := httptest.NewRequest(http.MethodPost, "http://localhost"+tc.path, bytes.NewBufferString(tc.body))
 			resp := httptest.NewRecorder()
 			proxyHandler.ServeHTTP(resp, req)
@@ -774,13 +709,12 @@ func TestProxyHandlerDynamicHeadersMessagesSessionDetectionMode(t *testing.T) {
 	proxyHandler := newTestHandler(
 		t,
 		upstreamServer.URL,
-		stubToken{token: "cp"},
 		store,
 		upstreamServer.Client().Transport,
 		func(cfg *HandlerConfig) {
-			middlewares := buildTestUpstreamMiddlewares(store, stubToken{token: "cp"}, nil, nil, nil)
-			middlewares[4] = upstream.NewParseRequestBodyWithOptionsProvider(func() middleware.ParseOptions {
-				return middleware.ParseOptions{
+			middlewares := buildTestUpstreamMiddlewares(store, nil, nil, nil)
+			middlewares[4] = upstream.NewParseRequestBodyWithOptionsProvider(func() requestctx.ParseOptions {
+				return requestctx.ParseOptions{
 					MessagesAgentDetectionRequestMode: false,
 				}
 			})
@@ -827,7 +761,7 @@ func TestProxyHandlerPathRewrite(t *testing.T) {
 				auth: config.AuthConfig{Default: "u1", Accounts: []config.Account{{User: "u1", GhToken: "gh"}}},
 			}
 
-			proxyHandler := newTestHandler(t, upstreamServer.URL, stubToken{token: "cp"}, store, upstreamServer.Client().Transport)
+			proxyHandler := newTestHandler(t, upstreamServer.URL, store, upstreamServer.Client().Transport)
 			req := httptest.NewRequest(http.MethodPost, "http://localhost"+tc.localPath, bytes.NewBufferString("{}"))
 			resp := httptest.NewRecorder()
 			proxyHandler.ServeHTTP(resp, req)
@@ -866,13 +800,11 @@ func TestProxyHandlerMessagesFallsBackToChatCompletionsWhenModelEndpointsMissing
 	proxyHandler := newTestHandler(
 		t,
 		upstreamServer.URL,
-		stubToken{token: "cp"},
 		store,
 		upstreamServer.Client().Transport,
 		func(cfg *HandlerConfig) {
 			cfg.UpstreamMiddlewares = buildTestUpstreamMiddlewares(
 				store,
-				stubToken{token: "cp"},
 				nil,
 				modelCatalog,
 				nil,
@@ -908,7 +840,7 @@ func TestProxyHandlerBodyPreserved(t *testing.T) {
 		auth: config.AuthConfig{Default: "u1", Accounts: []config.Account{{User: "u1", GhToken: "gh"}}},
 	}
 
-	proxyHandler := newTestHandler(t, upstreamServer.URL, stubToken{token: "cp"}, store, upstreamServer.Client().Transport)
+	proxyHandler := newTestHandler(t, upstreamServer.URL, store, upstreamServer.Client().Transport)
 
 	originalBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"test body preservation"}]}`
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", bytes.NewBufferString(originalBody))
@@ -943,7 +875,7 @@ func newStubMetrics() *stubMetrics {
 	}
 }
 
-func (s *stubMetrics) RecordStart(r *monitor.RequestRecord) {
+func (s *stubMetrics) RecordStart(r *observability.RequestRecord) {
 	s.activeRequests[r.RequestID] = metricsRecord{
 		method:       r.Method,
 		path:         r.Path,
@@ -973,7 +905,7 @@ func (s *stubMetrics) RecordComplete(
 	}
 }
 
-func (s *stubMetrics) Record(r *monitor.RequestRecord) {
+func (s *stubMetrics) Record(r *observability.RequestRecord) {
 	s.records = append(s.records, metricsRecord{
 		method:       r.Method,
 		path:         r.Path,
@@ -986,6 +918,21 @@ func (s *stubMetrics) Record(r *monitor.RequestRecord) {
 		isVision:     r.IsVision,
 		isAgent:      r.IsAgent,
 	})
+}
+
+func (s *stubMetrics) RecordFirstResponse(requestID string, statusCode int, duration time.Duration, upstreamPath string, isStream bool) {
+	if record, ok := s.activeRequests[requestID]; ok {
+		record.statusCode = statusCode
+		record.duration = duration
+		record.upstreamPath = upstreamPath
+		s.activeRequests[requestID] = record
+	}
+}
+
+func (s *stubMetrics) AddEvent(observability.Event) {}
+
+func (s *stubMetrics) Snapshot() observability.Snapshot {
+	return observability.Snapshot{}
 }
 
 func TestProxyHandlerRecordsMetrics(t *testing.T) {
@@ -1002,13 +949,11 @@ func TestProxyHandlerRecordsMetrics(t *testing.T) {
 	proxyHandler := newTestHandler(
 		t,
 		upstreamServer.URL,
-		stubToken{token: "cp"},
 		store,
 		upstreamServer.Client().Transport,
 		func(cfg *HandlerConfig) {
 			cfg.UpstreamMiddlewares = buildTestUpstreamMiddlewares(
 				store,
-				stubToken{token: "cp"},
 				nil,
 				nil,
 				metrics,
@@ -1070,13 +1015,11 @@ func TestProxyHandlerSetsRequestID(t *testing.T) {
 	proxyHandler := newTestHandler(
 		t,
 		upstreamServer.URL,
-		stubToken{token: "cp"},
 		store,
 		upstreamServer.Client().Transport,
 		func(cfg *HandlerConfig) {
 			cfg.UpstreamMiddlewares = buildTestUpstreamMiddlewares(
 				store,
-				stubToken{token: "cp"},
 				nil,
 				nil,
 				metrics,
@@ -1121,13 +1064,11 @@ func TestProxyHandlerRespectsExistingDeadline(t *testing.T) {
 	proxyHandler := newTestHandler(
 		t,
 		upstreamServer.URL,
-		stubToken{token: "cp"},
 		store,
 		upstreamServer.Client().Transport,
 		func(cfg *HandlerConfig) {
 			middlewares := buildTestUpstreamMiddlewares(
 				store,
-				stubToken{token: "cp"},
 				nil,
 				nil,
 				nil,
@@ -1178,7 +1119,6 @@ func TestProxyHandlerPropagatesClientCancelToUpstreamTransport(t *testing.T) {
 	proxyHandler := newTestHandler(
 		t,
 		"http://example.com",
-		stubToken{token: "cp"},
 		store,
 		transport,
 	)
@@ -1237,13 +1177,11 @@ func TestProxyHandlerMetricsWithVisionAndAgent(t *testing.T) {
 	proxyHandler := newTestHandler(
 		t,
 		upstreamServer.URL,
-		stubToken{token: "cp"},
 		store,
 		upstreamServer.Client().Transport,
 		func(cfg *HandlerConfig) {
 			cfg.UpstreamMiddlewares = buildTestUpstreamMiddlewares(
 				store,
-				stubToken{token: "cp"},
 				nil,
 				nil,
 				metrics,
@@ -1269,65 +1207,5 @@ func TestProxyHandlerMetricsWithVisionAndAgent(t *testing.T) {
 	}
 	if !rec.isAgent {
 		t.Error("expected isAgent to be true")
-	}
-}
-
-func TestBuildLogEntrySkipsEventStreamBody(t *testing.T) {
-	body := "data: hello\n\n"
-
-	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", http.NoBody)
-	rc := &middleware.RequestContext{Start: time.Now(), Headers: map[string]string{}}
-	ctx := middleware.WithRequestContext(req.Context(), rc)
-	req = req.WithContext(ctx)
-
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Header:     make(http.Header),
-		Request:    req,
-	}
-	resp.Header.Set("Content-Type", "text/event-stream")
-
-	entry := upstream.BuildLogEntryFromContext(resp, ctx)
-	if entry.ResponseBody != "" {
-		t.Fatalf("expected empty response body for event-stream, got %q", entry.ResponseBody)
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-	if string(data) != body {
-		t.Fatalf("response body not preserved: got %q, want %q", string(data), body)
-	}
-}
-
-func TestBuildLogEntryPreservesNonEventStreamBody(t *testing.T) {
-	body := strings.Repeat("a", 5000)
-
-	req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", http.NoBody)
-	rc := &middleware.RequestContext{Start: time.Now(), Headers: map[string]string{}}
-	ctx := middleware.WithRequestContext(req.Context(), rc)
-	req = req.WithContext(ctx)
-
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Header:     make(http.Header),
-		Request:    req,
-	}
-	resp.Header.Set("Content-Type", "application/json")
-
-	entry := upstream.BuildLogEntryFromContext(resp, ctx)
-	if entry.ResponseBody == "" {
-		t.Fatalf("expected response body capture")
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-	if string(data) != body {
-		t.Fatalf("response body not preserved: got %d bytes, want %d", len(data), len(body))
 	}
 }

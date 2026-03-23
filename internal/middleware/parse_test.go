@@ -1,6 +1,22 @@
 package middleware
 
-import "testing"
+import (
+	requestctx "copilot-proxy/internal/runtime/request"
+	"testing"
+)
+
+type ChatCompletionsParser = requestctx.ChatCompletionsParser
+type ResponsesParser = requestctx.ResponsesParser
+type AnthropicMessagesParser = requestctx.AnthropicMessagesParser
+type ParseOptions = requestctx.ParseOptions
+
+func ParseRequestByPath(path string, body []byte) requestctx.RequestInfo {
+	return requestctx.ParseRequestByPath(path, body)
+}
+
+func ParseRequestByPathWithOptions(path string, body []byte, options ParseOptions) requestctx.RequestInfo {
+	return requestctx.ParseRequestByPathWithOptions(path, body, options)
+}
 
 func TestChatCompletionsParser(t *testing.T) {
 	parser := &ChatCompletionsParser{}

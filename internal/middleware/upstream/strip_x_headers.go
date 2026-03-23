@@ -2,9 +2,9 @@ package upstream
 
 import (
 	"net/http"
-	"strings"
 
 	"copilot-proxy/internal/middleware"
+	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
 )
 
 // StripXHeadersMiddleware removes client-provided x-* headers before all upstream processing.
@@ -19,10 +19,6 @@ func (m StripXHeadersMiddleware) Handle(ctx *middleware.Context, next middleware
 	if ctx == nil || ctx.Request == nil {
 		return next()
 	}
-	for key := range ctx.Request.Header {
-		if strings.HasPrefix(strings.ToLower(key), "x-") {
-			ctx.Request.Header.Del(key)
-		}
-	}
+	endpointflow.StripClientXHeaders(ctx.Request.Header)
 	return next()
 }

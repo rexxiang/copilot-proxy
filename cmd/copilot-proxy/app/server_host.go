@@ -1,0 +1,135 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"syscall"
+	"time"
+
+	"copilot-proxy/internal/runtime/config"
+	protocolpaths "copilot-proxy/internal/runtime/protocol/paths"
+)
+
+const (
+	readHeaderTimeout  = 5 * time.Second
+	retryBackoffStart  = 200 * time.Millisecond
+	retryBackoffMax    = 2 * time.Second
+	retryBackoffFactor = 2
+)
+
+type serverHost struct {
+	*http.Server
+	listenFn func(network, address string) (net.Listener, error)
+}
+
+func newServerHost(addr string, handler http.Handler) *serverHost {
+	mux := http.NewServeMux()
+	for _, path := range protocolpaths.AllowedLocalPaths() {
+		mux.Handle(path, handler)
+	}
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"not found"}`))
+	})
+
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: readHeaderTimeout,
+	}
+
+	return &serverHost{Server: srv, listenFn: net.Listen}
+}
+
+func (s *serverHost) Start(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cancelCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.serveWithRetry(cancelCtx)
+	}()
+
+	for {
+		select {
+		case <-cancelCtx.Done():
+			return s.shutdownWithTimeout(cancelCtx)
+		case err := <-errCh:
+			return err
+		}
+	}
+}
+
+func (s *serverHost) shutdownWithTimeout(ctx context.Context) error {
+	ctxShutdown, cancel := context.WithTimeout(ctx, config.ShutdownTimeout)
+	defer cancel()
+	if err := s.Shutdown(ctxShutdown); err != nil {
+		return fmt.Errorf("shutdown server: %w", err)
+	}
+	return nil
+}
+
+func (s *serverHost) serveWithRetry(ctx context.Context) error {
+	backoff := retryBackoffStart
+	for {
+		select {
+		case <-ctx.Done():
+			return http.ErrServerClosed
+		default:
+		}
+
+		listenFn := s.listenFn
+		if listenFn == nil {
+			listenFn = net.Listen
+		}
+		ln, err := listenFn("tcp", s.Addr)
+		if err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("server context done: %w", ctx.Err())
+			}
+			if isFatalListenError(err) {
+				return fmt.Errorf("listen on %s: %w", s.Addr, err)
+			}
+			slog.Warn("listen failed, retrying", "err", err, "addr", s.Addr)
+			time.Sleep(backoff)
+			backoff = minDuration(backoff*retryBackoffFactor, retryBackoffMax)
+			continue
+		}
+
+		err = s.Serve(ln)
+		_ = ln.Close()
+		if err == nil || errors.Is(err, http.ErrServerClosed) {
+			return http.ErrServerClosed
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("server context done: %w", ctx.Err())
+		}
+		slog.Warn("server stopped unexpectedly, retrying", "err", err)
+		time.Sleep(backoff)
+		backoff = minDuration(backoff*retryBackoffFactor, retryBackoffMax)
+	}
+}
+
+func isFatalListenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, syscall.EADDRINUSE)
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}

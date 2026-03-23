@@ -3,13 +3,17 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
+	"time"
 
 	"copilot-proxy/internal/middleware"
+	requestctx "copilot-proxy/internal/runtime/request"
 )
 
 var (
@@ -21,7 +25,8 @@ var (
 // HandlerConfig contains all configuration for creating a Handler.
 type HandlerConfig struct {
 	// Required fields
-	UpstreamURL string // Upstream Copilot API URL (required)
+	UpstreamURL         string        // Upstream Copilot API URL (required unless provider is set)
+	UpstreamURLProvider func() string // Dynamic upstream provider
 
 	// Optional fields (zero values use defaults)
 	Transport           http.RoundTripper       // HTTP transport (default: http.DefaultTransport)
@@ -52,7 +57,7 @@ func NewHandler(cfg *HandlerConfig) (*Handler, error) {
 		transport = http.DefaultTransport
 	}
 
-	proxy, proxyErr := buildReverseProxy(cfg.UpstreamURL, transport, cfg.UpstreamMiddlewares)
+	proxy, proxyErr := buildReverseProxy(cfg.UpstreamURL, cfg.UpstreamURLProvider, transport, cfg.UpstreamMiddlewares)
 
 	h := &Handler{
 		proxy:    proxy,
@@ -68,8 +73,13 @@ func NewHandler(cfg *HandlerConfig) (*Handler, error) {
 
 // validate checks that required fields are present.
 func (cfg *HandlerConfig) validate() error {
-	if cfg.UpstreamURL == "" {
+	if cfg.UpstreamURL == "" && cfg.UpstreamURLProvider == nil {
 		return errUpstreamURLRequired
+	}
+	if cfg.UpstreamURLProvider == nil {
+		if _, err := parseTargetURL(cfg.UpstreamURL); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -77,29 +87,104 @@ func (cfg *HandlerConfig) validate() error {
 // buildReverseProxy creates the reverse proxy with custom director.
 func buildReverseProxy(
 	upstreamURL string,
+	upstreamURLProvider func() string,
 	transport http.RoundTripper,
 	middlewares []middleware.Middleware,
 ) (*httputil.ReverseProxy, error) {
-	target, err := url.Parse(upstreamURL)
-	if err != nil || target.Scheme == "" || target.Host == "" {
+	targetProvider := func() (*url.URL, error) {
+		return parseTargetURL(upstreamURL)
+	}
+	if upstreamURLProvider != nil {
+		targetProvider = func() (*url.URL, error) {
+			return parseTargetURL(upstreamURLProvider())
+		}
+	}
+
+	pipeline := middleware.NewPipeline(transport, middlewares...)
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.RequestURI = ""
+		},
+		Transport: &dynamicTargetTransport{
+			base:           pipeline,
+			targetProvider: targetProvider,
+		},
+	}
+	return proxy, nil
+}
+
+type dynamicTargetTransport struct {
+	base           http.RoundTripper
+	targetProvider func() (*url.URL, error)
+}
+
+func (t *dynamicTargetTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t == nil || t.base == nil {
+		return nil, errInvalidUpstreamURL
+	}
+	target, err := t.targetProvider()
+	if err != nil {
+		return nil, err
+	}
+	out := req.Clone(req.Context())
+	rewriteRequestURL(out, target)
+	return t.base.RoundTrip(out)
+}
+
+func parseTargetURL(raw string) (*url.URL, error) {
+	target, err := url.Parse(raw)
+	if err != nil || target == nil || target.Scheme == "" || target.Host == "" {
 		if err == nil {
 			err = errInvalidUpstreamURL
 		}
 		return nil, err
 	}
+	return target, nil
+}
 
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.Transport = transport
-
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.Host = target.Host
+func rewriteRequestURL(req *http.Request, target *url.URL) {
+	req.URL.Scheme = target.Scheme
+	req.URL.Host = target.Host
+	req.URL.Path, req.URL.RawPath = joinURLPath(target, req.URL)
+	req.Host = target.Host
+	if target.RawQuery == "" || req.URL.RawQuery == "" {
+		req.URL.RawQuery = target.RawQuery + req.URL.RawQuery
+	} else {
+		req.URL.RawQuery = target.RawQuery + "&" + req.URL.RawQuery
 	}
+	req.RequestURI = ""
+}
 
-	proxy.Transport = middleware.NewPipeline(transport, middlewares...)
+func joinURLPath(a, b *url.URL) (path, rawPath string) {
+	if a.RawPath == "" && b.RawPath == "" {
+		return singleJoiningSlash(a.Path, b.Path), ""
+	}
+	apath := a.EscapedPath()
+	bpath := b.EscapedPath()
 
-	return proxy, nil
+	aslash := strings.HasSuffix(apath, "/")
+	bslash := strings.HasPrefix(bpath, "/")
+	switch {
+	case aslash && bslash:
+		return a.Path + b.Path[1:], apath + bpath[1:]
+	case !aslash && !bslash:
+		return a.Path + "/" + b.Path, apath + "/" + bpath
+	default:
+		return a.Path + b.Path, apath + bpath
+	}
+}
+
+func singleJoiningSlash(a, b string) string {
+	aslash := strings.HasSuffix(a, "/")
+	bslash := strings.HasPrefix(b, "/")
+	switch {
+	case aslash && bslash:
+		return a + b[1:]
+	case !aslash && !bslash:
+		return a + "/" + b
+	default:
+		return a + b
+	}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -113,11 +198,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) errorHandler(rw http.ResponseWriter, req *http.Request, err error) {
 	ctx := req.Context()
 	var requestID string
-	if rc, ok := middleware.RequestContextFrom(ctx); ok && rc != nil {
+	if rc, ok := requestctx.RequestContextFrom(ctx); ok && rc != nil {
 		requestID = rc.ID
 	}
 	if requestID == "" {
 		requestID = req.Header.Get("X-Request-Id")
+	}
+	if requestID == "" {
+		now := time.Now().UTC()
+		requestID = fmt.Sprintf("%x-%x", now.UnixNano(), time.Now().UnixNano())
 	}
 	if requestID != "" {
 		rw.Header().Set("X-Request-Id", requestID)

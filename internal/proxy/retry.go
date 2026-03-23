@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"copilot-proxy/internal/config"
+	"copilot-proxy/internal/runtime/config"
 )
 
 // RetryConfig configures retry behavior for upstream requests.

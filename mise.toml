@@ -1,13 +1,20 @@
 [tools]
-go = "1.25"
+go = "1.24"
 golangci-lint = "2.8.0"
 staticcheck = "latest"
 
 [env]
 CGO_ENABLED = "0"
 
+[vars]
+app = "copilot-proxy"
+
 [tasks]
-build = "go build -o ./bin/copilot-proxy ./cmd/copilot-proxy"
-test = "go test ./..."
-go = "go"
-"go:run" = "go run ./..."
+"build:c-shared" = { run = "go build -buildmode=c-shared -o bin/{{vars.app}}-c.so ./cmd/{{vars.app}}-c", env = { CGO_ENABLED = "1" }}
+build = { run = "go build -o bin/{{vars.app}} ./cmd/{{vars.app}}", depends = ["build:c-shared"] }
+
+test = { run = "go test ./..." }
+"test:architecture" = { run = "go test ./internal/architecture" }
+"test:cgo" = { run = "go test ./cmd/{{vars.app}}-c", env = { CGO_ENABLED = "1" } }
+
+"go:run" = { run = "go run ./cmd/{{vars.app}}" }
