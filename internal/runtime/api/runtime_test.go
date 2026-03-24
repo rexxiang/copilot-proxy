@@ -381,14 +381,22 @@ func TestRuntimeExecuteModelsPathPreservesAllowlistedXHeadersAcrossCalls(t *test
 
 func TestRuntimeFetchModelsUsesConfiguredBase(t *testing.T) {
 	var (
-		upstreamPath string
-		authHeader   string
-		customHeader string
+		upstreamPath       string
+		authHeader         string
+		customHeader       string
+		apiVersionHeader   string
+		interactionType    string
+		interactionID      string
+		openAIIntentHeader string
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamPath = r.URL.Path
 		authHeader = r.Header.Get("Authorization")
 		customHeader = r.Header.Get("X-Test-Header")
+		apiVersionHeader = r.Header.Get("X-GitHub-Api-Version")
+		interactionType = r.Header.Get("X-Interaction-Type")
+		interactionID = r.Header.Get("X-Interaction-Id")
+		openAIIntentHeader = r.Header.Get("Openai-Intent")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{
@@ -439,6 +447,18 @@ func TestRuntimeFetchModelsUsesConfiguredBase(t *testing.T) {
 	}
 	if customHeader != "test-value" {
 		t.Fatalf("unexpected custom header: %s", customHeader)
+	}
+	if apiVersionHeader != "2025-05-01" {
+		t.Fatalf("unexpected X-GitHub-Api-Version header: %q", apiVersionHeader)
+	}
+	if interactionType != "conversation-agent" {
+		t.Fatalf("unexpected X-Interaction-Type header: %q", interactionType)
+	}
+	if interactionID == "" {
+		t.Fatalf("expected X-Interaction-Id to be set")
+	}
+	if openAIIntentHeader != "conversation-agent" {
+		t.Fatalf("unexpected Openai-Intent header: %q", openAIIntentHeader)
 	}
 	if len(items) != 1 || items[0].ID != "gpt-4o" {
 		t.Fatalf("unexpected model items: %+v", items)
