@@ -44,6 +44,7 @@ func NewEngine(opts Options) *Engine {
 		httpClientFactory:  httpClientFactory,
 		resolveToken:       opts.ResolveToken,
 		resolveModel:       opts.ResolveModel,
+		stateSetNew:        opts.StateSetNew,
 		onTelemetry:        opts.OnTelemetry,
 		upstreamDo:         opts.UpstreamDo,
 		githubOAuthBaseURL: githubOAuthBaseURL,

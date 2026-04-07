@@ -201,6 +201,119 @@ func TestRuntimeExecuteMessagesFallbackToResponsesTransformsRequestAndResponse(t
 	}
 }
 
+func TestRuntimeExecuteSessionHeaderOverridesAgentDetection(t *testing.T) {
+	initiators := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		initiators = append(initiators, r.Header.Get("X-Initiator"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	}))
+	defer server.Close()
+
+	seenSessions := map[string]struct{}{}
+	runtime := NewEngine(Options{
+		SettingsProvider:  settingsProviderForTests(server.URL),
+		HTTPClientFactory: func() *http.Client { return server.Client() },
+		StateSetNew: func(ctx context.Context, namespace, key, value string) (bool, error) {
+			if namespace != "claude_session_seen" {
+				t.Fatalf("unexpected namespace: %q", namespace)
+			}
+			if value != "1" {
+				t.Fatalf("unexpected value: %q", value)
+			}
+			if _, exists := seenSessions[key]; exists {
+				return false, nil
+			}
+			seenSessions[key] = struct{}{}
+			return true, nil
+		},
+	})
+
+	request := RequestInvocation{
+		Method: http.MethodPost,
+		Path:   runtimeconfig.ChatCompletionsPath,
+		Header: map[string]string{
+			"Content-Type":               "application/json",
+			"X-Claude-Code-Session-Id":   "session-123",
+			"X-GitHub-Api-Version":       "2025-05-01",
+			"X-Interaction-Type":         "conversation-agent",
+			"X-Interaction-Id":           "interaction-123",
+			"Openai-Intent":              "conversation-agent",
+			"X-Unsupported-Should-Strip": "true",
+		},
+		Body: []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`),
+	}
+
+	for i := 0; i < 2; i++ {
+		err := runtime.Execute(context.Background(), request, ExecuteOptions{
+			Mode: StreamModeCallback,
+			ResultCallback: func(result ExecuteResult) {
+				if result.Error != "" {
+					t.Fatalf("unexpected callback error: %s", result.Error)
+				}
+			},
+		})
+		if err != nil {
+			t.Fatalf("execute call %d: %v", i+1, err)
+		}
+	}
+
+	if len(initiators) != 2 {
+		t.Fatalf("expected 2 upstream requests, got %d", len(initiators))
+	}
+	if initiators[0] != "user" {
+		t.Fatalf("expected first request to be user-initiated, got %q", initiators[0])
+	}
+	if initiators[1] != "agent" {
+		t.Fatalf("expected second request to be agent-initiated, got %q", initiators[1])
+	}
+}
+
+func TestRuntimeExecuteSessionHeaderFallsBackWhenStateSetNewFails(t *testing.T) {
+	var initiator string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		initiator = r.Header.Get("X-Initiator")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	}))
+	defer server.Close()
+
+	runtime := NewEngine(Options{
+		SettingsProvider:  settingsProviderForTests(server.URL),
+		HTTPClientFactory: func() *http.Client { return server.Client() },
+		StateSetNew: func(ctx context.Context, namespace, key, value string) (bool, error) {
+			return false, context.DeadlineExceeded
+		},
+	})
+
+	request := RequestInvocation{
+		Method: http.MethodPost,
+		Path:   runtimeconfig.ChatCompletionsPath,
+		Header: map[string]string{
+			"Content-Type":             "application/json",
+			"X-Claude-Code-Session-Id": "session-err",
+		},
+		Body: []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`),
+	}
+
+	err := runtime.Execute(context.Background(), request, ExecuteOptions{
+		Mode: StreamModeCallback,
+		ResultCallback: func(result ExecuteResult) {
+			if result.Error != "" {
+				t.Fatalf("unexpected callback error: %s", result.Error)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if initiator != "user" {
+		t.Fatalf("expected fallback initiator=user, got %q", initiator)
+	}
+}
+
 func TestRuntimeExecuteRewritesMappedModelInBody(t *testing.T) {
 	var upstreamBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
