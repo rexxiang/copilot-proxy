@@ -16,12 +16,41 @@ func (r *Engine) FetchModels(ctx context.Context, tokenValue string) ([]models.M
 	if err != nil {
 		return nil, fmt.Errorf("load settings: %w", err)
 	}
-	modelsAPIBase := strings.TrimSpace(settings.UpstreamBase)
-	if modelsAPIBase == "" {
-		modelsAPIBase = runtimeconfig.Default().UpstreamBase
+	return r.fetchModelsViaLocalModelsPath(ctx, settings, tokenValue)
+}
+
+func (r *Engine) fetchModelsViaLocalModelsPath(
+	ctx context.Context,
+	settings runtimeconfig.RuntimeSettings,
+	tokenValue string,
+) ([]models.ModelInfo, error) {
+	requestURL := "http://runtime.local" + runtimeconfig.ModelsPath
+	return models.FetchViaDoer(ctx, modelsLocalPathDoer{
+		engine:     r,
+		settings:   settings,
+		tokenValue: tokenValue,
+	}, requestURL)
+}
+
+type modelsLocalPathDoer struct {
+	engine     *Engine
+	settings   runtimeconfig.RuntimeSettings
+	tokenValue string
+}
+
+func (d modelsLocalPathDoer) Do(req *http.Request) (*http.Response, error) {
+	if d.engine == nil {
+		return nil, errors.New("runtime engine is required")
 	}
-	client := r.httpClientFactory()
-	return models.FetchModels(ctx, client, modelsAPIBase, tokenValue, settings.RequiredHeadersWithDefaults())
+	if req == nil {
+		return nil, errors.New("models request is required")
+	}
+
+	forward := req.Clone(req.Context())
+	forward.Header = req.Header.Clone()
+	forward.Header.Set("Authorization", "Bearer "+d.tokenValue)
+
+	return d.engine.doExecuteUpstream(forward.Context(), forward, d.settings, "", "", ModelInfo{})
 }
 
 func (r *Engine) doUpstreamRequest(ctx context.Context, upstreamReq *http.Request, settings runtimeconfig.RuntimeSettings) (*http.Response, error) {

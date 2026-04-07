@@ -15,6 +15,8 @@ type ResolveTokenFunc func(ctx context.Context, accountRef string) (string, erro
 
 type ResolveModelFunc func(ctx context.Context, modelID string) (ModelInfo, error)
 
+type StateSetNewFunc func(ctx context.Context, namespace, key, value string) (created bool, err error)
+
 type RequestInvocation = core.RequestInvocation
 type ExecuteOptions = execute.ExecuteOptions
 type ExecuteResult = execute.ExecuteResult
@@ -44,17 +46,24 @@ type Options struct {
 	HTTPClientFactory func() *http.Client
 	ResolveToken      ResolveTokenFunc
 	ResolveModel      ResolveModelFunc
+	StateSetNew       StateSetNewFunc
 	OnTelemetry       TelemetryFunc
 	UpstreamDo        UpstreamDoFunc
-	GitHubBaseURL     string
+	// GitHubBaseURL is a legacy fallback applied to both OAuth and API calls when
+	// GitHubOAuthBaseURL / GitHubAPIBaseURL are unset.
+	GitHubBaseURL      string
+	GitHubOAuthBaseURL string
+	GitHubAPIBaseURL   string
 }
 
 type Engine struct {
-	settingsProvider  func(ctx context.Context) (runtimeconfig.RuntimeSettings, error)
-	httpClientFactory func() *http.Client
-	resolveToken      ResolveTokenFunc
-	resolveModel      ResolveModelFunc
-	onTelemetry       TelemetryFunc
-	upstreamDo        UpstreamDoFunc
-	githubBaseURL     string
+	settingsProvider   func(ctx context.Context) (runtimeconfig.RuntimeSettings, error)
+	httpClientFactory  func() *http.Client
+	resolveToken       ResolveTokenFunc
+	resolveModel       ResolveModelFunc
+	stateSetNew        StateSetNewFunc
+	onTelemetry        TelemetryFunc
+	upstreamDo         UpstreamDoFunc
+	githubOAuthBaseURL string
+	githubAPIBaseURL   string
 }

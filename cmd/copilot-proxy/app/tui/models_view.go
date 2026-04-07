@@ -74,6 +74,10 @@ func (v *ModelsView) View() string {
 		var multiText string
 		var multiStyled string
 		switch {
+		case !model.MultiplierKnown:
+			// Unknown/not provided, show N/A
+			multiText = "N/A"
+			multiStyled = DimStyle.Render(fmt.Sprintf("%-6s", multiText))
 		case model.Multiplier > 0:
 			// Use integer format if whole number, otherwise show decimal
 			if model.Multiplier == float64(int(model.Multiplier)) {
@@ -91,7 +95,7 @@ func (v *ModelsView) View() string {
 			multiText = "0x"
 			multiStyled = fmt.Sprintf("%-6s", multiText)
 		default:
-			// Unknown/not set, show N/A
+			// Unexpected negative value, show N/A defensively.
 			multiText = "N/A"
 			multiStyled = DimStyle.Render(fmt.Sprintf("%-6s", multiText))
 		}

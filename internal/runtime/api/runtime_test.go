@@ -6,10 +6,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	runtimeconfig "copilot-proxy/internal/runtime/config"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
 
 func TestRuntimeExecuteMapsChatCompletionsPath(t *testing.T) {
 	var upstreamPath string
@@ -194,6 +201,119 @@ func TestRuntimeExecuteMessagesFallbackToResponsesTransformsRequestAndResponse(t
 	}
 }
 
+func TestRuntimeExecuteSessionHeaderOverridesAgentDetection(t *testing.T) {
+	initiators := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		initiators = append(initiators, r.Header.Get("X-Initiator"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	}))
+	defer server.Close()
+
+	seenSessions := map[string]struct{}{}
+	runtime := NewEngine(Options{
+		SettingsProvider:  settingsProviderForTests(server.URL),
+		HTTPClientFactory: func() *http.Client { return server.Client() },
+		StateSetNew: func(ctx context.Context, namespace, key, value string) (bool, error) {
+			if namespace != "claude_session_seen" {
+				t.Fatalf("unexpected namespace: %q", namespace)
+			}
+			if value != "1" {
+				t.Fatalf("unexpected value: %q", value)
+			}
+			if _, exists := seenSessions[key]; exists {
+				return false, nil
+			}
+			seenSessions[key] = struct{}{}
+			return true, nil
+		},
+	})
+
+	request := RequestInvocation{
+		Method: http.MethodPost,
+		Path:   runtimeconfig.ChatCompletionsPath,
+		Header: map[string]string{
+			"Content-Type":               "application/json",
+			"X-Claude-Code-Session-Id":   "session-123",
+			"X-GitHub-Api-Version":       "2025-05-01",
+			"X-Interaction-Type":         "conversation-agent",
+			"X-Interaction-Id":           "interaction-123",
+			"Openai-Intent":              "conversation-agent",
+			"X-Unsupported-Should-Strip": "true",
+		},
+		Body: []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`),
+	}
+
+	for i := 0; i < 2; i++ {
+		err := runtime.Execute(context.Background(), request, ExecuteOptions{
+			Mode: StreamModeCallback,
+			ResultCallback: func(result ExecuteResult) {
+				if result.Error != "" {
+					t.Fatalf("unexpected callback error: %s", result.Error)
+				}
+			},
+		})
+		if err != nil {
+			t.Fatalf("execute call %d: %v", i+1, err)
+		}
+	}
+
+	if len(initiators) != 2 {
+		t.Fatalf("expected 2 upstream requests, got %d", len(initiators))
+	}
+	if initiators[0] != "user" {
+		t.Fatalf("expected first request to be user-initiated, got %q", initiators[0])
+	}
+	if initiators[1] != "agent" {
+		t.Fatalf("expected second request to be agent-initiated, got %q", initiators[1])
+	}
+}
+
+func TestRuntimeExecuteSessionHeaderFallsBackWhenStateSetNewFails(t *testing.T) {
+	var initiator string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		initiator = r.Header.Get("X-Initiator")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	}))
+	defer server.Close()
+
+	runtime := NewEngine(Options{
+		SettingsProvider:  settingsProviderForTests(server.URL),
+		HTTPClientFactory: func() *http.Client { return server.Client() },
+		StateSetNew: func(ctx context.Context, namespace, key, value string) (bool, error) {
+			return false, context.DeadlineExceeded
+		},
+	})
+
+	request := RequestInvocation{
+		Method: http.MethodPost,
+		Path:   runtimeconfig.ChatCompletionsPath,
+		Header: map[string]string{
+			"Content-Type":             "application/json",
+			"X-Claude-Code-Session-Id": "session-err",
+		},
+		Body: []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`),
+	}
+
+	err := runtime.Execute(context.Background(), request, ExecuteOptions{
+		Mode: StreamModeCallback,
+		ResultCallback: func(result ExecuteResult) {
+			if result.Error != "" {
+				t.Fatalf("unexpected callback error: %s", result.Error)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if initiator != "user" {
+		t.Fatalf("expected fallback initiator=user, got %q", initiator)
+	}
+}
+
 func TestRuntimeExecuteRewritesMappedModelInBody(t *testing.T) {
 	var upstreamBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -243,16 +363,160 @@ func TestRuntimeExecuteRewritesMappedModelInBody(t *testing.T) {
 	}
 }
 
+func TestRuntimeExecuteModelsPathPassesThroughRawResponse(t *testing.T) {
+	var upstreamPath string
+	rawBody := []byte("{\"data\":[{\"id\":\"gpt-4o\",\"billing\":{\"multiplier\":1.0}}],\"meta\":{\"raw\":true}}")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(rawBody)
+	}))
+	defer server.Close()
+
+	runtime := NewEngine(Options{
+		SettingsProvider:  settingsProviderForTests(server.URL),
+		HTTPClientFactory: func() *http.Client { return server.Client() },
+	})
+
+	request := RequestInvocation{
+		Method: http.MethodGet,
+		Path:   runtimeconfig.ModelsPath,
+		Header: map[string]string{"Accept": "application/json"},
+		Body:   nil,
+	}
+
+	var (
+		callbacks int
+		status    int
+		body      []byte
+	)
+	err := runtime.Execute(context.Background(), request, ExecuteOptions{
+		Mode: StreamModeCallback,
+		ResultCallback: func(result ExecuteResult) {
+			callbacks++
+			status = result.StatusCode
+			body = append([]byte(nil), result.Body...)
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if callbacks != 1 {
+		t.Fatalf("expected 1 callback, got %d", callbacks)
+	}
+	if upstreamPath != runtimeconfig.UpstreamModelsPath {
+		t.Fatalf("expected upstream path %q, got %q", runtimeconfig.UpstreamModelsPath, upstreamPath)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", status)
+	}
+	if string(body) != string(rawBody) {
+		t.Fatalf("expected raw body passthrough, got %s", string(body))
+	}
+}
+
+func TestRuntimeExecuteModelsPathPreservesAllowlistedXHeadersAcrossCalls(t *testing.T) {
+	type observedRequest struct {
+		path            string
+		apiVersion      string
+		interactionType string
+		interactionID   string
+	}
+
+	observed := make([]observedRequest, 0, 2)
+	rawBody := []byte("{\"data\":[{\"id\":\"gpt-4o\",\"billing\":{\"multiplier\":1.0}}]}")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observed = append(observed, observedRequest{
+			path:            r.URL.Path,
+			apiVersion:      r.Header.Get("X-GitHub-Api-Version"),
+			interactionType: r.Header.Get("X-Interaction-Type"),
+			interactionID:   r.Header.Get("X-Interaction-Id"),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(rawBody)
+	}))
+	defer server.Close()
+
+	runtime := NewEngine(Options{
+		SettingsProvider:  settingsProviderForTests(server.URL),
+		HTTPClientFactory: func() *http.Client { return server.Client() },
+	})
+
+	request := RequestInvocation{
+		Method: http.MethodGet,
+		Path:   runtimeconfig.ModelsPath,
+		Header: map[string]string{
+			"Accept":               "application/json",
+			"X-GitHub-Api-Version": "2025-05-01",
+			"X-Interaction-Type":   "conversation-agent",
+			"X-Interaction-Id":     "interaction-1",
+		},
+	}
+	for i := 0; i < 2; i++ {
+		expectedInteractionID := "interaction-1"
+		if i == 1 {
+			expectedInteractionID = "interaction-2"
+		}
+		request.Header["X-Interaction-Id"] = expectedInteractionID
+
+		var body []byte
+		err := runtime.Execute(context.Background(), request, ExecuteOptions{
+			Mode: StreamModeCallback,
+			ResultCallback: func(result ExecuteResult) {
+				body = append([]byte(nil), result.Body...)
+			},
+		})
+		if err != nil {
+			t.Fatalf("execute call %d: %v", i+1, err)
+		}
+		if string(body) != string(rawBody) {
+			t.Fatalf("expected raw body passthrough on call %d, got %s", i+1, string(body))
+		}
+	}
+
+	if len(observed) != 2 {
+		t.Fatalf("expected 2 upstream requests, got %d", len(observed))
+	}
+	for i, got := range observed {
+		expectedInteractionID := "interaction-1"
+		if i == 1 {
+			expectedInteractionID = "interaction-2"
+		}
+		if got.path != runtimeconfig.UpstreamModelsPath {
+			t.Fatalf("call %d expected upstream path %q, got %q", i+1, runtimeconfig.UpstreamModelsPath, got.path)
+		}
+		if got.apiVersion != "2025-05-01" {
+			t.Fatalf("call %d expected X-GitHub-Api-Version preserved, got %q", i+1, got.apiVersion)
+		}
+		if got.interactionType != "conversation-agent" {
+			t.Fatalf("call %d expected X-Interaction-Type preserved, got %q", i+1, got.interactionType)
+		}
+		if got.interactionID != expectedInteractionID {
+			t.Fatalf("call %d expected X-Interaction-Id %q, got %q", i+1, expectedInteractionID, got.interactionID)
+		}
+	}
+}
+
 func TestRuntimeFetchModelsUsesConfiguredBase(t *testing.T) {
 	var (
-		upstreamPath string
-		authHeader   string
-		customHeader string
+		upstreamPath       string
+		authHeader         string
+		customHeader       string
+		apiVersionHeader   string
+		interactionType    string
+		interactionID      string
+		openAIIntentHeader string
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamPath = r.URL.Path
 		authHeader = r.Header.Get("Authorization")
 		customHeader = r.Header.Get("X-Test-Header")
+		apiVersionHeader = r.Header.Get("X-GitHub-Api-Version")
+		interactionType = r.Header.Get("X-Interaction-Type")
+		interactionID = r.Header.Get("X-Interaction-Id")
+		openAIIntentHeader = r.Header.Get("Openai-Intent")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{
@@ -304,12 +568,24 @@ func TestRuntimeFetchModelsUsesConfiguredBase(t *testing.T) {
 	if customHeader != "test-value" {
 		t.Fatalf("unexpected custom header: %s", customHeader)
 	}
+	if apiVersionHeader != "2025-05-01" {
+		t.Fatalf("unexpected X-GitHub-Api-Version header: %q", apiVersionHeader)
+	}
+	if interactionType != "conversation-agent" {
+		t.Fatalf("unexpected X-Interaction-Type header: %q", interactionType)
+	}
+	if interactionID == "" {
+		t.Fatalf("expected X-Interaction-Id to be set")
+	}
+	if openAIIntentHeader != "conversation-agent" {
+		t.Fatalf("unexpected Openai-Intent header: %q", openAIIntentHeader)
+	}
 	if len(items) != 1 || items[0].ID != "gpt-4o" {
 		t.Fatalf("unexpected model items: %+v", items)
 	}
 }
 
-func TestRuntimeFetchLoginUsesGitHubAPIBase(t *testing.T) {
+func TestRuntimeFetchLoginUsesConfiguredGitHubAPIBase(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/user" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -324,7 +600,7 @@ func TestRuntimeFetchLoginUsesGitHubAPIBase(t *testing.T) {
 
 	runtime := NewEngine(Options{
 		HTTPClientFactory: func() *http.Client { return server.Client() },
-		GitHubBaseURL:     server.URL,
+		GitHubAPIBaseURL:  server.URL,
 	})
 
 	login, err := runtime.FetchLogin(context.Background(), "token-value")
@@ -333,6 +609,119 @@ func TestRuntimeFetchLoginUsesGitHubAPIBase(t *testing.T) {
 	}
 	if login != "alice" {
 		t.Fatalf("unexpected login: %s", login)
+	}
+}
+
+func TestRuntimeRequestCodeUsesDefaultGitHubOAuthBase(t *testing.T) {
+	var (
+		gotHost string
+		gotPath string
+	)
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			gotHost = req.URL.Host
+			gotPath = req.URL.Path
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(
+					`{"device_code":"d","user_code":"u","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}`,
+				)),
+			}, nil
+		}),
+	}
+
+	runtime := NewEngine(Options{
+		HTTPClientFactory: func() *http.Client { return client },
+	})
+
+	device, err := runtime.RequestCode(context.Background())
+	if err != nil {
+		t.Fatalf("request code: %v", err)
+	}
+	if device.DeviceCode != "d" {
+		t.Fatalf("unexpected device code: %q", device.DeviceCode)
+	}
+	if gotHost != "github.com" || gotPath != "/login/device/code" {
+		t.Fatalf("expected default oauth target github.com/login/device/code, got %s%s", gotHost, gotPath)
+	}
+}
+
+func TestRuntimeFetchLoginUsesDefaultGitHubAPIBase(t *testing.T) {
+	var (
+		gotHost string
+		gotPath string
+		gotAuth string
+	)
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			gotHost = req.URL.Host
+			gotPath = req.URL.Path
+			gotAuth = req.Header.Get("Authorization")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"login":"alice"}`)),
+			}, nil
+		}),
+	}
+
+	runtime := NewEngine(Options{
+		HTTPClientFactory: func() *http.Client { return client },
+	})
+
+	login, err := runtime.FetchLogin(context.Background(), "token-value")
+	if err != nil {
+		t.Fatalf("fetch login: %v", err)
+	}
+	if login != "alice" {
+		t.Fatalf("unexpected login: %s", login)
+	}
+	if gotHost != "api.github.com" || gotPath != "/user" {
+		t.Fatalf("expected default api target api.github.com/user, got %s%s", gotHost, gotPath)
+	}
+	if gotAuth != "token token-value" {
+		t.Fatalf("unexpected authorization header: %q", gotAuth)
+	}
+}
+
+func TestRuntimeLegacyGitHubBaseURLFallbackAppliesToOAuthAndAPI(t *testing.T) {
+	var (
+		devicePath string
+		userPath   string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login/device/code":
+			devicePath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"device_code":"d","user_code":"u","verification_uri":"https://example.com/device","expires_in":900,"interval":5}`))
+		case "/user":
+			userPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"login":"alice"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	runtime := NewEngine(Options{
+		HTTPClientFactory: func() *http.Client { return server.Client() },
+		GitHubBaseURL:     server.URL,
+	})
+
+	if _, err := runtime.RequestCode(context.Background()); err != nil {
+		t.Fatalf("request code: %v", err)
+	}
+	if _, err := runtime.FetchLogin(context.Background(), "token-value"); err != nil {
+		t.Fatalf("fetch login: %v", err)
+	}
+	if devicePath != "/login/device/code" {
+		t.Fatalf("expected legacy oauth path /login/device/code, got %q", devicePath)
+	}
+	if userPath != "/user" {
+		t.Fatalf("expected legacy api path /user, got %q", userPath)
 	}
 }
 

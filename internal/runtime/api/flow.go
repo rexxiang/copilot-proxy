@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	runtimeconfig "copilot-proxy/internal/runtime/config"
 	endpointflow "copilot-proxy/internal/runtime/endpoint/flow"
@@ -14,6 +15,12 @@ import (
 )
 
 var defaultPathMapping = protocolpaths.DefaultPathMapping()
+
+const (
+	claudeCodeSessionIDHeader = "X-Claude-Code-Session-Id"
+	claudeSessionNamespace    = "claude_session_seen"
+	claudeSessionMarkerValue  = "1"
+)
 
 func (r *Engine) doExecuteUpstream(
 	ctx context.Context,
@@ -41,6 +48,8 @@ func (r *Engine) doExecuteUpstream(
 		Endpoints:                resolvedModel.Endpoints,
 		SupportedReasoningEffort: resolvedModel.SupportedReasoningEffort,
 	})
+	info = r.applySessionAgentHint(ctx, req, info)
+	rc.Info = info
 	if rewrittenBody, changed := endpointflow.RewriteMappedModelBody(sourceLocalPath, requestBody, rawModelID, info.MappedModel); changed {
 		requestBody = rewrittenBody
 	}
@@ -65,4 +74,22 @@ func (r *Engine) doExecuteUpstream(
 func resolvedPolicies(settings runtimeconfig.RuntimeSettings) []reasoning.Policy {
 	policies, _ := reasoning.EffectivePoliciesFromMap(settings.ReasoningPoliciesMap)
 	return policies
+}
+
+func (r *Engine) applySessionAgentHint(ctx context.Context, req *http.Request, info requestctx.RequestInfo) requestctx.RequestInfo {
+	if r == nil || req == nil || r.stateSetNew == nil {
+		return info
+	}
+	sessionID := strings.TrimSpace(req.Header.Get(claudeCodeSessionIDHeader))
+	if sessionID == "" {
+		return info
+	}
+	created, err := r.stateSetNew(ctx, claudeSessionNamespace, sessionID, claudeSessionMarkerValue)
+	if err != nil {
+		return info
+	}
+	// Session header present: first observed request is user-initiated,
+	// subsequent requests with the same session id are agent-initiated.
+	info.IsAgent = !created
+	return info
 }

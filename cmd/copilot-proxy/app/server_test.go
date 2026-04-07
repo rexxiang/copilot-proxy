@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	appsettings "copilot-proxy/cmd/copilot-proxy/app/settings"
 	"copilot-proxy/internal/runtime/config"
@@ -248,5 +249,73 @@ func TestIsExpectedShutdownError(t *testing.T) {
 				t.Fatalf("isExpectedShutdownError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+type fakeTUIProgram struct {
+	quitCalls    int
+	releaseCalls int
+	releaseErr   error
+}
+
+func (f *fakeTUIProgram) Quit() {
+	f.quitCalls++
+}
+
+func (f *fakeTUIProgram) ReleaseTerminal() error {
+	f.releaseCalls++
+	return f.releaseErr
+}
+
+func TestQuitAndWaitForTUIWaitsForRunCompletion(t *testing.T) {
+	program := &fakeTUIProgram{}
+	tuiErr := make(chan error, 1)
+
+	done := make(chan struct{})
+	var gotErr error
+	go func() {
+		gotErr = quitAndWaitForTUI(program, tuiErr, 250*time.Millisecond)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("quitAndWaitForTUI returned before TUI run completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	expected := errors.New("tui stopped")
+	tuiErr <- expected
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("quitAndWaitForTUI did not finish after TUI run completion")
+	}
+
+	if !errors.Is(gotErr, expected) {
+		t.Fatalf("expected run error %v, got %v", expected, gotErr)
+	}
+	if program.quitCalls != 1 {
+		t.Fatalf("expected Quit called once, got %d", program.quitCalls)
+	}
+	if program.releaseCalls != 0 {
+		t.Fatalf("expected ReleaseTerminal not called, got %d", program.releaseCalls)
+	}
+}
+
+func TestQuitAndWaitForTUITimeoutReleasesTerminal(t *testing.T) {
+	program := &fakeTUIProgram{}
+	tuiErr := make(chan error)
+
+	gotErr := quitAndWaitForTUI(program, tuiErr, 25*time.Millisecond)
+	if gotErr != nil {
+		t.Fatalf("expected nil error on timeout fallback, got %v", gotErr)
+	}
+	if program.quitCalls != 1 {
+		t.Fatalf("expected Quit called once, got %d", program.quitCalls)
+	}
+	if program.releaseCalls != 1 {
+		t.Fatalf("expected ReleaseTerminal called once, got %d", program.releaseCalls)
 	}
 }

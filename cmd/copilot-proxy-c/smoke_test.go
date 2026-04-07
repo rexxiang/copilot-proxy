@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -33,20 +34,25 @@ func TestExecuteRequestNonStream(t *testing.T) {
 	var callbacks int
 	var status int
 	var body string
-	events := make([]string, 0, 3)
+	telemetryEvents := make([]string, 0, 3)
 
 	opts := executeOptions{
-		ResultCallback: func(resultStatus int, headers map[string]string, resultBody []byte, errMsg string) {
-			callbacks++
-			status = resultStatus
-			body = string(resultBody)
-			if errMsg != "" {
-				t.Fatalf("unexpected error callback: %s", errMsg)
+		EventCallback: func(event eventEnvelope) {
+			switch event.Kind {
+			case "response_head":
+				callbacks++
+				status = payloadInt(event.Payload, "status_code")
+				decoded, err := decodeEventBody(event.Payload)
+				if err != nil {
+					t.Fatalf("decode response body: %v", err)
+				}
+				body = string(decoded)
+			case "telemetry":
+				eventType, _ := event.Payload["type"].(string)
+				telemetryEvents = append(telemetryEvents, eventType)
+			case "fatal":
+				t.Fatalf("unexpected fatal event: %#v", event.Payload)
 			}
-		},
-		TelemetryCallback: func(event map[string]any) {
-			eventType, _ := event["type"].(string)
-			events = append(events, eventType)
 		},
 	}
 	deps := executeDeps{
@@ -80,8 +86,8 @@ func TestExecuteRequestNonStream(t *testing.T) {
 	if upstreamPath != config.UpstreamChatCompletionsPath {
 		t.Fatalf("unexpected upstream path: %s", upstreamPath)
 	}
-	if len(events) != 3 || events[0] != "start" || events[1] != "first_byte" || events[2] != "end" {
-		t.Fatalf("unexpected telemetry events: %v", events)
+	if len(telemetryEvents) != 3 || telemetryEvents[0] != "start" || telemetryEvents[1] != "first_byte" || telemetryEvents[2] != "end" {
+		t.Fatalf("unexpected telemetry events: %v", telemetryEvents)
 	}
 }
 
@@ -109,13 +115,26 @@ func TestExecuteRequestStream(t *testing.T) {
 	statuses := make([]int, 0, 2)
 	bodyChunks := make([]string, 0, 2)
 	opts := executeOptions{
-		ResultCallback: func(status int, headers map[string]string, body []byte, errMsg string) {
-			if errMsg != "" {
-				t.Fatalf("unexpected stream error callback: %s", errMsg)
-			}
-			statuses = append(statuses, status)
-			if len(body) > 0 {
-				bodyChunks = append(bodyChunks, string(body))
+		EventCallback: func(event eventEnvelope) {
+			switch event.Kind {
+			case "response_head":
+				statuses = append(statuses, payloadInt(event.Payload, "status_code"))
+				if decoded, err := decodeEventBody(event.Payload); err == nil && len(decoded) > 0 {
+					bodyChunks = append(bodyChunks, string(decoded))
+				} else if err != nil {
+					t.Fatalf("decode response head body: %v", err)
+				}
+			case "response_chunk":
+				statuses = append(statuses, 0)
+				decoded, err := decodeEventBody(event.Payload)
+				if err != nil {
+					t.Fatalf("decode stream chunk body: %v", err)
+				}
+				if len(decoded) > 0 {
+					bodyChunks = append(bodyChunks, string(decoded))
+				}
+			case "fatal":
+				t.Fatalf("unexpected fatal event: %#v", event.Payload)
 			}
 		},
 	}
@@ -176,11 +195,17 @@ func TestExecuteRequestMessagesFallbackToResponses(t *testing.T) {
 
 	var responseBody []byte
 	opts := executeOptions{
-		ResultCallback: func(status int, headers map[string]string, body []byte, errMsg string) {
-			if errMsg != "" {
-				t.Fatalf("unexpected error callback: %s", errMsg)
+		EventCallback: func(event eventEnvelope) {
+			switch event.Kind {
+			case "response_head":
+				decoded, err := decodeEventBody(event.Payload)
+				if err != nil {
+					t.Fatalf("decode response body: %v", err)
+				}
+				responseBody = append([]byte(nil), decoded...)
+			case "fatal":
+				t.Fatalf("unexpected fatal event: %#v", event.Payload)
 			}
-			responseBody = append([]byte(nil), body...)
 		},
 	}
 	deps := executeDeps{
@@ -312,5 +337,32 @@ func withCAPISettings(baseURL string, client *http.Client) func() {
 	return func() {
 		httpClientMaker = previousClientMaker
 		settingsProvider = previousSettingsProvider
+	}
+}
+
+func decodeEventBody(payload map[string]any) ([]byte, error) {
+	bodyBase64, _ := payload["body_base64"].(string)
+	if bodyBase64 == "" {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(bodyBase64)
+}
+
+func payloadInt(payload map[string]any, key string) int {
+	value, ok := payload[key]
+	if !ok {
+		return 0
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
 	}
 }

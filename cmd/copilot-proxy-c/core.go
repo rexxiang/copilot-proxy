@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	runtimeapi "copilot-proxy/internal/runtime/api"
@@ -15,17 +17,44 @@ import (
 
 type resolveToken func(ctx context.Context, accountRef string) (string, error)
 type resolveModel func(ctx context.Context, modelID string) (modelInfo, error)
-type resultCallback func(status int, headers map[string]string, body []byte, errMsg string)
-type telemetryCallback func(event map[string]any)
+type stateSetNew func(ctx context.Context, namespace, key, value string) (bool, error)
+type hostDispatch func(ctx context.Context, request hostDispatchRequest) (hostDispatchResponse, error)
+type eventCallback func(event eventEnvelope)
 
 type executeDeps struct {
 	ResolveToken resolveToken
 	ResolveModel resolveModel
+	StateSetNew  stateSetNew
 }
 
 type executeOptions struct {
-	ResultCallback    resultCallback
-	TelemetryCallback telemetryCallback
+	EventCallback eventCallback
+}
+
+type hostBridge struct {
+	Version      uint32
+	Capabilities uint64
+	Dispatch     hostDispatch
+}
+
+type hostDispatchRequest struct {
+	Version int    `json:"version"`
+	Op      string `json:"op"`
+	Payload any    `json:"payload,omitempty"`
+}
+
+type hostDispatchResponse struct {
+	Version int             `json:"version"`
+	OK      bool            `json:"ok"`
+	Code    string          `json:"code,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+	Error   string          `json:"error,omitempty"`
+}
+
+type eventEnvelope struct {
+	Version int            `json:"version"`
+	Kind    string         `json:"kind"`
+	Payload map[string]any `json:"payload,omitempty"`
 }
 
 type modelInfo struct {
@@ -35,6 +64,7 @@ type modelInfo struct {
 }
 
 var (
+	githubOAuthBase  = config.GitHubBaseURL
 	githubAPIBase    = config.GitHubAPIURL
 	httpClientMaker  = func() *http.Client { return &http.Client{Timeout: 90 * time.Second} }
 	settingsProvider = func() config.RuntimeSettings {
@@ -42,46 +72,81 @@ var (
 	}
 )
 
+const (
+	hostDispatchVersion  = 1
+	eventEnvelopeVersion = 1
+
+	hostOpResolveToken = "auth.resolve_token"
+	hostOpResolveModel = "model.resolve"
+	hostOpStateSetNew  = "state.set_new"
+
+	sessionNamespace = "claude_session_seen"
+	sessionValue     = "1"
+)
+
+type tokenResolveRequest struct {
+	AccountRef string `json:"account_ref"`
+}
+
+type tokenResolveResponse struct {
+	Token string `json:"token"`
+}
+
+type modelResolveRequest struct {
+	ModelID string `json:"model_id"`
+}
+
+type stateSetNewRequest struct {
+	Namespace string `json:"namespace"`
+	Key       string `json:"key"`
+	Value     string `json:"value"`
+}
+
+type stateSetNewResponse struct {
+	Created bool `json:"created"`
+}
+
 func executeRequest(ctx context.Context, requestJSON string, deps executeDeps, opts executeOptions) error {
-	if opts.ResultCallback == nil {
-		return errors.New("result callback is required")
+	if opts.EventCallback == nil {
+		return errors.New("event callback is required")
 	}
 
 	var req runtimeapi.RequestInvocation
 	if err := json.Unmarshal([]byte(requestJSON), &req); err != nil {
 		return fmt.Errorf("parse request: %w", err)
 	}
-	runtime := newRuntime(deps.ResolveToken, deps.ResolveModel)
+	runtime := newRuntime(deps)
 
 	execOpts := runtimeapi.ExecuteOptions{
 		Mode: runtimeapi.StreamModeCallback,
 		ResultCallback: func(result runtimeapi.ExecuteResult) {
-			opts.ResultCallback(result.StatusCode, result.Headers, result.Body, result.Error)
+			emitExecuteResult(opts.EventCallback, result)
 		},
 		TelemetryCallback: func(event runtimeapi.TelemetryEvent) {
-			emitTelemetry(opts.TelemetryCallback, telemetryEventMap(event))
+			emitEvent(opts.EventCallback, "telemetry", telemetryEventMap(event))
 		},
 	}
 
 	return runtime.Execute(ctx, req, execOpts)
 }
 
-func newRuntime(resolveTokenFn resolveToken, resolveModelFn resolveModel) *runtimeapi.Engine {
+func newRuntime(deps executeDeps) *runtimeapi.Engine {
 	opts := runtimeapi.Options{
 		SettingsProvider: func(context.Context) (config.RuntimeSettings, error) {
 			return settingsProvider(), nil
 		},
-		HTTPClientFactory: httpClientMaker,
-		GitHubBaseURL:     githubAPIBase,
+		HTTPClientFactory:  httpClientMaker,
+		GitHubOAuthBaseURL: githubOAuthBase,
+		GitHubAPIBaseURL:   githubAPIBase,
 	}
-	if resolveTokenFn != nil {
+	if deps.ResolveToken != nil {
 		opts.ResolveToken = func(ctx context.Context, accountRef string) (string, error) {
-			return resolveTokenFn(ctx, accountRef)
+			return deps.ResolveToken(ctx, accountRef)
 		}
 	}
-	if resolveModelFn != nil {
+	if deps.ResolveModel != nil {
 		opts.ResolveModel = func(ctx context.Context, modelID string) (runtimeapi.ModelInfo, error) {
-			info, err := resolveModelFn(ctx, modelID)
+			info, err := deps.ResolveModel(ctx, modelID)
 			if err != nil {
 				return runtimeapi.ModelInfo{}, err
 			}
@@ -90,6 +155,11 @@ func newRuntime(resolveTokenFn resolveToken, resolveModelFn resolveModel) *runti
 				Endpoints:                append([]string(nil), info.Endpoints...),
 				SupportedReasoningEffort: append([]string(nil), info.SupportedReasoningEffort...),
 			}, nil
+		}
+	}
+	if deps.StateSetNew != nil {
+		opts.StateSetNew = func(ctx context.Context, namespace, key, value string) (bool, error) {
+			return deps.StateSetNew(ctx, namespace, key, value)
 		}
 	}
 	return runtimeapi.NewEngine(opts)
@@ -115,15 +185,125 @@ func telemetryEventMap(event runtimeapi.TelemetryEvent) map[string]any {
 	return payload
 }
 
-func emitTelemetry(cb telemetryCallback, event map[string]any) {
+func emitEvent(cb eventCallback, kind string, payload map[string]any) {
 	if cb == nil {
 		return
 	}
-	cb(event)
+	cb(eventEnvelope{
+		Version: eventEnvelopeVersion,
+		Kind:    kind,
+		Payload: payload,
+	})
+}
+
+func emitExecuteResult(cb eventCallback, result runtimeapi.ExecuteResult) {
+	if cb == nil {
+		return
+	}
+	if result.Error != "" {
+		emitEvent(cb, "fatal", map[string]any{
+			"error": result.Error,
+		})
+		return
+	}
+
+	if result.StatusCode != 0 {
+		payload := map[string]any{
+			"status_code": result.StatusCode,
+		}
+		if len(result.Headers) > 0 {
+			payload["headers"] = result.Headers
+		}
+		if len(result.Body) > 0 {
+			payload["body_base64"] = base64.StdEncoding.EncodeToString(result.Body)
+		}
+		emitEvent(cb, "response_head", payload)
+		return
+	}
+
+	if len(result.Body) > 0 {
+		emitEvent(cb, "response_chunk", map[string]any{
+			"body_base64": base64.StdEncoding.EncodeToString(result.Body),
+		})
+	}
+}
+
+func buildExecuteDeps(bridge hostBridge) executeDeps {
+	if bridge.Dispatch == nil {
+		return executeDeps{}
+	}
+	return executeDeps{
+		ResolveToken: func(ctx context.Context, accountRef string) (string, error) {
+			accountRef = strings.TrimSpace(accountRef)
+			var response tokenResolveResponse
+			if err := invokeHostOperation(ctx, bridge.Dispatch, hostOpResolveToken, tokenResolveRequest{
+				AccountRef: accountRef,
+			}, &response); err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(response.Token), nil
+		},
+		ResolveModel: func(ctx context.Context, modelID string) (modelInfo, error) {
+			var response modelInfo
+			if err := invokeHostOperation(ctx, bridge.Dispatch, hostOpResolveModel, modelResolveRequest{
+				ModelID: modelID,
+			}, &response); err != nil {
+				return modelInfo{}, err
+			}
+			return response, nil
+		},
+		StateSetNew: func(ctx context.Context, namespace, key, value string) (bool, error) {
+			var response stateSetNewResponse
+			if err := invokeHostOperation(ctx, bridge.Dispatch, hostOpStateSetNew, stateSetNewRequest{
+				Namespace: namespace,
+				Key:       key,
+				Value:     value,
+			}, &response); err != nil {
+				return false, err
+			}
+			return response.Created, nil
+		},
+	}
+}
+
+func invokeHostOperation(ctx context.Context, dispatch hostDispatch, op string, payload any, out any) error {
+	if dispatch == nil {
+		return errors.New("host dispatch is required")
+	}
+
+	resp, err := dispatch(ctx, hostDispatchRequest{
+		Version: hostDispatchVersion,
+		Op:      op,
+		Payload: payload,
+	})
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	if !resp.OK {
+		errMsg := strings.TrimSpace(resp.Error)
+		if errMsg == "" {
+			errMsg = strings.TrimSpace(resp.Code)
+		}
+		if errMsg == "" {
+			errMsg = "host dispatch returned non-ok response"
+		}
+		return fmt.Errorf("%s: %s", op, errMsg)
+	}
+
+	if out == nil {
+		return nil
+	}
+	if len(resp.Payload) == 0 {
+		return fmt.Errorf("%s: empty response payload", op)
+	}
+	if err := json.Unmarshal(resp.Payload, out); err != nil {
+		return fmt.Errorf("%s: decode response payload: %w", op, err)
+	}
+	return nil
 }
 
 func requestCodeJSON(ctx context.Context) (string, error) {
-	runtime := newRuntime(nil, nil)
+	runtime := newRuntime(executeDeps{})
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	device, err := runtime.RequestCode(ctx)
@@ -142,7 +322,7 @@ func pollTokenJSON(ctx context.Context, payload string) (string, error) {
 	if err := json.Unmarshal([]byte(payload), &device); err != nil {
 		return "", err
 	}
-	runtime := newRuntime(nil, nil)
+	runtime := newRuntime(executeDeps{})
 	timeout := time.Duration(device.ExpiresIn+30) * time.Second
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
@@ -161,7 +341,7 @@ func pollTokenJSON(ctx context.Context, payload string) (string, error) {
 }
 
 func fetchUserInfoJSON(ctx context.Context, tokenValue string) (string, error) {
-	runtime := newRuntime(nil, nil)
+	runtime := newRuntime(executeDeps{})
 	info, err := runtime.FetchUserInfo(ctx, tokenValue)
 	if err != nil {
 		return "", err
@@ -174,7 +354,7 @@ func fetchUserInfoJSON(ctx context.Context, tokenValue string) (string, error) {
 }
 
 func fetchModelsJSON(ctx context.Context, tokenValue string) (string, error) {
-	runtime := newRuntime(nil, nil)
+	runtime := newRuntime(executeDeps{})
 	data, err := runtime.FetchModels(ctx, tokenValue)
 	if err != nil {
 		return "", err

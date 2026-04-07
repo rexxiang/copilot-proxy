@@ -7,32 +7,24 @@ package main
 #include <stdint.h>
 #include <stdlib.h>
 
-typedef int (*CopilotProxyResolveTokenFn)(const char *account_ref, char **token_out, char **error_out, void *user_data);
-typedef int (*CopilotProxyResolveModelFn)(const char *model_id, char **model_json_out, char **error_out, void *user_data);
-typedef void (*CopilotProxyResultCallback)(int status_code, const char *headers_json, const uint8_t *body, size_t body_len, const char *error_message, void *user_data);
-typedef void (*CopilotProxyTelemetryCallback)(const char *event_json, void *user_data);
+typedef int (*CopilotProxyHostDispatchFn)(const char *request_json, char **response_json_out, char **error_out, void *user_data);
+typedef void (*CopilotProxyEventCallback)(const char *event_json, void *user_data);
 
-static inline int copilot_proxy_call_resolve_token(CopilotProxyResolveTokenFn cb, const char *account_ref, char **token_out, char **error_out, void *user_data) {
+typedef struct {
+	uint32_t version;
+	uint64_t capabilities;
+	CopilotProxyHostDispatchFn dispatch;
+	void *user_data;
+} CopilotProxyHostBridge;
+
+static inline int copilot_proxy_call_host_dispatch(CopilotProxyHostDispatchFn cb, const char *request_json, char **response_json_out, char **error_out, void *user_data) {
 	if (cb == NULL) {
 		return 1;
 	}
-	return cb(account_ref, token_out, error_out, user_data);
+	return cb(request_json, response_json_out, error_out, user_data);
 }
 
-static inline int copilot_proxy_call_resolve_model(CopilotProxyResolveModelFn cb, const char *model_id, char **model_json_out, char **error_out, void *user_data) {
-	if (cb == NULL) {
-		return 1;
-	}
-	return cb(model_id, model_json_out, error_out, user_data);
-}
-
-static inline void copilot_proxy_call_result(CopilotProxyResultCallback cb, int status_code, const char *headers_json, const uint8_t *body, size_t body_len, const char *error_message, void *user_data) {
-	if (cb != NULL) {
-		cb(status_code, headers_json, body, body_len, error_message, user_data);
-	}
-}
-
-static inline void copilot_proxy_call_telemetry(CopilotProxyTelemetryCallback cb, const char *event_json, void *user_data) {
+static inline void copilot_proxy_call_event(CopilotProxyEventCallback cb, const char *event_json, void *user_data) {
 	if (cb != NULL) {
 		cb(event_json, user_data);
 	}
@@ -44,6 +36,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"unsafe"
 )
 
@@ -52,11 +45,9 @@ func main() {}
 //export CopilotProxy_Execute
 func CopilotProxy_Execute(
 	requestJSON *C.char,
-	resolveToken C.CopilotProxyResolveTokenFn,
-	resolveModel C.CopilotProxyResolveModelFn,
-	resultCb C.CopilotProxyResultCallback,
-	telemetryCb C.CopilotProxyTelemetryCallback,
-	userData unsafe.Pointer,
+	hostBridge *C.CopilotProxyHostBridge,
+	eventCb C.CopilotProxyEventCallback,
+	eventUserData unsafe.Pointer,
 	finalErrorOut **C.char,
 ) C.int {
 	if requestJSON == nil {
@@ -64,13 +55,10 @@ func CopilotProxy_Execute(
 		return C.int(1)
 	}
 
-	deps := executeDeps{
-		ResolveToken: makeResolveTokenFunc(resolveToken, userData),
-		ResolveModel: makeResolveModelFunc(resolveModel, userData),
-	}
+	bridge := makeHostBridge(hostBridge)
+	deps := buildExecuteDeps(bridge)
 	opts := executeOptions{
-		ResultCallback:    makeResultCallback(resultCb, userData),
-		TelemetryCallback: makeTelemetryCallback(telemetryCb, userData),
+		EventCallback: makeEventCallback(eventCb, eventUserData),
 	}
 
 	if err := executeRequest(context.Background(), C.GoString(requestJSON), deps, opts); err != nil {
@@ -175,107 +163,74 @@ func setFinalError(out **C.char, err error) {
 	*out = C.CString(err.Error())
 }
 
-func makeResolveTokenFunc(cb C.CopilotProxyResolveTokenFn, userData unsafe.Pointer) resolveToken {
+func makeHostBridge(bridge *C.CopilotProxyHostBridge) hostBridge {
+	if bridge == nil {
+		return hostBridge{}
+	}
+	return hostBridge{
+		Version:      uint32(bridge.version),
+		Capabilities: uint64(bridge.capabilities),
+		Dispatch:     makeHostDispatchFunc(bridge.dispatch, bridge.user_data),
+	}
+}
+
+func makeHostDispatchFunc(cb C.CopilotProxyHostDispatchFn, userData unsafe.Pointer) hostDispatch {
 	if cb == nil {
 		return nil
 	}
-	return func(ctx context.Context, accountRef string) (string, error) {
-		cAccount := C.CString(accountRef)
-		defer C.free(unsafe.Pointer(cAccount))
+	return func(ctx context.Context, request hostDispatchRequest) (hostDispatchResponse, error) {
+		select {
+		case <-ctx.Done():
+			return hostDispatchResponse{}, ctx.Err()
+		default:
+		}
 
-		var tokenC *C.char
+		payload, err := json.Marshal(request)
+		if err != nil {
+			return hostDispatchResponse{}, fmt.Errorf("marshal host dispatch request: %w", err)
+		}
+		requestC := C.CString(string(payload))
+		defer C.free(unsafe.Pointer(requestC))
+
+		var responseC *C.char
 		var errC *C.char
-		status := C.copilot_proxy_call_resolve_token(cb, cAccount, &tokenC, &errC, userData)
-		defer releaseResolveStrings(tokenC, errC)
+		status := C.copilot_proxy_call_host_dispatch(cb, requestC, &responseC, &errC, userData)
+		defer releaseCStringPair(responseC, errC)
+
 		if status != 0 {
 			if errC != nil {
-				return "", errors.New(C.GoString(errC))
+				return hostDispatchResponse{}, errors.New(C.GoString(errC))
 			}
-			return "", errors.New("token resolver reported failure")
+			return hostDispatchResponse{}, errors.New("host dispatch reported failure")
 		}
-		if tokenC == nil {
-			return "", errors.New("token resolver returned nil token")
+		if responseC == nil {
+			return hostDispatchResponse{}, errors.New("host dispatch returned nil response")
 		}
-		return C.GoString(tokenC), nil
+
+		var response hostDispatchResponse
+		if err := json.Unmarshal([]byte(C.GoString(responseC)), &response); err != nil {
+			return hostDispatchResponse{}, fmt.Errorf("decode host dispatch response: %w", err)
+		}
+		return response, nil
 	}
 }
 
-func makeResolveModelFunc(cb C.CopilotProxyResolveModelFn, userData unsafe.Pointer) resolveModel {
+func makeEventCallback(cb C.CopilotProxyEventCallback, userData unsafe.Pointer) eventCallback {
 	if cb == nil {
 		return nil
 	}
-	return func(ctx context.Context, modelID string) (modelInfo, error) {
-		cModelID := C.CString(modelID)
-		defer C.free(unsafe.Pointer(cModelID))
-
-		var payloadC *C.char
-		var errC *C.char
-		status := C.copilot_proxy_call_resolve_model(cb, cModelID, &payloadC, &errC, userData)
-		defer releaseResolveStrings(payloadC, errC)
-		if status != 0 {
-			if errC != nil {
-				return modelInfo{}, errors.New(C.GoString(errC))
-			}
-			return modelInfo{}, errors.New("model resolver reported failure")
-		}
-		if payloadC == nil {
-			return modelInfo{}, errors.New("model resolver returned nil payload")
-		}
-
-		var info modelInfo
-		if err := json.Unmarshal([]byte(C.GoString(payloadC)), &info); err != nil {
-			return modelInfo{}, err
-		}
-		return info, nil
-	}
-}
-
-func makeResultCallback(cb C.CopilotProxyResultCallback, userData unsafe.Pointer) resultCallback {
-	if cb == nil {
-		return func(status int, headers map[string]string, body []byte, errMsg string) {}
-	}
-	return func(status int, headers map[string]string, body []byte, errMsg string) {
-		var headersJSON *C.char
-		if len(headers) > 0 {
-			if payload, err := json.Marshal(headers); err == nil {
-				headersJSON = C.CString(string(payload))
-				defer C.free(unsafe.Pointer(headersJSON))
-			}
-		}
-
-		var bodyPtr *C.uint8_t
-		if len(body) > 0 {
-			ptr := C.CBytes(body)
-			bodyPtr = (*C.uint8_t)(ptr)
-			defer C.free(ptr)
-		}
-
-		var errC *C.char
-		if errMsg != "" {
-			errC = C.CString(errMsg)
-			defer C.free(unsafe.Pointer(errC))
-		}
-
-		C.copilot_proxy_call_result(cb, C.int(status), headersJSON, bodyPtr, C.size_t(len(body)), errC, userData)
-	}
-}
-
-func makeTelemetryCallback(cb C.CopilotProxyTelemetryCallback, userData unsafe.Pointer) telemetryCallback {
-	if cb == nil {
-		return nil
-	}
-	return func(event map[string]any) {
+	return func(event eventEnvelope) {
 		payload, err := json.Marshal(event)
 		if err != nil {
 			return
 		}
 		eventC := C.CString(string(payload))
 		defer C.free(unsafe.Pointer(eventC))
-		C.copilot_proxy_call_telemetry(cb, eventC, userData)
+		C.copilot_proxy_call_event(cb, eventC, userData)
 	}
 }
 
-func releaseResolveStrings(primary, secondary *C.char) {
+func releaseCStringPair(primary, secondary *C.char) {
 	if primary != nil {
 		C.free(unsafe.Pointer(primary))
 	}
