@@ -10,29 +10,33 @@ import (
 )
 
 func (r *Engine) RequestCode(ctx context.Context) (auth.DeviceCodeResponse, error) {
+	client := r.httpClientFactory()
 	flow := auth.DeviceFlow{
-		ClientID: runtimeconfig.OAuthClientID,
-		Scope:    runtimeconfig.OAuthScope,
-		BaseURL:  r.githubBaseURL,
+		ClientID:   runtimeconfig.OAuthClientID,
+		Scope:      runtimeconfig.OAuthScope,
+		BaseURL:    r.githubOAuthBaseURL,
+		HTTPClient: client,
 	}
 	return flow.RequestCodeWithContext(ctx)
 }
 
 func (r *Engine) PollToken(ctx context.Context, device auth.DeviceCodeResponse) (string, error) {
+	client := r.httpClientFactory()
 	flow := auth.DeviceFlow{
-		ClientID: runtimeconfig.OAuthClientID,
-		Scope:    runtimeconfig.OAuthScope,
-		BaseURL:  r.githubBaseURL,
+		ClientID:   runtimeconfig.OAuthClientID,
+		Scope:      runtimeconfig.OAuthScope,
+		BaseURL:    r.githubOAuthBaseURL,
+		HTTPClient: client,
 	}
 	return flow.PollAccessTokenWithContext(ctx, device)
 }
 
 func (r *Engine) FetchUserInfo(ctx context.Context, tokenValue string) (*core.UserInfo, error) {
 	client := r.httpClientFactory()
-	return coreaccount.FetchUserInfo(ctx, client, r.githubBaseURL, tokenValue)
+	return coreaccount.FetchUserInfo(ctx, client, r.githubAPIBaseURL, tokenValue)
 }
 
 func (r *Engine) FetchLogin(ctx context.Context, tokenValue string) (string, error) {
 	client := r.httpClientFactory()
-	return auth.FetchUserWithContext(ctx, client, r.githubBaseURL, tokenValue)
+	return auth.FetchUserWithContext(ctx, client, r.githubAPIBaseURL, tokenValue)
 }

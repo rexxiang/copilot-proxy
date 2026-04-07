@@ -46,15 +46,20 @@ type Options struct {
 	ResolveModel      ResolveModelFunc
 	OnTelemetry       TelemetryFunc
 	UpstreamDo        UpstreamDoFunc
-	GitHubBaseURL     string
+	// GitHubBaseURL is a legacy fallback applied to both OAuth and API calls when
+	// GitHubOAuthBaseURL / GitHubAPIBaseURL are unset.
+	GitHubBaseURL      string
+	GitHubOAuthBaseURL string
+	GitHubAPIBaseURL   string
 }
 
 type Engine struct {
-	settingsProvider  func(ctx context.Context) (runtimeconfig.RuntimeSettings, error)
-	httpClientFactory func() *http.Client
-	resolveToken      ResolveTokenFunc
-	resolveModel      ResolveModelFunc
-	onTelemetry       TelemetryFunc
-	upstreamDo        UpstreamDoFunc
-	githubBaseURL     string
+	settingsProvider   func(ctx context.Context) (runtimeconfig.RuntimeSettings, error)
+	httpClientFactory  func() *http.Client
+	resolveToken       ResolveTokenFunc
+	resolveModel       ResolveModelFunc
+	onTelemetry        TelemetryFunc
+	upstreamDo         UpstreamDoFunc
+	githubOAuthBaseURL string
+	githubAPIBaseURL   string
 }

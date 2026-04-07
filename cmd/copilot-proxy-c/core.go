@@ -35,6 +35,7 @@ type modelInfo struct {
 }
 
 var (
+	githubOAuthBase  = config.GitHubBaseURL
 	githubAPIBase    = config.GitHubAPIURL
 	httpClientMaker  = func() *http.Client { return &http.Client{Timeout: 90 * time.Second} }
 	settingsProvider = func() config.RuntimeSettings {
@@ -71,8 +72,9 @@ func newRuntime(resolveTokenFn resolveToken, resolveModelFn resolveModel) *runti
 		SettingsProvider: func(context.Context) (config.RuntimeSettings, error) {
 			return settingsProvider(), nil
 		},
-		HTTPClientFactory: httpClientMaker,
-		GitHubBaseURL:     githubAPIBase,
+		HTTPClientFactory:  httpClientMaker,
+		GitHubOAuthBaseURL: githubOAuthBase,
+		GitHubAPIBaseURL:   githubAPIBase,
 	}
 	if resolveTokenFn != nil {
 		opts.ResolveToken = func(ctx context.Context, accountRef string) (string, error) {

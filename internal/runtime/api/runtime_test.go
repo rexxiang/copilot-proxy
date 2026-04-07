@@ -6,10 +6,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	runtimeconfig "copilot-proxy/internal/runtime/config"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
 
 func TestRuntimeExecuteMapsChatCompletionsPath(t *testing.T) {
 	var upstreamPath string
@@ -465,7 +472,7 @@ func TestRuntimeFetchModelsUsesConfiguredBase(t *testing.T) {
 	}
 }
 
-func TestRuntimeFetchLoginUsesGitHubAPIBase(t *testing.T) {
+func TestRuntimeFetchLoginUsesConfiguredGitHubAPIBase(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/user" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -480,7 +487,7 @@ func TestRuntimeFetchLoginUsesGitHubAPIBase(t *testing.T) {
 
 	runtime := NewEngine(Options{
 		HTTPClientFactory: func() *http.Client { return server.Client() },
-		GitHubBaseURL:     server.URL,
+		GitHubAPIBaseURL:  server.URL,
 	})
 
 	login, err := runtime.FetchLogin(context.Background(), "token-value")
@@ -489,6 +496,119 @@ func TestRuntimeFetchLoginUsesGitHubAPIBase(t *testing.T) {
 	}
 	if login != "alice" {
 		t.Fatalf("unexpected login: %s", login)
+	}
+}
+
+func TestRuntimeRequestCodeUsesDefaultGitHubOAuthBase(t *testing.T) {
+	var (
+		gotHost string
+		gotPath string
+	)
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			gotHost = req.URL.Host
+			gotPath = req.URL.Path
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(
+					`{"device_code":"d","user_code":"u","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}`,
+				)),
+			}, nil
+		}),
+	}
+
+	runtime := NewEngine(Options{
+		HTTPClientFactory: func() *http.Client { return client },
+	})
+
+	device, err := runtime.RequestCode(context.Background())
+	if err != nil {
+		t.Fatalf("request code: %v", err)
+	}
+	if device.DeviceCode != "d" {
+		t.Fatalf("unexpected device code: %q", device.DeviceCode)
+	}
+	if gotHost != "github.com" || gotPath != "/login/device/code" {
+		t.Fatalf("expected default oauth target github.com/login/device/code, got %s%s", gotHost, gotPath)
+	}
+}
+
+func TestRuntimeFetchLoginUsesDefaultGitHubAPIBase(t *testing.T) {
+	var (
+		gotHost string
+		gotPath string
+		gotAuth string
+	)
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			gotHost = req.URL.Host
+			gotPath = req.URL.Path
+			gotAuth = req.Header.Get("Authorization")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"login":"alice"}`)),
+			}, nil
+		}),
+	}
+
+	runtime := NewEngine(Options{
+		HTTPClientFactory: func() *http.Client { return client },
+	})
+
+	login, err := runtime.FetchLogin(context.Background(), "token-value")
+	if err != nil {
+		t.Fatalf("fetch login: %v", err)
+	}
+	if login != "alice" {
+		t.Fatalf("unexpected login: %s", login)
+	}
+	if gotHost != "api.github.com" || gotPath != "/user" {
+		t.Fatalf("expected default api target api.github.com/user, got %s%s", gotHost, gotPath)
+	}
+	if gotAuth != "token token-value" {
+		t.Fatalf("unexpected authorization header: %q", gotAuth)
+	}
+}
+
+func TestRuntimeLegacyGitHubBaseURLFallbackAppliesToOAuthAndAPI(t *testing.T) {
+	var (
+		devicePath string
+		userPath   string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login/device/code":
+			devicePath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"device_code":"d","user_code":"u","verification_uri":"https://example.com/device","expires_in":900,"interval":5}`))
+		case "/user":
+			userPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"login":"alice"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	runtime := NewEngine(Options{
+		HTTPClientFactory: func() *http.Client { return server.Client() },
+		GitHubBaseURL:     server.URL,
+	})
+
+	if _, err := runtime.RequestCode(context.Background()); err != nil {
+		t.Fatalf("request code: %v", err)
+	}
+	if _, err := runtime.FetchLogin(context.Background(), "token-value"); err != nil {
+		t.Fatalf("fetch login: %v", err)
+	}
+	if devicePath != "/login/device/code" {
+		t.Fatalf("expected legacy oauth path /login/device/code, got %q", devicePath)
+	}
+	if userPath != "/user" {
+		t.Fatalf("expected legacy api path /user, got %q", userPath)
 	}
 }
 
