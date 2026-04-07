@@ -234,9 +234,7 @@ func buildExecuteDeps(bridge hostBridge) executeDeps {
 	}
 	return executeDeps{
 		ResolveToken: func(ctx context.Context, accountRef string) (string, error) {
-			if strings.TrimSpace(accountRef) == "" {
-				return "", nil
-			}
+			accountRef = strings.TrimSpace(accountRef)
 			var response tokenResolveResponse
 			if err := invokeHostOperation(ctx, bridge.Dispatch, hostOpResolveToken, tokenResolveRequest{
 				AccountRef: accountRef,
